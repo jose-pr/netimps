@@ -1,0 +1,35 @@
+# Agent configs / private notes — never tracked in this repo
+AGENTS.md
+.agents/
+CLAUDE*
+.claude/
+
+# Virtualenvs
+.venv*/
+venv/
+env/
+.env/
+
+# Byte-compiled / optimized
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
