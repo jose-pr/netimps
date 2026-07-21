@@ -1,5 +1,6 @@
 # Agent configs / private notes — never tracked in this repo
 .agents
+*.local.md
 CLAUDE*
 .claude/
 
