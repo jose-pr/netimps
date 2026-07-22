@@ -35,9 +35,6 @@ netimps.ping("127.0.0.1")                  # True / False
   never `None`, with a real total-resolution timeout.
 - **`ping`** — cross-platform reachability with timeout, retry and family
   selection (shells out to the platform `ping` binary).
-- **Legacy NIC helpers** — `active_nic_addresses()` everywhere;
-  `get_ip_address` / `nic_info` are POSIX-only (`fcntl`-based). Superseded by
-  `get_interfaces()`.
 
 ## Install
 
@@ -81,8 +78,8 @@ map:
 | `get_interfaces`, `Interface` | native cross-platform NIC discovery |
 | `resolve` | DNS lookup → list of string records (`[]` on failure) |
 | `ping` | reachability → `bool` |
-| `get_ip`, `is_link_scoped`, `get_default_port` | address/scheme helpers |
-| `active_nic_addresses`, `get_ip_address`, `nic_info` | legacy NIC helpers (POSIX-only in part) |
+| `get_ip`, `is_link_scoped` | address helpers |
+| `get_default_port`, `port_scheme`, `register_port` | scheme ↔ port registry |
 | `HOST_DN` | `platform.node()` of the running host, captured at import time |
 
 ## Working here

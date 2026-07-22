@@ -183,21 +183,22 @@ hung subprocess, or a non-zero exit all yield `False`. Empty `hostname` is
   local host or link.
 - **`get_default_port(scheme) -> int | None`** — built-in table (including the
   socks variants, absent from `/etc/services`), then `getservbyname`.
+  Case-insensitive.
+- **`port_scheme(port) -> str | None`** — the inverse, falling back to
+  `getservbyport`. Where several schemes share a port (1080 → socks/socks4/
+  socks5) the **canonical** one is returned, not whichever alias sorted last.
+- **`register_port(scheme, port, canonical=False)`** — extend or override the
+  table. By default the first registration for a port keeps the reverse slot, so
+  adding an alias does not silently change what `port_scheme(port)` returns;
+  pass `canonical=True` to deliberately displace it. Raises `ValueError` for an
+  out-of-range port or empty scheme, `TypeError` for a non-int port.
 
-## Legacy NIC helpers
-
-Superseded by `get_interfaces()`, kept for compatibility:
-
-- **`active_nic_addresses() -> List[IPv4Address]`** — the first non-loopback
-  IPv4 address from hostname resolution, as a 0- or 1-element list.
-- **`get_ip_address(nic_name) -> str`** — `SIOCGIFADDR` ioctl. **POSIX only**;
-  raises `NotImplementedError` where `fcntl` is missing (Windows). `nic_name` is
-  truncated to 15 chars (the `ifreq` struct limit).
-- **`nic_info() -> List[tuple]`** — `[(name, ipv4), ...]` via
-  `socket.if_nameindex`. **POSIX only.**
-
-Guard call sites that must run cross-platform, or use `get_interfaces()`, which
-works everywhere.
+> **Removed in 0.2.0.** `active_nic_addresses`, `get_ip_address` and `nic_info`
+> are gone — `get_interfaces()` supersedes all three and is correct where they
+> were not. `active_nic_addresses()` returned an arbitrary single address
+> (whatever `gethostbyname_ex` listed first, routinely a VM/WSL/VPN adapter
+> rather than the real NIC) and discarded the rest despite its plural name;
+> the other two were POSIX-only.
 
 ## Constants
 
