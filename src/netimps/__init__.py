@@ -42,7 +42,7 @@ import re as _re
 import socket as _socket
 from subprocess import TimeoutExpired as _SubprocessTimeout
 from subprocess import run as _run
-from typing import TYPE_CHECKING, Callable, List, Optional, Type, TypeVar, Union
+from typing import TYPE_CHECKING, Any, Callable, List, Optional, Type, TypeVar, Union
 from typing import get_origin as _typing_get_origin
 
 if TYPE_CHECKING:
@@ -265,10 +265,17 @@ def _resolve_parser(parser):
     return parser
 
 
+#: Sentinel distinguishing "parser returned None" from "parser rejected the
+#: input" -- ``None`` cannot do that job, since it is a legitimate result.
+_MISSING = object()
+
+
 def try_parse(
-    value: object, parser: "Union[Type[_T], Callable[..., _T]]"
+    value: object,
+    parser: "Union[Type[_T], Callable[..., _T]]",
+    default: "Any" = None,
 ) -> "Optional[_T]":
-    """Return ``parser(value)``, or ``None`` if it rejects the input. Never raises.
+    """Return ``parser(value)``, or ``default`` if it rejects the input. Never raises.
 
     The one non-raising parse for the whole package. ``parser`` is either a
     **type** -- including the union aliases, which are not themselves callable
@@ -278,6 +285,7 @@ def try_parse(
         try_parse("10.0.0.5", IPAddr)        # same, via the factory directly
         try_parse("nonsense", IPAddress)     # None
         try_parse(user_input, MACAddress) or DEFAULT_MAC
+        try_parse(raw, IPAddress, default=LOCALHOST)   # explicit fallback
 
     The union aliases ``IPAddress``/``IPInterface``/``IPNetwork`` accept either
     family. A **concrete** type stays strict, so asking for one family and
@@ -299,12 +307,16 @@ def try_parse(
     into ``None`` would disguise a real failure as a rejected value. A
     ``parser`` that is neither callable nor a known type raises ``TypeError``:
     that is a caller bug, not a rejected value.
+
+    :param default: returned instead of ``None`` when the input is rejected.
+        Also the seam :func:`is_valid` uses -- passing a sentinel is the only
+        way to tell "parser returned ``None``" from "parser said no".
     """
     parser = _resolve_parser(parser)
     try:
         return parser(value)
     except (ValueError, TypeError):
-        return None
+        return default
 
 
 def is_valid(
@@ -333,16 +345,12 @@ def is_valid(
     ``ValueError``/``TypeError`` count as "invalid".
 
     .. note::
-       A parser that legitimately returns ``None`` for valid input would be
-       indistinguishable from failure via :func:`try_parse`; this function
-       reports such a case as ``True``, since the parse did succeed.
+       A parser that legitimately returns ``None`` for valid input still counts
+       as valid here -- the parse *succeeded*. That is why this delegates via a
+       sentinel rather than testing ``try_parse(...) is not None``, which cannot
+       tell "returned None" from "rejected the input".
     """
-    parser = _resolve_parser(parser)
-    try:
-        parser(value)
-        return True
-    except (ValueError, TypeError):
-        return False
+    return try_parse(value, parser, _MISSING) is not _MISSING
 
 
 def is_valid_ip(value: object) -> "TypeGuard[IPAddress]":
