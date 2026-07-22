@@ -332,3 +332,33 @@ def test_concrete_types_round_trip_existing_objects():
     net = ipaddress.ip_network("10.0.0.0/24")
     assert netimps.try_parse(iface, netimps.IPv4Interface) == iface
     assert netimps.try_parse(net, netimps.IPv4Network) == net
+
+
+def test_try_parse_default():
+    """A caller-supplied fallback replaces None on rejection."""
+    assert netimps.try_parse("nope", IPAddr, default="FALLBACK") == "FALLBACK"
+    assert netimps.try_parse("10.0.0.5", IPAddr, default="FALLBACK") == IPv4Address(
+        "10.0.0.5"
+    )
+    # Default default is still None.
+    assert netimps.try_parse("nope", IPAddr) is None
+
+
+def test_is_valid_distinguishes_none_result_from_rejection():
+    """A parser may legitimately return None for valid input.
+
+    is_valid delegates to try_parse via a sentinel rather than testing
+    `is not None`, which cannot tell "returned None" from "said no".
+    """
+
+    def returns_none_for_valid(value):
+        if value == "ok":
+            return None
+        raise ValueError("rejected")
+
+    assert netimps.is_valid("ok", returns_none_for_valid) is True
+    assert netimps.is_valid("bad", returns_none_for_valid) is False
+    # try_parse cannot tell them apart -- that is precisely why the sentinel
+    # exists inside is_valid.
+    assert netimps.try_parse("ok", returns_none_for_valid) is None
+    assert netimps.try_parse("bad", returns_none_for_valid) is None
