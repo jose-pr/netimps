@@ -176,9 +176,12 @@ def ping(
 
         Likewise an address not held by any local interface makes ``ping``
         fail, so the result is falsy -- this never silently reroutes.
-    :param size: ICMP payload bytes (Windows ``-l``, POSIX ``-s``). The wire
-        packet is 28 bytes larger (20 IP + 8 ICMP header), which matters when
-        sizing against an MTU: payload 1472 is exactly 1500 on the wire.
+    :param size: ICMP **payload** bytes -- Windows ``-l``, POSIX ``-s``. Both
+        flags mean the same thing: neither counts headers, so the wire packet is
+        28 bytes larger (20 IP + 8 ICMP). Payload 1472 is exactly 1500 on the
+        wire, which is why that is the number a 1500-MTU link tops out at.
+        Verified on Windows against the DF boundary (1472 passes, 1473 does
+        not); ``ping(8)`` documents ``-s`` as "data bytes" identically.
     :param ttl: initial hop limit (``-i`` on Windows, ``-t`` on POSIX -- the
         letters are **swapped** between platforms, a classic source of scripts
         that silently do the wrong thing).

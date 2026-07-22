@@ -150,10 +150,11 @@ __all__ = [
     "Route",
     "hop_count",
     "path_mtu",
+    "discover_mtu",
     "HOST_DN",
 ]
 
-__version__ = "0.3.0"
+__version__ = "0.0.0"
 
 #: Fully-qualified (or short) name of the host running this process.
 HOST_DN = _platform.node()
@@ -388,6 +389,7 @@ from ._retry import backoff_delays, retry  # noqa: E402
 from ._udp import Datagram, UdpEndpoint  # noqa: E402
 from ._sockets import (  # noqa: E402
     bind,
+    discover_mtu,
     bind_error_hint,
     interface_for,
     Route,

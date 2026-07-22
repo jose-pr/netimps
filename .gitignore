@@ -35,3 +35,4 @@ htmlcov/
 .idea/
 *.swp
 .DS_Store
+site/

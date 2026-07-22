@@ -9,7 +9,7 @@ Everything is imported from `netimps` directly. The `_`-prefixed submodules
 `_scheme`) are implementation detail — **do not import them**. For the project
 overview see the repo-root `AGENTS.md`.
 
-`netimps.__version__` — the package version string (currently `"0.3.0"`).
+`netimps.__version__` — the package version string (currently `"0.0.0"`).
 
 ## Types vs parsing — read this first
 
@@ -74,9 +74,6 @@ keyword. Key behaviours:
 > **Gotcha:** `is_valid` uses an internal sentinel rather than testing
 > `try_parse(...) is not None`, so a builder that legitimately returns `None`
 > for valid input still counts as valid. Do not "simplify" that away.
-
-Removed in 0.2.0: `parse_ip`, `parse_network`, `is_valid_ip`,
-`is_valid_network`, `is_valid_mac`. Use `try_parse`/`is_valid` with the type.
 
 ## `MACAddress`
 
@@ -145,12 +142,6 @@ is deliberately not used.
 for consumers that filter or act per address. The full `Interface` comes along,
 so nothing is lost. Pass an existing enumeration in a loop; it is a syscall.
 
-> **Removed in 0.2.0.** `active_nic_addresses`, `get_ip_address` and `nic_info`
-> are superseded by `get_interfaces()`, which is correct where they were not:
-> `active_nic_addresses()` returned whatever address `gethostbyname_ex` listed
-> first — routinely a VM/WSL/VPN adapter rather than the real NIC — and
-> discarded the rest despite its plural name. The other two were POSIX-only.
-
 ## Address and network helpers
 
 - **`get_ip(address) -> IPAddress | None`** — literal *or hostname* to an
@@ -195,11 +186,11 @@ all nameservers failed, timeout) — never `None`, so `if result:` and
 else is `str` with the trailing root dot stripped and TXT strings unquoted.
 
 - **A malformed query or unknown record type raises `ValueError`** — a caller
-  bug, not a DNS result. (0.1.0 swallowed everything into `[]`, so a typo'd
-  record type was indistinguishable from "no such record".)
+  bug, not a DNS result. A broad `except` here would make a typo'd record type
+  indistinguishable from "no such record".
 - `timeout` bounds the **whole resolution including retries**, so a list of
   dead nameservers cannot run past it.
-- Requires `dnspython`. `nslookup` was removed in favour of this.
+- Requires `dnspython` — the package's only runtime dependency.
 
 ## Reachability
 

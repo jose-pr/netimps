@@ -40,6 +40,7 @@ __all__ = [
     "Route",
     "hop_count",
     "path_mtu",
+    "discover_mtu",
 ]
 
 _IS_WINDOWS = _sys.platform == "win32"
@@ -431,6 +432,15 @@ def _posix_next_hop(dest: str) -> "Tuple[Optional[str], int]":
     except OSError:
         return None, 0
 
+    # /proc/net/route omits loopback entirely on many kernels, so a lookup for
+    # 127.0.0.1 would fall through to the default route (mask 0) and report the
+    # LAN gateway. Loopback is on-link by definition; answer it directly.
+    from . import LOOPBACK_V4, try_parse
+
+    parsed_dest = try_parse(dest)
+    if parsed_dest is not None and parsed_dest in LOOPBACK_V4:
+        return None, _if_index("lo")
+
     best = None
     for line in lines[1:]:
         parts = line.split()
@@ -731,3 +741,79 @@ def path_mtu(dest: str, port: int = 80) -> Optional[int]:
         return None
     finally:
         sock.close()
+
+
+def discover_mtu(
+    dest: str,
+    low: int = 576,
+    high: int = 9000,
+    timeout: float = 1.0,
+    source=None,
+) -> "Optional[int]":
+    """Find the path MTU to ``dest`` by binary-searching DF-flagged pings.
+
+    Sends echo requests with the *don't fragment* bit set, growing and
+    shrinking the payload until the largest one that survives is found::
+
+        discover_mtu("8.8.8.8")          # 1500
+        discover_mtu("vpn.internal")     # 1420, say
+
+    Unlike :func:`path_mtu` -- which asks the kernel and only works where
+    ``IP_MTU`` exists -- this **works on every platform**, because it only
+    needs the platform ``ping`` binary. The cost is that it is slow (a dozen
+    or so pings) and needs the destination to answer ICMP at all.
+
+    :param low: smallest MTU to consider. 576 is the IPv4 minimum every host
+        must accept, so anything smaller means the host is simply unreachable.
+    :param high: largest to consider. 9000 covers jumbo frames; the search
+        starts by confirming the ceiling, so a generous value costs one probe.
+    :param source: send from this interface -- same union as ``ping(source=)``.
+
+    Returns the MTU in **bytes including headers** (payload + 28 for IPv4 +
+    ICMP), so it is directly comparable with :attr:`Interface.mtu`. Returns
+    ``None`` when the destination never answers, which is common: many hosts
+    and most cloud firewalls drop echo entirely, and that is indistinguishable
+    from "every size was too big".
+
+    .. note::
+       A *silent* black hole -- a router that drops oversized DF packets
+       without sending "fragmentation needed" -- is exactly what this measures,
+       and is why the result can be lower than any local ``Interface.mtu``.
+    """
+    from . import ping
+
+    # ping's size= is the ICMP *payload* on both Windows (-l) and POSIX (-s) --
+    # neither counts headers -- so the wire packet is 20 (IPv4) + 8 (ICMP)
+    # bytes larger. Getting this backwards would skew every result by 28.
+    overhead = 28
+
+    def survives(mtu: int) -> bool:
+        payload = mtu - overhead
+        if payload < 0:
+            return False
+        return bool(
+            ping(
+                dest,
+                size=payload,
+                dont_fragment=True,
+                timeout=timeout,
+                source=source,
+            )
+        )
+
+    # Establish that the host answers at all, at the smallest size worth
+    # trying. Without this a firewalled host looks like a tiny MTU.
+    if not survives(low):
+        return None
+
+    if survives(high):
+        return high  # nothing between low and high to find
+
+    # Invariant: `low` survives, `high` does not. Narrow until they meet.
+    while high - low > 1:
+        middle = (low + high) // 2
+        if survives(middle):
+            low = middle
+        else:
+            high = middle
+    return low
