@@ -130,17 +130,48 @@ def test_ordering_and_sorting():
 
 
 def test_is_valid_mac_never_raises():
-    from netimps import is_valid_mac
+    from netimps import MACAddress, is_valid
 
-    assert is_valid_mac("aa:bb:cc:dd:ee:ff")
-    assert is_valid_mac(0xAABBCCDDEEFF)
-    assert not is_valid_mac("not a mac")
-    assert not is_valid_mac("")
-    assert not is_valid_mac(None)
-    assert not is_valid_mac(object())
+    assert is_valid("aa:bb:cc:dd:ee:ff", MACAddress)
+    assert is_valid(0xAABBCCDDEEFF, MACAddress)
+    assert not is_valid("not a mac", MACAddress)
+    assert not is_valid("", MACAddress)
+    assert not is_valid(None, MACAddress)
+    assert not is_valid(object(), MACAddress)
 
 
 def test_packed_roundtrip():
     mac = MACAddress("aa:bb:cc:dd:ee:ff")
     assert MACAddress(mac.packed) == mac
     assert MACAddress(int(mac)) == mac
+
+
+def test_classmethod_validators():
+    """The type-local spellings agree with the generic combinators."""
+    from netimps import MACAddress, is_valid, try_parse
+
+    for value in [
+        "aa:bb:cc:dd:ee:ff",
+        "AABB.CCDD.EEFF",
+        "nope",
+        "",
+        None,
+        12,
+        object(),
+    ]:
+        assert MACAddress.is_valid(value) == is_valid(value, MACAddress)
+        assert (MACAddress.try_parse(value) is None) == (
+            try_parse(value, MACAddress) is None
+        )
+
+
+def test_classmethod_validators_bind_to_subclass():
+    """classmethod, not staticmethod -- a subclass validates against itself."""
+
+    class Vendor(MACAddress):
+        pass
+
+    parsed = Vendor.try_parse("aa:bb:cc:dd:ee:ff")
+    assert isinstance(parsed, Vendor)
+    assert Vendor.is_valid("aa:bb:cc:dd:ee:ff")
+    assert not Vendor.is_valid("nope")

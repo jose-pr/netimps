@@ -31,11 +31,11 @@ def _source_argument(source, want_ipv6: bool = False) -> Optional[str]:
     """
     # A MAC identifies an adapter, so look up which one carries it. Unknown
     # MACs are None ("no such interface"), never a silent fallback.
-    from . import MACAddress, is_valid_mac
+    from . import MACAddress, is_valid
     from ._ifaddrs import Interface, get_interfaces
 
     if isinstance(source, MACAddress) or (
-        isinstance(source, str) and is_valid_mac(source)
+        isinstance(source, str) and is_valid(source, MACAddress)
     ):
         wanted = MACAddress(source)
         source = next(

@@ -10,7 +10,6 @@ from netimps import (
     IPv4Address,
     IPv4Interface,
     MACAddress,
-    is_valid_ip,
     parse,
     try_parse,
 )
@@ -85,8 +84,8 @@ def test_try_parse_network():
         (12345, True),  # int is a valid ipaddress input
     ],
 )
-def test_is_valid_ip(value, expected):
-    assert is_valid_ip(value) is expected
+def test_is_valid_address(value, expected):
+    assert netimps.is_valid(value, IPAddress) is expected
 
 
 def test_public_api_exports():
@@ -158,23 +157,19 @@ def test_is_valid_only_swallows_bad_input_errors():
         is_valid("anything", raises_os_error)
 
 
-def test_named_validators_match_generic():
-    from netimps import (
-        IPAddress,
-        IPNetwork,
-        MACAddress,
-        is_valid,
-        is_valid_ip,
-        is_valid_mac,
-        is_valid_network,
-    )
+def test_is_valid_covers_every_result_type():
+    """One generic check replaces the old per-type is_valid_* helpers."""
+    from netimps import IPAddress, IPNetwork, MACAddress, is_valid
 
-    for value in ["10.0.0.5", "", "nope", None, "::1"]:
-        assert is_valid_ip(value) == is_valid(value, IPAddress)
-    for value in ["10.0.0.0/24", "10.0.0.5/24", "nope", None]:
-        assert is_valid_network(value) == is_valid(value, IPNetwork)
-    for value in ["aa:bb:cc:dd:ee:ff", "nope", None, 12]:
-        assert is_valid_mac(value) == is_valid(value, MACAddress)
+    assert is_valid("10.0.0.5", IPAddress)
+    assert not is_valid("nope", IPAddress)
+    assert is_valid("10.0.0.5/24", IPNetwork)
+    assert not is_valid("nope", IPNetwork)
+    assert is_valid("aa:bb:cc:dd:ee:ff", MACAddress)
+    assert not is_valid("nope", MACAddress)
+    # Never raises, whatever the input type.
+    for bad in ("", None, object(), 1.5):
+        assert is_valid(bad, IPAddress) in (True, False)
 
 
 # --------------------------------------------------------------------------- #
