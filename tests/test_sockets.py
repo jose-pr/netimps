@@ -12,7 +12,7 @@ import pytest
 import netimps
 from netimps import (
     Route,
-    free_port,
+    get_free_port,
     get_route,
     get_source_ip,
     tcp_check,
@@ -63,12 +63,12 @@ def test_get_source_ip_unroutable_is_none(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# free_port                                                                    #
+# get_free_port                                                                    #
 # --------------------------------------------------------------------------- #
 
 
 def test_free_port_is_bindable():
-    port = free_port()
+    port = get_free_port()
     assert 1 <= port <= 65535
     # The whole point: the port must actually be usable afterwards.
     sock = socket.socket()
@@ -80,7 +80,7 @@ def test_free_port_is_bindable():
 
 def test_free_port_varies():
     """Consecutive calls should not hand out the same port."""
-    ports = {free_port() for _ in range(5)}
+    ports = {get_free_port() for _ in range(5)}
     assert len(ports) > 1
 
 
@@ -103,7 +103,7 @@ def test_tcp_check_open_port(listening_port):
 
 
 def test_tcp_check_closed_port():
-    port = free_port()  # nothing listening there
+    port = get_free_port()  # nothing listening there
     assert tcp_check("127.0.0.1", port, timeout=1.0) is False
 
 
@@ -125,7 +125,7 @@ def test_wait_for_port_returns_immediately_when_open(listening_port):
 def test_wait_for_port_times_out():
     import time
 
-    port = free_port()
+    port = get_free_port()
     start = time.monotonic()
     assert wait_for_port("127.0.0.1", port, timeout=0.6, interval=0.05) is False
     # Must honour the deadline rather than running to some internal default.

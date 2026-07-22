@@ -33,7 +33,7 @@ below is simply what the package contains.
   case-selectable rendering. A value type exposing `.packed`, not a `bytes`
   subclass, matching how `ipaddress` models addresses.
 - **Socket helpers** -- `bind()`, `bind_error_hint()`, `interface_for()`,
-  `get_source_ip()`, `free_port()`, `tcp_check()`, `wait_for_port()`.
+  `get_source_ip()`, `get_free_port()`, `tcp_check()`, `wait_for_port()`.
 - **`UdpEndpoint`** -- UDP receive reporting which interface a datagram arrived
   on via `IP_PKTINFO`, degrading where `recvmsg` does not exist.
 - **Routing and MTU** -- `get_route()` (first hop, unprivileged), `hop_count()`
