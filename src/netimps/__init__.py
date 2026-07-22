@@ -151,6 +151,7 @@ __all__ = [
     "hop_count",
     "get_pmtu",
     "discover_mtu",
+    "get_tcp_mss",
     "HOST_DN",
 ]
 
@@ -391,6 +392,7 @@ from ._sockets import (  # noqa: E402
     bind,
     discover_mtu,
     get_pmtu,
+    get_tcp_mss,
     bind_error_hint,
     interface_for,
     Route,

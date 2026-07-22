@@ -41,6 +41,7 @@ __all__ = [
     "hop_count",
     "get_pmtu",
     "discover_mtu",
+    "get_tcp_mss",
 ]
 
 _IS_WINDOWS = _sys.platform == "win32"
@@ -295,6 +296,14 @@ def tcp_check(dst: str, port: int, timeout: float = 3.0) -> bool:
     Never raises: refused, timed out, unresolvable and unreachable all yield
     ``False``. Only TCP handshake completion is checked -- not that the service
     behind the port is healthy.
+
+    .. note::
+       **Not the same question as** ``ping(dst, method="tcp", port=...)``. This
+       asks "is the *service* up?", so a refused connection is ``False``. That
+       asks "is the *host* up?", and counts a refusal as success -- the RST
+       proves something answered. Same distinction as a service check versus an
+       ICMP echo. :func:`wait_for_port` and the scanners build on this one,
+       because they care about the service.
     """
     try:
         sock = _socket.create_connection((dst, port), timeout=timeout)
@@ -770,6 +779,8 @@ def discover_mtu(
     src=None,
     port: int = 80,
     probe: bool = True,
+    method: str = "icmp",
+    **ping_kwargs,
 ) -> "Optional[int]":
     """Measure the path MTU to ``dst`` in bytes, or ``None`` if undiscoverable.
 
@@ -796,8 +807,25 @@ def discover_mtu(
         confirms the ceiling first, so a generous value costs one probe.
     :param src: send from this interface -- same union as ``ping(src=)``.
     :param port: destination port passed through to :func:`get_pmtu`.
+    :param method: how to probe. ``"icmp"`` (default) uses DF-flagged echo;
+        ``"udp"`` sends datagrams of growing size to ``port`` and needs
+        something there that replies. Use ``"udp"`` when ICMP is filtered but a
+        UDP service answers, or to measure what a **UDP application** can
+        actually push -- a middlebox may cap that below the ICMP-derived MTU.
+
+        ``"tcp"`` **does not probe** -- it cannot: TCP is a stream and the
+        kernel segments it transparently, so a large ``send()`` silently
+        becomes many packets. It instead reads the negotiated MSS
+        (:func:`get_tcp_mss`) and adds the 40-byte IPv4+TCP header back, which
+        is the closest true equivalent. That is what the two *kernels agreed*,
+        not necessarily what a middlebox further along will pass -- use
+        ``"icmp"`` or ``"udp"`` when the answer must be measured.
     :param probe: set ``False`` to skip probing entirely and just return
         :func:`get_pmtu` -- the kernel's cached answer, usually ``None``.
+    :param ping_kwargs: passed straight to :func:`ping` for ``method="icmp"``,
+        so anything it accepts works here -- ``ipv6=True`` to force the family,
+        ``tries=3`` to tolerate a lossy path. ``size`` and ``dont_fragment``
+        are set by the search itself and cannot be overridden.
 
     Returns the MTU **including headers** (payload + 28 for IPv4 + ICMP), so it
     is directly comparable with :attr:`Interface.mtu`. Returns ``None`` when
@@ -814,12 +842,38 @@ def discover_mtu(
         # Explicitly asked for the kernel's cached answer only.
         return get_pmtu(dst, port)
 
+    method = (method or "icmp").lower()
+    if method not in ("icmp", "udp", "tcp"):
+        raise ValueError("method must be 'icmp', 'udp' or 'tcp', got %r" % (method,))
+
+    if method == "tcp":
+        # TCP cannot probe: the kernel segments the stream, so a large send()
+        # silently becomes many packets and measures nothing. The negotiated
+        # MSS is the closest true equivalent -- derive the MTU from it rather
+        # than refusing to answer.
+        mss = get_tcp_mss(dst, port, timeout)
+        if mss is None:
+            return None
+        # Header size differs by family: IPv4 is 20 + 20 TCP, IPv6 is 40 + 20.
+        # Using the v4 figure for a v6 path would under-report by 20 bytes.
+        return mss + _tcp_header_overhead(dst)
+
+    for owned in ("size", "dont_fragment"):
+        if owned in ping_kwargs:
+            raise TypeError(
+                "discover_mtu sets %r itself -- it is what the search varies" % (owned,)
+            )
+
+    if method == "udp":
+        return _discover_mtu_udp(dst, port, low, high, timeout)
+
     from . import ping
 
     # ping's size= is the ICMP *payload* on both Windows (-l) and POSIX (-s) --
-    # neither counts headers -- so the wire packet is 20 (IPv4) + 8 (ICMP)
-    # bytes larger. Getting this backwards would skew every result by 28.
-    overhead = 28
+    # neither counts headers -- so the wire packet is larger by the IP header
+    # plus 8 (ICMP). IPv4 gives 28, IPv6 gives 48: applying the v4 figure to a
+    # v6 path would under-report by 20 bytes.
+    overhead = _ip_header_bytes(dst) + 8
 
     def survives(mtu: int) -> bool:
         payload = mtu - overhead
@@ -832,6 +886,7 @@ def discover_mtu(
                 dont_fragment=True,
                 timeout=timeout,
                 src=src,
+                **ping_kwargs,
             )
         )
 
@@ -851,3 +906,117 @@ def discover_mtu(
         else:
             high = middle
     return low
+
+
+def _discover_mtu_udp(dst, port, low, high, timeout):
+    """Binary-search the largest UDP datagram that survives to ``dst``:``port``.
+
+    Needs something at the far end that replies (an echo service, a DNS
+    resolver, anything). Silence is treated as "too big", so a filtered or
+    absent listener makes every size fail and the result is ``None``.
+    """
+    overhead = _ip_header_bytes(dst) + 8  # IP header + 8 (UDP)
+
+    def survives(mtu):
+        payload = mtu - overhead
+        if payload < 0:
+            return False
+        sock = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+        sock.settimeout(timeout)
+        try:
+            sock.sendto(bytes(payload), (dst, port))
+            sock.recvfrom(65535)
+            return True
+        except (OSError, _socket.timeout):
+            # ConnectionResetError (ICMP port unreachable) also lands here: it
+            # proves the host is reachable but says nothing about whether this
+            # size made it, so treat it as a failure rather than a success.
+            return False
+        finally:
+            sock.close()
+
+    if not survives(low):
+        return None
+    if survives(high):
+        return high
+    while high - low > 1:
+        middle = (low + high) // 2
+        if survives(middle):
+            low = middle
+        else:
+            high = middle
+    return low
+
+
+def get_tcp_mss(dst: str, port: int, timeout: float = 3.0) -> "Optional[int]":
+    """Return the TCP maximum segment size negotiated with ``dst``, or ``None``.
+
+    The TCP counterpart to an MTU: the largest payload a single segment may
+    carry, agreed during the handshake::
+
+        get_tcp_mss("example.com", 443)     # 1460 on a 1500-MTU path
+
+    This **opens a real connection** to read the value, then closes it.
+
+    MSS is normally the path MTU minus 40 (20 IPv4 + 20 TCP), so a reduced
+    value is a useful signal: a VPN or tunnel is shrinking the path. Measured
+    on one host: 1412 over a VPN where the link MTU was 1500, and 32741 on
+    loopback.
+
+    Returns ``None`` where the platform does not expose ``TCP_MAXSEG`` or the
+    connection fails. Note this is what the *kernels agreed*, not what a
+    middlebox further along will actually pass -- for that, measure with
+    :func:`discover_mtu`.
+    """
+    option = getattr(_socket, "TCP_MAXSEG", None)
+    if option is None:
+        return None
+
+    # Let getaddrinfo pick the family so a v6-only destination works.
+    try:
+        infos = _socket.getaddrinfo(dst, int(port), 0, _socket.SOCK_STREAM)
+    except (OSError, OverflowError, ValueError):
+        return None
+
+    for family, kind, proto, _canon, addr in infos:
+        sock = _socket.socket(family, kind, proto)
+        sock.settimeout(timeout)
+        try:
+            sock.connect(addr)
+            value = int(sock.getsockopt(_socket.IPPROTO_TCP, option))
+            return value if value > 0 else None
+        except (OSError, OverflowError, ValueError):
+            continue
+        finally:
+            sock.close()
+    return None
+
+
+def _ip_header_bytes(dst) -> int:
+    """Fixed IP header size for ``dst``'s address family: 20 (v4) or 40 (v6).
+
+    Every "wire size = payload + overhead" sum in this module depends on it.
+    Assuming IPv4 on a v6 path under-reports by 20 bytes, which is exactly the
+    sort of quiet 20-byte error that makes an MTU figure untrustworthy.
+
+    Falls back to 20 for an unresolvable name -- IPv4 is the safer guess, since
+    over-reporting an MTU causes drops while under-reporting only wastes a
+    little headroom.
+    """
+    from . import try_parse
+
+    parsed = try_parse(dst)
+    if parsed is None:
+        # A hostname: ask the resolver which family it actually resolves to.
+        try:
+            infos = _socket.getaddrinfo(dst, None, 0, _socket.SOCK_STREAM)
+        except OSError:
+            return 20
+        family = infos[0][0] if infos else _socket.AF_INET
+        return 40 if family == _socket.AF_INET6 else 20
+    return 40 if parsed.version == 6 else 20
+
+
+def _tcp_header_overhead(dst) -> int:
+    """IP + TCP header bytes for ``dst``: 40 (IPv4) or 60 (IPv6)."""
+    return _ip_header_bytes(dst) + 20
