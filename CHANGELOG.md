@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Command-line interface** (`netimps ...` / `python -m netimps`), built on
+  duho and installed by the new `cli` extra. Eleven subcommands cover the
+  diagnostic surface: `interfaces`, `ping`, `resolve`, `check`, `route`, `mtu`,
+  `scan`, `addr`, `source`, `port`, `split`. Every one takes `--json`, and exit
+  codes distinguish success from "the answer was no" from a caller error.
+  `duho` is CLI-only -- importing the library does not require it.
+
 ## [0.0.0] - 2026-07-22
 
 Initial release.

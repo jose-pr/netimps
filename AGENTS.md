@@ -65,6 +65,8 @@ src/netimps/
 ├── _ip.py        # private: IP type aliases, builder tables, IP helpers
 ├── _mac.py       # private: MACAddress value type
 ├── _scheme.py    # private: scheme <-> port registry
+├── cli.py        # public: duho-backed CLI (needs the `cli` extra)
+├── __main__.py   # `python -m netimps`
 ├── _scan.py      # private: concurrent port/host scanning
 ├── _multicast.py # private: group membership and socket setup
 ├── _ifaddrs.py   # private: ctypes getifaddrs/GetAdaptersAddresses bindings
@@ -126,6 +128,9 @@ map:
 - The ctypes paths can't be asserted against fixed values, so
   `tests/test_interfaces.py` checks invariants plus the pure helpers and the
   fallback, which *are* exactly testable.
+- **`duho` is a CLI-only dependency.** `cli.py` and `__main__.py` may import it;
+  nothing else may. `tests/test_cli.py` skips itself when the extra is absent,
+  and asserts the library still imports with duho blocked.
 - Tests must never hit the network — `tests/test_net.py` fakes `dns.resolver`
   and `subprocess.run` throughout. `test_scan.py` and `test_sockets.py` use
   loopback only.

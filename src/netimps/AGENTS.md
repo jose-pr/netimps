@@ -414,6 +414,33 @@ resolution fails — the case a bare `get_ip()` handles badly, since it returns
   `refresh=True` to retry.
 - Compares equal to a plain `str`, and hashes by its text.
 
+## Command line
+
+Installed by the ``cli`` extra (``pip install netimps[cli]``), which adds
+`duho`. **Importing `netimps` never requires it** -- the library half has no
+dependency on the CLI half.
+
+```
+netimps interfaces                       # names, MACs, MTU, addresses
+netimps ping 8.8.8.8 -m tcp -p 443       # icmp | tcp | udp
+netimps resolve example.com aaaa
+netimps check example.com https          # port or scheme name
+netimps route 8.8.8.8 --hops
+netimps mtu 8.8.8.8 -m udp -p 9999
+netimps scan 192.0.2.0/29 -p common
+netimps addr 00:00:5e:00:53:01           # address, network or MAC
+netimps source 8.8.8.8                   # which local address reaches it
+netimps port https                       # 443; `netimps port` gives a free one
+netimps split '[::1]:8080'               # -> ::1  8080
+```
+
+- **`--json` on every command**, so output is scriptable. Text output is for
+  humans and its exact wording is not a stability guarantee; the JSON shape is.
+- **Exit codes are meaningful**: `0` success, `1` "the answer was no"
+  (unreachable, closed, no records), `2` a caller error (bad argument, unknown
+  scheme). `ping` mirrors `ping(8)`.
+- `python -m netimps` is equivalent to the `netimps` console script.
+
 ## Constants
 
 - **`HOST_DN`** — `platform.node()`, captured **at import time** (a later

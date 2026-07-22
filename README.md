@@ -44,10 +44,28 @@ and no wheel to miss for your platform.
 ## Installation
 
 ```bash
-pip install netimps
+pip install netimps          # the library
+pip install netimps[cli]     # plus the `netimps` command
 ```
 
-Requires Python 3.9+.
+Requires Python 3.9+. The CLI extra adds `duho`; importing the library never
+requires it.
+
+## Command line
+
+```bash
+netimps interfaces                       # names, MACs, MTU, addresses
+netimps ping 8.8.8.8 -m tcp -p 443       # icmp | tcp | udp
+netimps resolve example.com aaaa
+netimps check example.com https          # port number or scheme name
+netimps mtu 8.8.8.8                      # measured, not guessed
+netimps scan 192.0.2.0/29 -p common
+netimps addr 00:00:5e:00:53:01           # address, network or MAC
+netimps split '[::1]:8080'               # -> ::1  8080
+```
+
+Every command takes `--json`. Exit codes are meaningful: `0` success, `1` "the
+answer was no", `2` a caller error.
 
 ## Quick start
 
