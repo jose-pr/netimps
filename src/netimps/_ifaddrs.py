@@ -436,11 +436,16 @@ def _posix_interfaces(want_raw: bool) -> "List[Interface]":
             elif family == _AF_LINK and _HAS_SA_LEN:
                 sdl = _cast_sockaddr(node.ifa_addr, _SockaddrDl)
                 if sdl.sdl_alen == 6:
-                    # The MAC follows the interface name inside sdl_data.
-                    raw_data = bytes(
-                        bytearray(
-                            _ctypes.string_at(_ctypes.addressof(sdl.sdl_data), 46)
-                        )
+                    # The MAC follows the interface name inside sdl_data, so it
+                    # starts sdl_nlen bytes in rather than at a fixed offset.
+                    #
+                    # Read it through the struct's own address: `sdl.sdl_data`
+                    # is a `c_char` array, which ctypes converts to `bytes` on
+                    # attribute access -- and `addressof()` on that copy is a
+                    # TypeError, not a pointer to the buffer.
+                    offset = _SockaddrDl.sdl_data.offset
+                    raw_data = _ctypes.string_at(
+                        _ctypes.addressof(sdl) + offset, _SockaddrDl.sdl_data.size
                     )
                     start = sdl.sdl_nlen
                     iface.mac = _mac(raw_data[start : start + 6])
