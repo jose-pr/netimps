@@ -22,5 +22,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `ping`, and local NIC helpers `active_nic_addresses` / `get_ip_address` /
   `nic_info`.
 
-[Unreleased]: https://github.com/jose-pr/netutils/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/jose-pr/netutils/releases/tag/v0.1.0
+[Unreleased]: https://github.com/jose-pr/netimps/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/jose-pr/netimps/releases/tag/v0.1.0

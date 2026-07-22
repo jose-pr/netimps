@@ -3,8 +3,8 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "netutils"
-version = "0.1.0"
+name = "netimps"
+version = "0.2.0"
 authors = [{ name = "Jose A." }]
 description = "Small, self-contained network utilities: IP/MAC types, DNS lookup, ping, NIC discovery"
 readme = "README.md"
@@ -30,9 +30,9 @@ dev = ['build', 'twine', 'hatchling', 'pytest']
 docs = ['mkdocs', 'mkdocs-material', 'mkdocstrings[python]']
 
 [project.urls]
-Homepage = "https://github.com/jose-pr/netutils"
-Documentation = "https://jose-pr.github.io/netutils/"
-Issues = "https://github.com/jose-pr/netutils/issues"
+Homepage = "https://github.com/jose-pr/netimps"
+Documentation = "https://jose-pr.github.io/netimps/"
+Issues = "https://github.com/jose-pr/netimps/issues"
 
 [tool.hatch.build.targets.sdist]
 exclude = ["/.*"]

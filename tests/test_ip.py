@@ -2,8 +2,8 @@ import ipaddress
 
 import pytest
 
-import netutils
-from netutils import (
+import netimps
+from netimps import (
     IPAddress,
     IPInterface,
     IPNetwork,
@@ -98,4 +98,4 @@ def test_public_api_exports():
         "ping",
         "active_nic_addresses",
     ]:
-        assert hasattr(netutils, name), name
+        assert hasattr(netimps, name), name

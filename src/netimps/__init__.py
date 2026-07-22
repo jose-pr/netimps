@@ -1,16 +1,16 @@
-"""netutils -- small, self-contained network utilities.
+"""netimps -- small, self-contained network utilities.
 
 A thin, typed convenience layer over the standard library's :mod:`ipaddress`
 plus a handful of host helpers (DNS lookup, ping, local NIC discovery).
 
 The public surface is intentionally flat::
 
-    import netutils
+    import netimps
 
-    netutils.IPAddress("10.0.0.5")
-    netutils.MACAddress("AA:BB:CC:DD:EE:FF").as_str("-")
-    netutils.parse_network("192.168.1.0/24")
-    netutils.nslookup("example.com")
+    netimps.IPAddress("10.0.0.5")
+    netimps.MACAddress("AA:BB:CC:DD:EE:FF").as_str("-")
+    netimps.parse_network("192.168.1.0/24")
+    netimps.nslookup("example.com")
 
 All IP/network types are the concrete :mod:`ipaddress` classes (or thin
 factories over them), so ``.exploded``, ``.network_address``, ``.netmask`` and
@@ -59,7 +59,7 @@ __all__ = [
     "HOST_DN",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 #: Fully-qualified (or short) name of the host running this process.
 HOST_DN = _platform.node()
@@ -252,7 +252,7 @@ def nslookup(query: str, ns: Optional[Union[str, List[str]]] = None, type: str =
         the system resolver.
     :param type: DNS record type (``"a"``, ``"aaaa"``, ``"mx"`` ...).
 
-    Requires the ``dnspython`` package (installed with ``netutils``).
+    Requires the ``dnspython`` package (installed with ``netimps``).
     """
     from dns import resolver as _resolver
 

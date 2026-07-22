@@ -1,12 +1,12 @@
-# `netutils` — public API header
+# `netimps` — public API header
 
-Header-file-style reference for the `netutils` package: every `__all__` export
+Header-file-style reference for the `netimps` package: every `__all__` export
 with its signature, arguments, contract, and gotchas, so this module can be
 consumed without reading its source. The entire public surface lives in one
 file, `__init__.py`; there are no submodules to import separately. For the
 project overview and install instructions, see the repo-root `AGENTS.md`.
 
-`netutils.__version__` — the package version string (currently `"0.1.0"`).
+`netimps.__version__` — the package version string (currently `"0.1.0"`).
 
 ## IP address / interface / network factories
 

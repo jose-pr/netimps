@@ -5,9 +5,9 @@ import types
 
 import pytest
 
-import netutils
-from netutils import active_nic_addresses, nslookup, ping
-from netutils import IPv4Address
+import netimps
+from netimps import active_nic_addresses, nslookup, ping
+from netimps import IPv4Address
 
 
 # --------------------------------------------------------------------------- #
@@ -92,7 +92,7 @@ def test_ping_success(monkeypatch):
         calls.append(cmd)
         return types.SimpleNamespace(returncode=0)
 
-    monkeypatch.setattr(netutils, "_run", fake_run)
+    monkeypatch.setattr(netimps, "_run", fake_run)
     assert ping("127.0.0.1") is True
     assert calls[0][0] == "ping"
     assert "127.0.0.1" in calls[0]
@@ -105,7 +105,7 @@ def test_ping_failure_exhausts_tries(monkeypatch):
         calls.append(cmd)
         return types.SimpleNamespace(returncode=1)
 
-    monkeypatch.setattr(netutils, "_run", fake_run)
+    monkeypatch.setattr(netimps, "_run", fake_run)
     assert ping("10.255.255.1", tries=3) is False
     assert len(calls) == 3
 
@@ -116,20 +116,20 @@ def test_ping_failure_exhausts_tries(monkeypatch):
 
 def test_active_nic_addresses_filters_loopback(monkeypatch):
     monkeypatch.setattr(
-        netutils._socket,
+        netimps._socket,
         "gethostbyname_ex",
         lambda host: ("host", [], ["127.0.0.1", "192.168.1.10"]),
     )
-    monkeypatch.setattr(netutils._socket, "gethostname", lambda: "host")
+    monkeypatch.setattr(netimps._socket, "gethostname", lambda: "host")
     addrs = active_nic_addresses()
     assert addrs == [IPv4Address("192.168.1.10")]
 
 
 def test_active_nic_addresses_only_loopback_is_empty(monkeypatch):
     monkeypatch.setattr(
-        netutils._socket,
+        netimps._socket,
         "gethostbyname_ex",
         lambda host: ("host", [], ["127.0.0.1"]),
     )
-    monkeypatch.setattr(netutils._socket, "gethostname", lambda: "host")
+    monkeypatch.setattr(netimps._socket, "gethostname", lambda: "host")
     assert active_nic_addresses() == []

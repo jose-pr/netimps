@@ -2,7 +2,7 @@ import re
 
 import pytest
 
-from netutils import MACAddress
+from netimps import MACAddress
 
 
 @pytest.mark.parametrize(
