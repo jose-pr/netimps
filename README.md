@@ -81,7 +81,7 @@ netimps.ping("127.0.0.1", timeout=2.0)      # True / False
 | `resolve` | DNS lookup → list of string records (`[]` on failure) |
 | `ping` | reachability → `bool` |
 | `get_ip`, `is_link_scoped` | address helpers |
-| `get_default_port`, `port_scheme`, `register_port` | scheme ↔ port registry |
+| `get_default_port`, `get_default_scheme`, `register_port` | scheme ↔ port registry |
 
 Full per-export reference, with contracts and gotchas, lives in
 [`src/netimps/AGENTS.md`](src/netimps/AGENTS.md).

@@ -396,32 +396,32 @@ def test_ping_returns_false_when_subprocess_hangs(monkeypatch):
 @pytest.fixture
 def clean_ports():
     """Snapshot/restore the port tables -- registration mutates module state."""
-    import netimps as n
+    from netimps import _scheme
 
-    ports = dict(n._DEFAULT_PORTS)
-    schemes = dict(n._PORT_SCHEMES)
+    ports = dict(_scheme._DEFAULT_PORTS)
+    schemes = dict(_scheme._PORT_SCHEMES)
     yield
-    n._DEFAULT_PORTS.clear()
-    n._DEFAULT_PORTS.update(ports)
-    n._PORT_SCHEMES.clear()
-    n._PORT_SCHEMES.update(schemes)
+    _scheme._DEFAULT_PORTS.clear()
+    _scheme._DEFAULT_PORTS.update(ports)
+    _scheme._PORT_SCHEMES.clear()
+    _scheme._PORT_SCHEMES.update(schemes)
 
 
-def test_port_scheme_is_inverse_of_get_default_port():
-    assert netimps.port_scheme(443) == "https"
-    assert netimps.port_scheme(80) == "http"
-    assert netimps.get_default_port(netimps.port_scheme(443)) == 443
+def test_get_default_scheme_is_inverse_of_get_default_port():
+    assert netimps.get_default_scheme(443) == "https"
+    assert netimps.get_default_scheme(80) == "http"
+    assert netimps.get_default_port(netimps.get_default_scheme(443)) == 443
 
 
-def test_port_scheme_returns_canonical_not_alias():
+def test_get_default_scheme_returns_canonical_not_alias():
     """1080 has three schemes; the first registered wins, not whichever is last."""
-    assert netimps.port_scheme(1080) == "socks"
+    assert netimps.get_default_scheme(1080) == "socks"
 
 
 def test_register_port_round_trips(clean_ports):
     netimps.register_port("myproto", 9999)
     assert netimps.get_default_port("myproto") == 9999
-    assert netimps.port_scheme(9999) == "myproto"
+    assert netimps.get_default_scheme(9999) == "myproto"
 
 
 def test_register_port_is_case_insensitive(clean_ports):
@@ -434,10 +434,10 @@ def test_register_alias_does_not_steal_canonical_name(clean_ports):
     """Adding an alias must not silently change what a port maps back to."""
     netimps.register_port("secure-web", 443)
     assert netimps.get_default_port("secure-web") == 443
-    assert netimps.port_scheme(443) == "https"  # unchanged
+    assert netimps.get_default_scheme(443) == "https"  # unchanged
 
     netimps.register_port("secure-web", 443, canonical=True)
-    assert netimps.port_scheme(443) == "secure-web"  # explicit override honoured
+    assert netimps.get_default_scheme(443) == "secure-web"  # explicit override honoured
 
 
 @pytest.mark.parametrize("port", [-1, 65536, 100000])
@@ -453,5 +453,5 @@ def test_register_port_rejects_bad_input(clean_ports):
         netimps.register_port("x", "80")
 
 
-def test_port_scheme_unknown_is_none():
-    assert netimps.port_scheme(65000) is None
+def test_get_default_scheme_unknown_is_none():
+    assert netimps.get_default_scheme(65000) is None
