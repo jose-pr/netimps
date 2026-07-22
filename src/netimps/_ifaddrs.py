@@ -19,7 +19,7 @@ resolved here rather than in every caller:
 Concern              Linux               macOS/BSD           Windows
 ===================  ==================  ==================  =================
 Interface name       ``eth0``            ``en0``             GUID + friendly
-Prefix source        netmask sockaddr    netmask sockaddr    ``OnLinkPrefixLength``
+Prefix src        netmask sockaddr    netmask sockaddr    ``OnLinkPrefixLength``
 Link-layer family    ``AF_PACKET`` (17)  ``AF_LINK`` (18)    ``PhysicalAddress``
 IPv6 scope           ``%1``              ``%en0``            ``%12``
 Loopback name        ``lo``              ``lo0``             ``Loopback Pseudo-Interface 1``
@@ -57,7 +57,7 @@ from ctypes import (
     c_ulong,
     c_void_p,
 )
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
 __all__ = ["Interface", "get_interfaces", "iter_addresses"]
 
@@ -720,7 +720,9 @@ def get_interfaces(raw: bool = False) -> "List[Interface]":
         return _fallback_interfaces(raw)
 
 
-def iter_addresses(interfaces=None, family=None):
+def iter_addresses(
+    interfaces=None, family=None
+) -> "Iterator[Tuple[Interface, _IPInterface]]":
     """Yield ``(interface, address)`` once per address, not once per adapter.
 
     :func:`get_interfaces` groups every address under its adapter, which is the

@@ -130,8 +130,8 @@ def resolve(
     return [_native_record(record) for record in answer]
 
 
-def _source_argument(source, want_ipv6: bool = False) -> Optional[str]:
-    """Coerce a source spec to the address string ``ping`` needs.
+def _source_argument(src, want_ipv6: bool = False) -> Optional[str]:
+    """Coerce a src spec to the address string ``ping`` needs.
 
     Accepts an :class:`Interface`, an address object, or a string. Interfaces
     are reduced to an address because Windows ``-S`` will not take an adapter
@@ -140,23 +140,21 @@ def _source_argument(source, want_ipv6: bool = False) -> Optional[str]:
     """
     # A MAC identifies an adapter, so look up which one carries it. Unknown
     # MACs are None ("no such interface"), never a silent fallback.
-    if isinstance(source, MACAddress) or (
-        isinstance(source, str) and is_valid(source, MACAddress)
+    if isinstance(src, MACAddress) or (
+        isinstance(src, str) and is_valid(src, MACAddress)
     ):
-        wanted = MACAddress(source)
-        source = next(
-            (iface for iface in get_interfaces() if iface.mac == wanted), None
-        )
-        if source is None:
+        wanted = MACAddress(src)
+        src = next((iface for iface in get_interfaces() if iface.mac == wanted), None)
+        if src is None:
             return None
 
-    if isinstance(source, Interface):
-        candidates = source.ipv6 if want_ipv6 else source.ipv4
+    if isinstance(src, Interface):
+        candidates = src.ipv6 if want_ipv6 else src.ipv4
         for entry in candidates:
             if not entry.ip.is_loopback:
                 return str(entry.ip)
         # Fall back to a loopback address if that is genuinely all it has.
         return str(candidates[0].ip) if candidates else None
 
-    text = str(source).strip()
+    text = str(src).strip()
     return text or None

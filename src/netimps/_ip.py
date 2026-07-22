@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import ipaddress as _ipaddress
 import socket as _socket
-from typing import List, Optional, Union
+from typing import List, Optional, Tuple, Union
 
 from ipaddress import (
     IPv4Address,
@@ -195,7 +195,9 @@ def subtract(networks, remove) -> "List[IPNetwork]":
     return collapse(remaining)
 
 
-def normalize_host(text: str, default_port: Optional[int] = None):
+def normalize_host(
+    text: str, default_port: Optional[int] = None
+) -> "Tuple[str, Optional[int]]":
     """Split ``"host:port"`` into ``(host, port)``, handling IPv6 brackets.
 
     The parsing that looks trivial until IPv6 arrives, because a bare v6

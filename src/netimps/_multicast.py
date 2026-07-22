@@ -117,7 +117,7 @@ def multicast_socket(
     loop: bool = True,
     bind: bool = True,
     reuse: bool = True,
-):
+) -> "_socket.socket":
     """Return a UDP socket configured for multicast, joined to ``group``.
 
     The whole setup in one call::

@@ -52,6 +52,11 @@ pip install netimps
 Requires Python 3.9+. Runtime dependency: `dnspython` (used only inside
 `resolve`).
 
+> **This file is development documentation** — layout, testing, CI, release.
+> It is deliberately **not shipped** in the wheel. The library-usage reference
+> is `src/netimps/AGENTS.md`, which *is* shipped and must stay self-contained
+> (no repo-relative links, since an installed consumer has no repo).
+
 ## Code layout
 
 ```

@@ -26,7 +26,7 @@ import sys as _sys
 import time as _time
 
 from ._iface_spec import interface_address as _interface_address
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 __all__ = [
     "bind",
@@ -63,7 +63,7 @@ def bind(
     interface=None,
     options=(),
     listen: "Optional[int]" = None,
-):
+) -> "_socket.socket":
     """Create, configure and bind a socket in one call.
 
     The setup every server repeats, with the options that are easy to get
@@ -78,7 +78,7 @@ def bind(
     :param port: local port; ``0`` lets the OS choose.
     :param interface: bind to this adapter's address instead of ``address``.
         Accepts an :class:`Interface`, a MAC, an adapter name or an address --
-        the same union as ``ping(source=)``. Raises :class:`ValueError` if it
+        the same union as ``ping(src=)``. Raises :class:`ValueError` if it
         cannot be resolved, rather than silently binding the wildcard.
     :param reuse_port: sets ``SO_REUSEPORT``. **A no-op where the option does
         not exist** (Windows) rather than an error, so the same call works
@@ -172,7 +172,7 @@ def bind_error_hint(
     return None
 
 
-def interface_for(address, strict: bool = True):
+def interface_for(address, strict: bool = True) -> "Optional[Any]":
     """Return the :class:`Interface` holding ``address``, or ``None``.
 
     The reverse of interface enumeration -- "a socket is bound here, which
@@ -216,8 +216,8 @@ def _make_host_route(address):
         return None
 
 
-def get_source_ip(dest: str = _DEFAULT_PROBE, port: int = 80):
-    """Return the local address the kernel would use to reach ``dest``.
+def get_source_ip(dst: str = _DEFAULT_PROBE, port: int = 80) -> "Optional[Any]":
+    """Return the local address the kernel would use to reach ``dst``.
 
     Answers "which of my addresses is the *real* one for this destination?" --
     the question a hostname lookup gets wrong on any host with VMs, containers
@@ -225,13 +225,13 @@ def get_source_ip(dest: str = _DEFAULT_PROBE, port: int = 80):
 
         get_source_ip()                  # IPv4Address('192.0.2.10')
         get_source_ip("192.168.1.1")     # the LAN-facing address
-        get_source_ip("2001:4860::8888") # an IPv6 source address
+        get_source_ip("2001:4860::8888") # an IPv6 src address
 
     **No packets are sent.** ``connect()`` on a UDP socket only fixes the
     socket's local endpoint by consulting the routing table, so this is
-    immediate and invisible to ``dest``.
+    immediate and invisible to ``dst``.
 
-    The answer depends on ``dest``: with a VPN up, a public probe returns the
+    The answer depends on ``dst``: with a VPN up, a public probe returns the
     tunnel address while a LAN probe returns the physical one. Pass the address
     you actually intend to talk to rather than trusting the default.
 
@@ -240,12 +240,12 @@ def get_source_ip(dest: str = _DEFAULT_PROBE, port: int = 80):
     from . import parse
 
     try:
-        family = _socket.AF_INET6 if ":" in dest else _socket.AF_INET
+        family = _socket.AF_INET6 if ":" in dst else _socket.AF_INET
         sock = _socket.socket(family, _socket.SOCK_DGRAM)
     except OSError:
         return None
     try:
-        sock.connect((dest, port))
+        sock.connect((dst, port))
         return parse(sock.getsockname()[0].split("%")[0])
     except (OSError, ValueError):
         return None
@@ -253,7 +253,7 @@ def get_source_ip(dest: str = _DEFAULT_PROBE, port: int = 80):
         sock.close()
 
 
-def free_port(host: str = "127.0.0.1", family: int = _socket.AF_INET) -> int:
+def free_port(src: str = "127.0.0.1", family: int = _socket.AF_INET) -> int:
     """Return a port number that was free a moment ago.
 
     Binds port 0, reads back what the OS assigned, and closes::
@@ -273,14 +273,14 @@ def free_port(host: str = "127.0.0.1", family: int = _socket.AF_INET) -> int:
     """
     sock = _socket.socket(family, _socket.SOCK_STREAM)
     try:
-        sock.bind((host, 0))
+        sock.bind((src, 0))
         return int(sock.getsockname()[1])
     finally:
         sock.close()
 
 
-def tcp_check(host: str, port: int, timeout: float = 3.0) -> bool:
-    """Return True if a TCP connection to ``host``:``port`` is accepted.
+def tcp_check(dst: str, port: int, timeout: float = 3.0) -> bool:
+    """Return True if a TCP connection to ``dst``:``port`` is accepted.
 
     The honest reachability test, and what you almost always want instead of
     :func:`netimps.ping`: it proves the *service* answers, not merely that the
@@ -294,7 +294,7 @@ def tcp_check(host: str, port: int, timeout: float = 3.0) -> bool:
     behind the port is healthy.
     """
     try:
-        sock = _socket.create_connection((host, port), timeout=timeout)
+        sock = _socket.create_connection((dst, port), timeout=timeout)
     except (OSError, ValueError, OverflowError):
         return False
     sock.close()
@@ -302,13 +302,13 @@ def tcp_check(host: str, port: int, timeout: float = 3.0) -> bool:
 
 
 def wait_for_port(
-    host: str,
+    dst: str,
     port: int,
     timeout: float = 30.0,
     interval: float = 0.1,
     connect_timeout: Optional[float] = None,
 ) -> bool:
-    """Poll until ``host``:``port`` accepts a connection, or ``timeout`` elapses.
+    """Poll until ``dst``:``port`` accepts a connection, or ``timeout`` elapses.
 
     The "wait for the service to come up" loop every deploy and container
     script contains::
@@ -333,7 +333,7 @@ def wait_for_port(
         remaining = deadline - _time.monotonic()
         if remaining <= 0:
             return False
-        if tcp_check(host, port, timeout=min(per_try, remaining)):
+        if tcp_check(dst, port, timeout=min(per_try, remaining)):
             return True
         remaining = deadline - _time.monotonic()
         if remaining <= 0:
@@ -346,19 +346,19 @@ class Route:
     """How traffic to a destination leaves this host.
 
     Attributes:
-        dest: the destination this route was computed for.
-        source: local address the kernel would use (see :func:`get_source_ip`).
+        dst: the destination this route was computed for.
+        src: local address the kernel would use (see :func:`get_source_ip`).
         gateway: next-hop router, or ``None`` when the destination is *on-link*
             (same subnet, or loopback) and no router is involved.
         interface_index: index of the outgoing interface, ``0`` if unknown.
         on_link: True when no gateway is needed.
     """
 
-    __slots__ = ("dest", "source", "gateway", "interface_index")
+    __slots__ = ("dst", "src", "gateway", "interface_index")
 
-    def __init__(self, dest, source=None, gateway=None, interface_index=0):
-        self.dest = dest
-        self.source = source
+    def __init__(self, dst, src=None, gateway=None, interface_index=0):
+        self.dst = dst
+        self.src = src
         self.gateway = gateway
         self.interface_index = interface_index
 
@@ -368,9 +368,9 @@ class Route:
         return self.gateway is None
 
     def __repr__(self) -> str:
-        return "Route(dest=%r, source=%r, gateway=%r, on_link=%r)" % (
-            None if self.dest is None else str(self.dest),
-            None if self.source is None else str(self.source),
+        return "Route(dst=%r, src=%r, gateway=%r, on_link=%r)" % (
+            None if self.dst is None else str(self.dst),
+            None if self.src is None else str(self.src),
             None if self.gateway is None else str(self.gateway),
             self.on_link,
         )
@@ -379,8 +379,8 @@ class Route:
         if not isinstance(other, Route):
             return NotImplemented
         return (
-            self.dest == other.dest
-            and self.source == other.source
+            self.dst == other.dst
+            and self.src == other.src
             and self.gateway == other.gateway
             and self.interface_index == other.interface_index
         )
@@ -426,12 +426,12 @@ def _windows_next_hop(dest_v4: str) -> "Tuple[Optional[str], int]":
     return (None if next_hop == "0.0.0.0" else next_hop), int(row.dwForwardIfIndex)
 
 
-def _posix_next_hop(dest: str) -> "Tuple[Optional[str], int]":
+def _posix_next_hop(dst: str) -> "Tuple[Optional[str], int]":
     """(next_hop, if_index) by reading the kernel routing table.
 
     Linux exposes it as ``/proc/net/route``; elsewhere there is no portable
     unprivileged interface, so the gateway is reported as unknown and only the
-    on-link determination (made by the caller from the source address) stands.
+    on-link determination (made by the caller from the src address) stands.
     """
     try:
         with open("/proc/net/route") as handle:
@@ -444,7 +444,7 @@ def _posix_next_hop(dest: str) -> "Tuple[Optional[str], int]":
     # LAN gateway. Loopback is on-link by definition; answer it directly.
     from . import LOOPBACK_V4, try_parse
 
-    parsed_dest = try_parse(dest)
+    parsed_dest = try_parse(dst)
     if parsed_dest is not None and parsed_dest in LOOPBACK_V4:
         return None, _if_index("lo")
 
@@ -459,7 +459,7 @@ def _posix_next_hop(dest: str) -> "Tuple[Optional[str], int]":
             mask = int(parts[7], 16)
         except ValueError:
             continue
-        packed = _struct.unpack("<I", _socket.inet_aton(dest))[0]
+        packed = _struct.unpack("<I", _socket.inet_aton(dst))[0]
         if (packed & mask) == destination:
             # Longest prefix wins, so prefer the most specific match.
             ones = bin(mask).count("1")
@@ -481,14 +481,14 @@ def _if_index(name: str) -> int:
         return 0
 
 
-def get_route(dest: str = _DEFAULT_PROBE) -> Route:
-    """Return how traffic to ``dest`` leaves this host.
+def get_route(dst: str = _DEFAULT_PROBE) -> Route:
+    """Return how traffic to ``dst`` leaves this host.
 
-    Reports the source address and the **first hop** -- the gateway a packet is
+    Reports the src address and the **first hop** -- the gateway a packet is
     handed to, or ``None`` when the destination is on-link::
 
         r = get_route("8.8.8.8")
-        r.source        # IPv4Address('192.0.2.10')
+        r.src        # IPv4Address('192.0.2.10')
         r.gateway       # IPv4Address('192.0.2.1')
         r.on_link       # False
 
@@ -501,17 +501,17 @@ def get_route(dest: str = _DEFAULT_PROBE) -> Route:
     Never raises: unknown pieces come back as ``None``/``0`` rather than an
     error. The gateway is only resolvable on Windows and Linux; elsewhere it
     stays ``None``, so use ``.gateway is None`` to mean "on-link" only when
-    ``.source`` is also set.
+    ``.src`` is also set.
     """
     from . import parse, try_parse
 
-    source = get_source_ip(dest)
-    resolved = dest
-    if try_parse(dest) is None:
+    src = get_source_ip(dst)
+    resolved = dst
+    if try_parse(dst) is None:
         try:
-            resolved = _socket.gethostbyname(dest)
+            resolved = _socket.gethostbyname(dst)
         except OSError:
-            resolved = dest
+            resolved = dst
 
     gateway_text = None
     index = 0
@@ -526,8 +526,8 @@ def get_route(dest: str = _DEFAULT_PROBE) -> Route:
             gateway_text, index = None, 0
 
     return Route(
-        dest=parsed_dest if parsed_dest is not None else dest,
-        source=source,
+        dst=parsed_dest if parsed_dest is not None else dst,
+        src=src,
         gateway=try_parse(gateway_text) if gateway_text else None,
         interface_index=index,
     )
@@ -606,12 +606,12 @@ def _hop_count_traceroute(
 
 
 def hop_count(
-    dest: str,
+    dst: str,
     max_hops: int = 30,
     timeout: float = 1.0,
     allow_traceroute: bool = True,
 ) -> Optional[int]:
-    """Return the number of hops to ``dest``, or ``None`` if it never answers.
+    """Return the number of hops to ``dst``, or ``None`` if it never answers.
 
     Sends TTL-limited probes and counts the routers that reply, the same
     technique ``traceroute`` uses::
@@ -635,7 +635,7 @@ def hop_count(
     as unknown rather than as a negative result.
     """
     try:
-        target = _socket.gethostbyname(dest)
+        target = _socket.gethostbyname(dst)
     except OSError:
         return None
 
@@ -657,8 +657,8 @@ def hop_count(
         # correct.
         bind_to = ""
         if _IS_WINDOWS:
-            source = get_source_ip(target)
-            bind_to = str(source) if source is not None else ""
+            src = get_source_ip(target)
+            bind_to = str(src) if src is not None else ""
         try:
             icmp.bind((bind_to, 0))
         except OSError:
@@ -706,7 +706,7 @@ def hop_count(
         icmp.close()
 
 
-def get_pmtu(dest: str, port: int = 80) -> "Optional[int]":
+def get_pmtu(dst: str, port: int = 80) -> "Optional[int]":
     """Return the path MTU the kernel has **already learned**, or ``None``.
 
     A lookup, not a measurement -- it reads ``IP_MTU`` on a connected socket
@@ -750,7 +750,7 @@ def get_pmtu(dest: str, port: int = 80) -> "Optional[int]":
                 sock.setsockopt(_socket.IPPROTO_IP, discover, do_want)
             except OSError:
                 pass
-        sock.connect((dest, port))
+        sock.connect((dst, port))
         value = int(sock.getsockopt(_socket.IPPROTO_IP, ip_mtu))
         return value if value > 0 else None
     except (OSError, OverflowError):
@@ -760,15 +760,15 @@ def get_pmtu(dest: str, port: int = 80) -> "Optional[int]":
 
 
 def discover_mtu(
-    dest: str,
+    dst: str,
     low: int = 576,
     high: int = 9000,
     timeout: float = 1.0,
-    source=None,
+    src=None,
     port: int = 80,
     probe: bool = True,
 ) -> "Optional[int]":
-    """Measure the path MTU to ``dest`` in bytes, or ``None`` if undiscoverable.
+    """Measure the path MTU to ``dst`` in bytes, or ``None`` if undiscoverable.
 
     Sends DF-flagged pings of growing size, binary-searching for the largest
     packet that survives the whole path unfragmented::
@@ -777,7 +777,7 @@ def discover_mtu(
 
     **This actually traverses the path**, which is the difference from
     :func:`get_pmtu`: that reports what the kernel already knows (often
-    nothing), while this goes and finds out. Packets really reach ``dest`` and
+    nothing), while this goes and finds out. Packets really reach ``dst`` and
     come back, so the answer reflects every hop in between -- including a
     router that silently drops oversized DF packets without sending
     "fragmentation needed", which nothing else will reveal.
@@ -791,7 +791,7 @@ def discover_mtu(
         must accept, so anything smaller means the host is simply unreachable.
     :param high: largest to consider. 9000 covers jumbo frames; the search
         confirms the ceiling first, so a generous value costs one probe.
-    :param source: send from this interface -- same union as ``ping(source=)``.
+    :param src: send from this interface -- same union as ``ping(src=)``.
     :param port: destination port passed through to :func:`get_pmtu`.
     :param probe: set ``False`` to skip probing entirely and just return
         :func:`get_pmtu` -- the kernel's cached answer, usually ``None``.
@@ -809,7 +809,7 @@ def discover_mtu(
     """
     if not probe:
         # Explicitly asked for the kernel's cached answer only.
-        return get_pmtu(dest, port)
+        return get_pmtu(dst, port)
 
     from . import ping
 
@@ -824,11 +824,11 @@ def discover_mtu(
             return False
         return bool(
             ping(
-                dest,
+                dst,
                 size=payload,
                 dont_fragment=True,
                 timeout=timeout,
-                source=source,
+                src=src,
             )
         )
 
