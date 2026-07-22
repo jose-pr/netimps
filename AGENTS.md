@@ -110,7 +110,7 @@ map:
 | `retry`, `backoff_delays` | bounded retry with exponential backoff |
 | `APIPA`, `LOOPBACK_V4`, `LOOPBACK_V6`, `LINK_LOCAL_V6` | named networks |
 | `get_route`, `Route`, `hop_count` | routing and distance |
-| `discover_mtu`, `get_pmtu` | path MTU: measured, or the kernel's cached guess |
+| `discover_mtu`, `get_pmtu`, `get_tcp_mss` | path MTU by ICMP/UDP/TCP, the kernel's cached guess, or the negotiated MSS |
 | `scan_ports`, `scan_hosts`, `PORT_RANGES` | concurrent scanning |
 | `multicast_socket`, `join_group`, `leave_group`, `is_multicast` | multicast |
 | `HOST_DN` | `platform.node()` of the running host, captured at import time |
