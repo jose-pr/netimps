@@ -6,7 +6,7 @@ import types
 import pytest
 
 import netimps
-from netimps import _ping
+from netimps import _ip, _ping
 from netimps import ping, resolve
 from netimps import IPv4Address
 
@@ -257,12 +257,12 @@ def test_get_ip_parses_literals_without_dns(monkeypatch):
     def explode(_):
         raise AssertionError("gethostbyname must not be called for a literal")
 
-    monkeypatch.setattr(netimps._socket, "gethostbyname", explode)
+    monkeypatch.setattr(netimps._ip._socket, "gethostbyname", explode)
     assert netimps.get_ip("10.0.0.5") == IPv4Address("10.0.0.5")
 
 
 def test_get_ip_falls_back_to_dns(monkeypatch):
-    monkeypatch.setattr(netimps._socket, "gethostbyname", lambda h: "93.184.216.34")
+    monkeypatch.setattr(netimps._ip._socket, "gethostbyname", lambda h: "93.184.216.34")
     assert netimps.get_ip("example.com") == IPv4Address("93.184.216.34")
 
 
@@ -270,7 +270,7 @@ def test_get_ip_returns_none_on_failure(monkeypatch):
     def fail(_):
         raise OSError("no such host")
 
-    monkeypatch.setattr(netimps._socket, "gethostbyname", fail)
+    monkeypatch.setattr(netimps._ip._socket, "gethostbyname", fail)
     assert netimps.get_ip("nope.invalid") is None
 
 
