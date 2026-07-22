@@ -10,8 +10,7 @@ from netimps import (
     IPv4Address,
     IPv4Interface,
     is_valid_ip,
-    parse_ip,
-    parse_network,
+    try_parse,
 )
 
 
@@ -46,25 +45,26 @@ def test_ipnetwork_non_strict_by_default():
         IPNet("10.0.0.5/24", strict=True)
 
 
-def test_parse_ip_empty_and_none_are_falsy():
-    assert parse_ip("") is None
-    assert parse_ip("   ") is None
-    assert parse_ip(None) is None
+def test_try_parse_handles_empty_and_none():
+    """try_parse replaces the old parse_ip empty-string special case."""
+    assert try_parse("", IPAddr) is None
+    assert try_parse("   ", IPAddr) is None
+    assert try_parse(None, IPAddr) is None
 
 
-def test_parse_ip_valid_and_invalid():
-    assert parse_ip("10.0.0.5") == IPv4Address("10.0.0.5")
-    assert parse_ip(IPv4Address("10.0.0.5")) == IPv4Address("10.0.0.5")
-    with pytest.raises(ValueError):
-        parse_ip("not-an-ip")
+def test_try_parse_ip_valid_and_invalid():
+    assert try_parse("10.0.0.5", IPAddr) == IPv4Address("10.0.0.5")
+    assert try_parse(IPv4Address("10.0.0.5"), IPAddr) == IPv4Address("10.0.0.5")
+    # Unlike the removed parse_ip, malformed input is None rather than a raise.
+    assert try_parse("not-an-ip", IPAddr) is None
 
 
-def test_parse_network():
-    assert parse_network("") is None
-    assert parse_network(None) is None
-    assert parse_network("192.168.0.0/16").network_address.exploded == "192.168.0.0"
+def test_try_parse_network():
+    assert try_parse("", IPNet) is None
+    assert try_parse(None, IPNet) is None
+    assert try_parse("192.168.0.0/16", IPNet).network_address.exploded == "192.168.0.0"
     # non-strict: host bits tolerated
-    assert parse_network("192.168.0.7/16").network_address.exploded == "192.168.0.0"
+    assert try_parse("192.168.0.7/16", IPNet).network_address.exploded == "192.168.0.0"
 
 
 @pytest.mark.parametrize(
@@ -197,15 +197,3 @@ def test_try_parse_agrees_with_is_valid():
         for value in ["10.0.0.5", "10.0.0.0/24", "aa:bb:cc:dd:ee:ff",
                       "nope", "", None, 5]:
             assert (try_parse(value, parser) is not None) == is_valid(value, parser)
-
-
-def test_parse_ip_still_raises_on_malformed():
-    """parse_ip maps only emptiness to None -- a typo must not pass silently."""
-    from netimps import parse_ip, try_parse, IPAddr
-
-    assert parse_ip("") is None
-    assert parse_ip(None) is None
-    with pytest.raises(ValueError):
-        parse_ip("not-an-ip")
-    # try_parse is the everything-becomes-None variant.
-    assert try_parse("not-an-ip", IPAddr) is None
