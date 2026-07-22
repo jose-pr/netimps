@@ -78,8 +78,6 @@ __all__ = [
     "is_valid_ip",
     "is_valid_network",
     "is_valid_mac",
-    "parse_ip",
-    "parse_network",
     "get_ip",
     "is_loopback_or_link_local",
     "get_default_port",
@@ -172,49 +170,15 @@ def IPNet(value: _NetworkValue, strict: bool = False) -> IPNetwork:
     return _ipaddress.ip_network(value, strict=strict)
 
 
-def parse_ip(value: Optional[_AddressValue]) -> Optional[IPAddress]:
-    """Coerce ``value`` to an :class:`ipaddress` address, tolerating emptiness.
-
-    Returns ``None`` for ``None`` or an empty/whitespace-only string -- callers
-    frequently hold an as-yet-unresolved ``ip`` field (``""``) and pass it
-    straight through, so an empty value maps to a falsy ``None`` rather than
-    raising. Any other value is delegated to :func:`IPAddr`, which raises
-    :class:`ValueError` on genuinely malformed input.
-
-    Note the difference from :func:`try_parse`: *only* emptiness becomes
-    ``None`` here -- malformed input still raises, so a typo is not silently
-    swallowed. Use ``try_parse(value, IPAddr)`` when you want every failure to
-    yield ``None``.
-    """
-    if value is None:
-        return None
-    if isinstance(value, str) and not value.strip():
-        return None
-    return IPAddr(value)
-
-
-def parse_network(value: Optional[_NetworkValue]) -> Optional[IPNetwork]:
-    """Coerce ``value`` to an :class:`ipaddress` network (non-strict).
-
-    Mirrors :func:`parse_ip`: ``None`` or an empty string yields ``None``;
-    anything else is delegated to :func:`IPNet`.
-    """
-    if value is None:
-        return None
-    if isinstance(value, str) and not value.strip():
-        return None
-    return IPNet(value)
-
-
 _T = TypeVar("_T")
 
 
 def try_parse(value: object, parser: Callable[..., _T]) -> Optional[_T]:
     """Return ``parser(value)``, or ``None`` if it rejects the input. Never raises.
 
-    The generic non-raising parse behind :func:`parse_ip` and
-    :func:`parse_network`, usable with any of this module's factories -- or any
-    callable that signals bad input with ``ValueError``/``TypeError``::
+    The one non-raising parse for the whole package, usable with any of its
+    factories -- or any callable that signals bad input with
+    ``ValueError``/``TypeError``::
 
         try_parse("10.0.0.5", IPAddr)        # IPv4Address('10.0.0.5')
         try_parse("nonsense", IPAddr)        # None
@@ -457,10 +421,10 @@ def get_ip(address: str) -> Optional[IPAddress]:
         get_ip("nonexistent.")    # None
 
     .. note::
-       Not the same as :func:`parse_ip`, and the difference matters: ``parse_ip``
-       never touches the network, while this **may block on DNS**. Use
-       ``parse_ip`` to validate user input; use ``get_ip`` when you genuinely
-       want a name resolved.
+       The difference from ``try_parse(address, IPAddr)`` matters: that never
+       touches the network, while this **may block on DNS**. Use ``try_parse``
+       to validate user input; use ``get_ip`` when you genuinely want a name
+       resolved.
     """
     try:
         try:
