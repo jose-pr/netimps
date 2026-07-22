@@ -7,23 +7,26 @@
 
 A **small, self-contained network-utilities library** — a thin, typed layer over
 the standard library's `ipaddress` plus a handful of host helpers (DNS lookup,
-ping, local NIC discovery). One flat import surface, minimal dependencies, and
-behaviour that stays faithful to the stdlib.
+ping, interface discovery). One flat import surface, and the only runtime
+dependency is `dnspython`, used solely by `resolve`.
 
 ## Features
 
-- **IP types** — `IPAddress`, `IPInterface`, `IPNetwork` factories over
-  `ipaddress`, plus the concrete `IPv4Address`/`IPv4Interface`/... re-exports.
-  `.exploded`, `.network_address`, `.netmask` and `addr in network` all work.
-- **`MACAddress`** — parses colon/hyphen/dot/bare forms, normalises to
-  lowercase, renders with any separator via `.as_str(sep)`, and is hashable so
-  it works as a dict key.
-- **Tolerant parsers** — `parse_ip` / `parse_network` coerce str/int/None,
-  mapping empty input to `None`; `is_valid_ip` never raises.
-- **`nslookup`** — DNS resolution with a clean list-of-strings contract.
-- **`ping`** — cross-platform single-echo reachability check.
-- **NIC discovery** — `active_nic_addresses()` everywhere; `get_ip_address` /
-  `nic_info` on POSIX.
+- **Interface discovery with no dependencies** — `get_interfaces()` returns
+  adapter names, MACs and **real prefix lengths** on Linux, macOS/BSD and
+  Windows, via `ctypes` bindings to `getifaddrs(3)` and
+  `GetAdaptersAddresses`. No `ifaddr` required.
+- **Types *and* factories** — `IPAddress`/`IPInterface`/`IPNetwork` are the
+  v4/v6 unions you annotate with; `IPAddr()`/`IPIface()`/`IPNet()` are the
+  factories that build values.
+- **`MACAddress`** — parses colon/hyphen/dot/bare forms plus `int`/`bytes`,
+  hashable and ordered, with `.oui`, `.is_multicast`, `.is_local` and
+  case-selectable rendering.
+- **Generic parsing** — `try_parse(value, parser)` returns the value or `None`;
+  `is_valid(value, parser)` returns a bool. Both work with any factory.
+- **DNS** — `resolve()` with a clean list-of-strings contract, a real
+  timeout, and no swallowing of caller errors.
+- **`ping`** — cross-platform reachability with timeout and family selection.
 
 ## Installation
 
@@ -36,37 +39,52 @@ pip install netimps
 ```python
 import netimps
 
-# IP / network types
-iface = netimps.IPInterface("10.0.0.5/24")
-iface.network.network_address.exploded      # '10.0.0.0'
-netimps.IPAddress("10.0.0.5") in netimps.IPNetwork("10.0.0.0/24")  # True
+# Interfaces: names, MACs and real prefixes on every OS
+for iface in netimps.get_interfaces():
+    print(iface.name, iface.mac, [str(ip) for ip in iface.ips])
+    # 'Wi-Fi'  00:00:5e:00:53:01  ['fe80::cc6a:7d4f:5095:72bf/64', '192.0.2.10/24']
+
+# Types annotate; factories build
+def route(dst: netimps.IPAddress, via: netimps.IPNetwork) -> None: ...
+
+iface = netimps.IPIface("10.0.0.5/24")
+iface.network.network_address.exploded              # '10.0.0.0'
+netimps.IPAddr("10.0.0.5") in netimps.IPNet("10.0.0.0/24")   # True
 
 # MAC addresses
 mac = netimps.MACAddress("AA-BB-CC-DD-EE-FF")
 mac.as_str("-")                             # 'aa-bb-cc-dd-ee-ff'
-mac == "aabb.ccdd.eeff"                     # True
+mac.as_str("-", upper=True)                 # 'AA-BB-CC-DD-EE-FF'
+mac.is_universal, mac.oui.hex()             # (True, 'aabbcc')
 
-# Tolerant parsing
-netimps.parse_ip("")                       # None
-netimps.is_valid_ip("not-an-ip")           # False
+# Parsing without exceptions
+netimps.try_parse("not-an-ip", netimps.IPAddr)   # None
+netimps.is_valid("10.0.0.5", netimps.IPAddr)     # True
 
 # DNS + reachability
-netimps.nslookup("example.com")            # ['93.184.216.34']  (or [] on failure)
-netimps.ping("127.0.0.1")                  # True / False
+netimps.resolve("example.com", "aaaa")      # ['2606:2800::1']  (or [] on failure)
+netimps.ping("127.0.0.1", timeout=2.0)      # True / False
 ```
 
 ## API overview
 
 | Name | Purpose |
 | --- | --- |
-| `IPAddress`, `IPInterface`, `IPNetwork` | `ipaddress` factories (non-strict networks) |
+| `IPAddress`, `IPInterface`, `IPNetwork` | v4/v6 **union aliases** for annotations |
+| `IPAddr`, `IPIface`, `IPNet` | **factories** (non-strict networks) |
+| `IPAddressLike`, `IPNetworkLike`, `MACLike` | accepted-input unions |
 | `IPv4Address`, `IPv4Interface`, ... | stdlib concrete-type re-exports |
-| `MACAddress` | parse / normalise / render MAC addresses |
-| `parse_ip`, `parse_network` | tolerant coercion (empty → `None`) |
-| `is_valid_ip` | non-raising validity check |
-| `nslookup` | DNS lookup → list of string records (`[]` on failure) |
-| `ping` | single-echo reachability → `bool` |
-| `active_nic_addresses`, `get_ip_address`, `nic_info` | local NIC discovery |
+| `MACAddress` | parse / classify / render MAC addresses |
+| `try_parse`, `is_valid` | generic non-raising parse / check |
+| `is_valid_ip`, `is_valid_network`, `is_valid_mac` | named shorthands |
+| `get_interfaces`, `Interface` | native cross-platform NIC discovery |
+| `resolve` | DNS lookup → list of string records (`[]` on failure) |
+| `ping` | reachability → `bool` |
+| `get_ip`, `is_link_scoped`, `get_default_port` | address/scheme helpers |
+| `active_nic_addresses`, `get_ip_address`, `nic_info` | legacy NIC helpers |
+
+Full per-export reference, with contracts and gotchas, lives in
+[`src/netimps/AGENTS.md`](src/netimps/AGENTS.md).
 
 ## Development
 

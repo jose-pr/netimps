@@ -3,7 +3,7 @@
 A thin, typed convenience layer over the standard library's :mod:`ipaddress`
 plus a handful of host helpers (DNS lookup, ping, interface discovery). One
 flat import surface; the only runtime dependency is ``dnspython``, used solely
-inside :func:`nslookup`.
+inside :func:`resolve`.
 
 ::
 
@@ -79,9 +79,8 @@ __all__ = [
     "is_valid_network",
     "is_valid_mac",
     "get_ip",
-    "is_loopback_or_link_local",
+    "is_link_scoped",
     "get_default_port",
-    "nslookup",
     "resolve",
     "ping",
     "Interface",
@@ -435,13 +434,26 @@ def get_ip(address: str) -> Optional[IPAddress]:
         return None
 
 
-def is_loopback_or_link_local(ip: IPAddress) -> bool:
-    """True for loopback (``127/8``, ``::1``) or link-local (``169.254/16``, ``fe80::/10``).
+def is_link_scoped(ip: IPAddress) -> bool:
+    """True if ``ip`` is confined to link scope or narrower.
 
-    These two categories share a practical property: neither can usefully be
-    routed off the local host or link, so proxying, forwarding or advertising
-    them is always wrong. Keeping the definition in one place stops each caller
-    from writing a subtly different version.
+    Covers loopback (``127/8``, ``::1`` -- host scope) and link-local
+    (``169.254/16``, ``fe80::/10`` -- link scope), borrowing IPv6's scope
+    vocabulary for both families::
+
+        is_link_scoped(IPAddr("127.0.0.1"))     # True  -- host scope
+        is_link_scoped(IPAddr("169.254.1.1"))   # True  -- link scope
+        is_link_scoped(IPAddr("10.0.0.5"))      # False -- private, but global scope
+
+    The shared practical property is that neither can usefully be routed off
+    the local host or link, so proxying, forwarding or advertising such an
+    address is always wrong. Keeping the definition in one place stops each
+    caller from writing a subtly different version.
+
+    .. note::
+       This is **not** "is private". RFC 1918 ranges (``10/8``,
+       ``192.168/16``) are globally *scoped* and routable within a site, so
+       they return ``False`` -- use ``ip.is_private`` for that question.
     """
     return ip.is_loopback or ip.is_link_local
 
@@ -481,27 +493,31 @@ def get_default_port(scheme: str) -> Optional[int]:
 # DNS / reachability
 # ---------------------------------------------------------------------------
 
-def nslookup(
+def resolve(
     query: str,
+    rdtype: str = "a",
     ns: Optional[Union[str, List[str]]] = None,
-    type: str = "a",
     timeout: Optional[float] = 5.0,
     port: int = 53,
     tcp: bool = False,
 ) -> List[str]:
     """Resolve ``query`` via DNS and return the answers as a list of strings.
 
-    Contract: always returns a ``list`` of string records (e.g. one or more
-    ``"93.184.216.34"`` for an ``A`` lookup), and an **empty list** when the
-    name does not resolve or any DNS error occurs -- never ``None``. Callers can
-    therefore write ``if result:`` and index ``result[0]`` safely.
+    ::
+
+        resolve("example.com")                    # ['93.184.216.34']
+        resolve("example.com", "aaaa")
+        resolve("example.com", "mx", ns="1.1.1.1")
+
+    Contract: always a ``list`` of string records, and an **empty list** when
+    the name does not resolve -- never ``None``. Callers can therefore write
+    ``if result:`` and index ``result[0]`` safely.
 
     :param query: the name (or address, for reverse types) to look up.
+    :param rdtype: DNS record type (``"a"``, ``"aaaa"``, ``"mx"`` ...). Second
+        because it is the argument callers actually vary.
     :param ns: optional nameserver, or list of nameservers, to query instead of
         the system resolver.
-    :param type: DNS record type (``"a"``, ``"aaaa"``, ``"mx"`` ...). Shadows the
-        ``type`` builtin -- kept for backwards compatibility; :func:`resolve`
-        spells it ``rdtype``.
     :param timeout: seconds to spend on the whole resolution, retries included
         (``None`` for dnspython's default). Bounds *total* time, not each query
         -- a list of unreachable nameservers cannot stretch past it.
@@ -513,24 +529,8 @@ def nslookup(
     yields ``[]``; a malformed query or unknown record type raises
     :class:`ValueError`, since that is a caller bug rather than a DNS result.
 
-    .. note::
-       :func:`resolve` is the preferred spelling -- same behaviour, but the
-       record type comes second, where callers actually want it.
-
     Requires the ``dnspython`` package (installed with ``netimps``).
     """
-    return _resolve(query, ns=ns, rdtype=type, timeout=timeout, port=port, tcp=tcp)
-
-
-def _resolve(
-    query: str,
-    ns: Optional[Union[str, List[str]]] = None,
-    rdtype: str = "a",
-    timeout: Optional[float] = 5.0,
-    port: int = 53,
-    tcp: bool = False,
-) -> List[str]:
-    """Shared implementation behind :func:`nslookup` and :func:`resolve`."""
     from dns import resolver as _resolver
 
     r = _resolver.Resolver(configure=not ns)
@@ -578,32 +578,6 @@ def _resolve(
         # which turned a typo'd record type into a silent empty result.
         raise ValueError("invalid DNS query %r (%s): %s" % (query, rdtype, exc))
     return [str(record) for record in answer]
-
-
-def resolve(
-    query: str,
-    rdtype: str = "a",
-    ns: Optional[Union[str, List[str]]] = None,
-    timeout: Optional[float] = 5.0,
-    port: int = 53,
-    tcp: bool = False,
-) -> List[str]:
-    """Resolve ``query`` via DNS -- the same lookup as :func:`nslookup`, better named.
-
-    ``nslookup`` is named after the (long-deprecated) command-line tool and puts
-    the nameserver before the record type. This is the preferred spelling: the
-    record type is the argument callers actually vary::
-
-        resolve("example.com")                    # ['93.184.216.34']
-        resolve("example.com", "aaaa")
-        resolve("example.com", "mx", ns="1.1.1.1")
-
-    Same contract as :func:`nslookup` -- a list of strings, ``[]`` on any
-    lookup failure, never ``None``. See that function for the parameters.
-    """
-    return _resolve(query, ns=ns, rdtype=rdtype, timeout=timeout, port=port, tcp=tcp)
-
-
 def ping(
     hostname: str,
     tries: int = 1,

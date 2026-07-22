@@ -143,13 +143,10 @@ silently drops every address rather than raising — do not "simplify" that spli
 
 ## DNS
 
-- **`resolve(query, rdtype="a", ns=None, timeout=5.0, port=53, tcp=False)`** —
-  the preferred spelling; the record type comes second, where callers vary it.
-- **`nslookup(query, ns=None, type="a", timeout=5.0, port=53, tcp=False)`** —
-  same lookup, legacy argument order (named after the deprecated CLI tool;
-  `type` shadows the builtin).
+**`resolve(query, rdtype="a", ns=None, timeout=5.0, port=53, tcp=False)`** —
+the record type comes second, where callers actually vary it.
 
-Both return a `List[str]` — **`[]` on any genuine lookup failure** (NXDOMAIN,
+Returns a `List[str]` — **`[]` on any genuine lookup failure** (NXDOMAIN,
 no answer, all nameservers failed, timeout), never `None`, so `if result:` and
 `result[0]` are safe.
 
@@ -181,7 +178,7 @@ hung subprocess, or a non-zero exit all yield `False`. Empty `hostname` is
 - **`get_ip(address) -> IPAddress | None`** — literal-or-hostname to an address,
   `None` on failure. **May block on DNS**, unlike `parse_ip`, which never
   touches the network. Use `parse_ip` to validate input; `get_ip` to resolve.
-- **`is_loopback_or_link_local(ip) -> bool`** — loopback (`127/8`, `::1`) or
+- **`is_link_scoped(ip) -> bool`** — loopback (`127/8`, `::1`) or
   link-local (`169.254/16`, `fe80::/10`); neither can usefully route off the
   local host or link.
 - **`get_default_port(scheme) -> int | None`** — built-in table (including the
