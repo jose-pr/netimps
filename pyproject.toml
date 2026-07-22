@@ -26,8 +26,13 @@ classifiers = [
 dependencies = ["dnspython"]
 
 [project.optional-dependencies]
-dev = ['build', 'twine', 'hatchling', 'pytest', 'black']
+# The CLI is optional: importing netimps must never require duho.
+cli = ['duho>=0.3.3']
+dev = ['build', 'twine', 'hatchling', 'pytest', 'black', 'duho>=0.3.3']
 docs = ['mkdocs', 'mkdocs-material', 'mkdocstrings[python]']
+
+[project.scripts]
+netimps = "netimps.cli:run"
 
 [project.urls]
 Homepage = "https://github.com/jose-pr/netimps"
