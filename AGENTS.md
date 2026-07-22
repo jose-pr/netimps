@@ -8,33 +8,40 @@ stays faithful to the stdlib.
 
 ```python
 import netimps
+from netimps import IPNetwork, MACAddress, parse
 
 for iface in netimps.get_interfaces():
-    print(iface.name, iface.mac, [str(ip) for ip in iface.ips])
+    print(iface.name, iface.mac, iface.mtu, [str(ip) for ip in iface.ips])
 
-netimps.IPIface("10.0.0.5/24").network.network_address.exploded   # '10.0.0.0'
-netimps.MACAddress("AA-BB-CC-DD-EE-FF").as_str("-")               # 'aa-bb-cc-dd-ee-ff'
-netimps.resolve("example.com")             # ['93.184.216.34']  (or [] on failure)
-netimps.ping("127.0.0.1")                  # True / False
+parse("10.0.0.5/24", IPNetwork)            # IPv4Network('10.0.0.0/24')
+netimps.get_source_ip("8.8.8.8")           # the address that actually reaches it
+netimps.tcp_check("example.com", 443)      # True
+netimps.resolve("example.com")             # [IPv4Address(...)]  ([] on failure)
+netimps.ping("8.8.8.8").rtt_ms             # 9.0
 ```
 
 - **Interface discovery, no dependencies** — `get_interfaces()` gives adapter
-  names, MACs and *real* prefix lengths on Linux, macOS/BSD and Windows, via
-  `ctypes` bindings to `getifaddrs(3)` / `GetAdaptersAddresses`. Results are
-  normalised across platforms; the native leftovers are opt-in via `raw=True`.
-- **Types vs factories** — `IPAddress`/`IPInterface`/`IPNetwork` are the v4/v6
-  **union aliases** for annotations; `IPAddr()`/`IPIface()`/`IPNet()` are the
-  **factories** (non-strict networks). Plus the concrete stdlib re-exports.
-- **`MACAddress`** — parses colon/hyphen/dot/bare forms (and `int`/`bytes`),
-  hashable and ordered, with `.packed`, `.oui`, `.is_multicast`, `.is_local`
-  and `.as_str(sep, upper=)`.
-- **Generic parsing** — `try_parse(value, parser)` → value or `None`;
-  `is_valid(value, parser)` → bool. Both work with any factory; named
-  shorthands `is_valid_ip` / `is_valid_network` / `is_valid_mac`.
-- **DNS** — `resolve()` via `dnspython`: `[]` on any genuine lookup failure,
-  never `None`, with a real total-resolution timeout.
-- **`ping`** — cross-platform reachability with timeout, retry and family
-  selection (shells out to the platform `ping` binary).
+  names, MACs, MTU and *real* prefix lengths on Linux, macOS/BSD and Windows,
+  via `ctypes` bindings to `getifaddrs(3)` / `GetAdaptersAddresses`. Results are
+  normalised across platforms; native leftovers are opt-in via `raw=True`.
+- **One parsing entry point** — `parse(value, type)`, plus non-raising
+  `try_parse` and boolean `is_valid`. `IPAddress`/`IPInterface`/`IPNetwork` are
+  the v4/v6 unions you annotate with *and* the types you parse into.
+- **`MACAddress`** — colon/hyphen/dot/bare plus `int`/`bytes`, hashable and
+  ordered, with `.packed`, `.oui`, `.is_multicast`, `.is_local`,
+  `.as_str(sep, upper=)` and `is_valid`/`try_parse` classmethods.
+- **Socket helpers** — `get_source_ip`, `free_port`, `tcp_check`,
+  `wait_for_port`: the four every network tool rewrites.
+- **Routing and MTU** — `get_route` (first hop, unprivileged), `hop_count`
+  (raw sockets or traceroute fallback), `path_mtu`, `Interface.mtu`.
+- **CIDR maths and host parsing** — `collapse`, `subtract` (absent from
+  `ipaddress`), and `normalize_host` with correct IPv6 bracket handling.
+- **Scanning** — concurrent `scan_ports` / `scan_hosts`, ports addressable by
+  scheme name.
+- **Multicast** — `multicast_socket`, `join_group`, `leave_group`, wrapping the
+  setup whose failure modes are silent.
+- **DNS and ping** — `resolve()` returning native types; `ping()` returning a
+  `PingResult` with RTT and TTL that stays truthy.
 
 ## Install
 
@@ -80,17 +87,21 @@ map:
 | Name | Purpose |
 | --- | --- |
 | `IPAddress`, `IPInterface`, `IPNetwork` | v4/v6 **union aliases** for annotations |
-| `IPAddr`, `IPIface`, `IPNet` | **factories** (non-strict networks) |
 | `IPAddressLike`, `IPNetworkLike`, `MACLike` | accepted-input unions |
 | `IPv4Address`, `IPv4Interface`, `IPv4Network`, `IPv6Address`, `IPv6Interface`, `IPv6Network` | stdlib concrete-type re-exports |
+| `parse`, `try_parse`, `is_valid` | build a type from a value (raising / `None` / `bool`) |
 | `MACAddress` | parse / classify / render MAC addresses |
-| `try_parse`, `is_valid` | generic non-raising parse / check |
-| `is_valid_ip`, `is_valid_network`, `is_valid_mac` | named shorthands |
 | `get_interfaces`, `Interface` | native cross-platform NIC discovery |
-| `resolve` | DNS lookup → list of string records (`[]` on failure) |
-| `ping` | reachability → `bool` |
-| `get_ip`, `is_link_scoped` | address helpers |
+| `get_ip`, `is_link_scoped` | address resolution and scope classification |
+| `collapse`, `subtract` | CIDR set maths |
+| `normalize_host` | `host:port` splitting, IPv6-aware |
 | `get_default_port`, `get_default_scheme`, `register_port` | scheme ↔ port registry |
+| `resolve` | DNS lookup → native records (`[]` on failure) |
+| `ping`, `PingResult` | reachability with RTT and TTL |
+| `get_source_ip`, `free_port`, `tcp_check`, `wait_for_port` | socket helpers |
+| `get_route`, `Route`, `hop_count`, `path_mtu` | routing, distance and MTU |
+| `scan_ports`, `scan_hosts`, `PORT_RANGES` | concurrent scanning |
+| `multicast_socket`, `join_group`, `leave_group`, `is_multicast` | multicast |
 | `HOST_DN` | `platform.node()` of the running host, captured at import time |
 
 ## Working here
@@ -105,7 +116,18 @@ map:
   `tests/test_interfaces.py` checks invariants plus the pure helpers and the
   fallback, which *are* exactly testable.
 - Tests must never hit the network — `tests/test_net.py` fakes `dns.resolver`
-  and `subprocess.run` throughout.
+  and `subprocess.run` throughout. `test_scan.py` and `test_sockets.py` use
+  loopback only.
+- **`_ip` is imported *before* the definitions** in `__init__`, unlike the other
+  submodules which are imported last. `parse()` uses `IPAddress` as a default
+  argument, and defaults evaluate at definition time.
+- **Windows `ping` exits 0 for "TTL expired in transit."** Anything inferring
+  success from the exit code alone is wrong; match the reply address instead,
+  never the localised prose.
+- **Check for silent platform gaps before adding a socket option.** `IP_MTU`,
+  `IP_MTU_DISCOVER`, `IP_DONTFRAG` and `SO_REUSEPORT` do not exist on Windows;
+  binding a multicast socket to the group address fails there too.
+- Run `black src/ tests/` before committing; CI uses `--check`.
 
 ## Develop
 

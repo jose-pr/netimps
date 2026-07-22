@@ -35,8 +35,53 @@ updated.
   cases. Note it is *not* "is private": RFC 1918 ranges are globally scoped and
   return `False`.
 
+- **`parse(value, type, **kwargs)` replaces the `IPAddr`/`IPIface`/`IPNet`
+  factories.** One entry point taking the result type directly -- the same
+  union aliases callers already annotate with. `kwargs` reach the underlying
+  builder, so the non-strict network default is overridable with
+  `strict=True`. `try_parse` and `is_valid` delegate to it and share the `type`
+  parameter name.
+- `is_valid_ip`/`is_valid_network`/`is_valid_mac` collapse into
+  `is_valid(value, type)`.
+- `ping(ttl=...)` behaves identically on every platform. Windows `ping` exits
+  `0` for "TTL expired in transit", so the reply address is verified rather
+  than the exit code trusted.
+- The package is split into private submodules (`_ip`, `_mac`, `_ifaddrs`,
+  `_sockets`, `_dns`, `_ping`, `_scan`, `_multicast`, `_scheme`). The import
+  surface is unchanged -- everything is still re-exported from `netimps`.
+
 ### Added
 
+- **Socket helpers** every network tool rewrites: `get_source_ip` (the
+  UDP-connect trick, correct where hostname resolution picks a VM adapter),
+  `free_port`, `tcp_check`, `wait_for_port`.
+- **Routing and distance**: `get_route` reports source and first hop, available
+  unprivileged on every platform. `hop_count` uses raw-socket probes when
+  permitted and otherwise drives the system `traceroute`, so it works without
+  elevation; only the hop number and destination address are parsed, never the
+  localised prose.
+- **MTU**: `Interface.mtu` everywhere, and `path_mtu` for the Linux `IP_MTU`
+  case (absent on Windows, where it returns `None` rather than guessing).
+- **CIDR set maths**: `collapse` and `subtract` -- the latter missing from
+  `ipaddress`, which ships `collapse_addresses` but nothing to punch holes.
+- **`normalize_host`**: `host:port` splitting that keeps `"::1"` an address
+  rather than host `"::"` port `1`.
+- **Scanning**: concurrent `scan_ports` and `scan_hosts` over `tcp_check`.
+  Ports accept a named range, a scheme name resolved through
+  `get_default_port`, a number, or any mix. `scan_hosts` refuses anything
+  larger than a /16.
+- **Multicast**: `multicast_socket`, `join_group`, `leave_group`,
+  `is_multicast`, wrapping a setup whose failure modes are silent -- binding to
+  the group fails on Windows, `SO_REUSEPORT` does not exist there, and the
+  wrong interface means the socket simply never receives.
+- **`ping` returns a `PingResult`** carrying `rtt_ms`/`ttl`/`source`, still
+  truthy and still equal to `bool`. New `source` (accepting an `Interface`,
+  address, MAC, adapter name or string), `size`, `ttl` and `dont_fragment`
+  arguments.
+- **`resolve` returns native types**: `A`/`AAAA` as `ipaddress` objects, names
+  without the trailing root dot, TXT strings unquoted.
+- **`MACAddress.is_valid` / `.try_parse`** classmethods -- the type-local
+  spelling. `classmethod`, so a subclass validates against itself.
 - **`get_interfaces()`** — native interface discovery with adapter names, MACs
   and *real* prefix lengths, via `ctypes` bindings to `getifaddrs(3)` (POSIX)
   and `GetAdaptersAddresses` (Windows). **No third-party dependency**; `ifaddr`
@@ -72,6 +117,9 @@ updated.
 
 ### Removed
 
+- **`parse_ip` / `parse_network` / `is_valid_ip` / `is_valid_network` /
+  `is_valid_mac`** -- superseded by `parse`/`try_parse`/`is_valid`.
+- **`IPAddr` / `IPIface` / `IPNet`** -- superseded by `parse(value, type)`.
 - **`active_nic_addresses`, `get_ip_address`, `nic_info`.** All three are
   superseded by `get_interfaces()`, which is correct where they were not.
   `active_nic_addresses()` returned an arbitrary *single* address — whatever
