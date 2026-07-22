@@ -3,6 +3,7 @@
 [![Version](https://img.shields.io/pypi/v/netimps.svg)](https://pypi.org/project/netimps/)
 [![Python versions](https://img.shields.io/pypi/pyversions/netimps.svg)](https://pypi.org/project/netimps/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-latest-blue.svg)](https://jose-pr.github.io/netimps/)
 [![CI](https://img.shields.io/github/actions/workflow/status/jose-pr/netimps/test.yml)](https://github.com/jose-pr/netimps/actions/workflows/test.yml)
 
 **The network utilities every tool ends up rewriting** — interface discovery,
