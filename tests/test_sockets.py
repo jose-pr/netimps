@@ -418,3 +418,125 @@ def test_discover_mtu_result_includes_headers(monkeypatch):
     # The reported MTU is the largest surviving payload plus the 28-byte
     # IPv4 + ICMP overhead.
     assert max(survived) + 28 == result
+
+
+# --------------------------------------------------------------------------- #
+# ping methods / MTU by protocol                                               #
+# --------------------------------------------------------------------------- #
+
+
+def test_ip_header_bytes_by_family():
+    """Every wire-size sum depends on this; v6 headers are 20 bytes bigger."""
+    assert _sockets._ip_header_bytes("8.8.8.8") == 20
+    assert _sockets._ip_header_bytes("2001:db8::1") == 40
+    # TCP adds 20 on top of whichever.
+    assert _sockets._tcp_header_overhead("8.8.8.8") == 40
+    assert _sockets._tcp_header_overhead("2001:db8::1") == 60
+
+
+def test_ip_header_bytes_falls_back_to_v4():
+    """An unresolvable name assumes IPv4: under-reporting an MTU is safer."""
+    assert _sockets._ip_header_bytes("no-such-host-xyz.invalid") == 20
+
+
+def test_discover_mtu_rejects_unknown_method():
+    with pytest.raises(ValueError, match="must be 'icmp', 'udp' or 'tcp'"):
+        netimps.discover_mtu("10.0.0.1", method="sctp")
+
+
+def test_discover_mtu_tcp_uses_mss_plus_headers(monkeypatch):
+    """TCP cannot probe, so it derives the MTU from the negotiated MSS."""
+    monkeypatch.setattr(_sockets, "get_tcp_mss", lambda *a, **k: 1400)
+    assert netimps.discover_mtu("8.8.8.8", port=443, method="tcp") == 1440
+    # IPv6 adds 20 more header bytes.
+    assert netimps.discover_mtu("2001:db8::1", port=443, method="tcp") == 1460
+
+
+def test_discover_mtu_tcp_none_when_mss_unavailable(monkeypatch):
+    monkeypatch.setattr(_sockets, "get_tcp_mss", lambda *a, **k: None)
+    assert netimps.discover_mtu("8.8.8.8", port=443, method="tcp") is None
+
+
+def test_get_tcp_mss_shape():
+    """Against a real local listener, so no external dependency."""
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    try:
+        port = server.getsockname()[1]
+        mss = netimps.get_tcp_mss("127.0.0.1", port, timeout=2.0)
+        assert mss is None or (isinstance(mss, int) and mss > 0)
+    finally:
+        server.close()
+
+
+def test_get_tcp_mss_unreachable_is_none():
+    assert (
+        netimps.get_tcp_mss("127.0.0.1", netimps.get_free_port(), timeout=1.0) is None
+    )
+
+
+def test_ping_rejects_unknown_method():
+    with pytest.raises(ValueError, match="must be 'icmp', 'tcp' or 'udp'"):
+        netimps.ping("10.0.0.1", method="sctp", port=1)
+
+
+def test_ping_tcp_and_udp_require_a_port():
+    for method in ("tcp", "udp"):
+        with pytest.raises(ValueError, match="needs a port"):
+            netimps.ping("10.0.0.1", method=method)
+
+
+def test_ping_tcp_measures_a_real_handshake():
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    try:
+        port = server.getsockname()[1]
+        result = netimps.ping("127.0.0.1", method="tcp", port=port, timeout=2.0)
+        assert result.ok
+        assert result.rtt_ms is not None and result.rtt_ms >= 0
+    finally:
+        server.close()
+
+
+def test_ping_tcp_unreachable_is_falsy():
+    result = netimps.ping("192.0.2.99", method="tcp", port=9, timeout=1.0)
+    assert not result
+
+
+def test_tcp_check_and_ping_tcp_ask_different_questions():
+    """A refused port: the service is down, but the host answered.
+
+    tcp_check is service-liveness, ping(method="tcp") is host-liveness. On
+    platforms that surface the RST as ConnectionRefusedError they disagree
+    here, which is the whole reason both exist.
+    """
+    from netimps._ping import _tcp_ping
+
+    port = netimps.get_free_port()
+    assert netimps.tcp_check("127.0.0.1", port, timeout=1.0) is False
+    ok, rtt, note = _tcp_ping("127.0.0.1", port, 1.0)
+    if note == "refused":  # pragma: no branch - platform dependent
+        assert ok, "a refusal proves the host is alive"
+        assert rtt is not None
+
+
+def test_discover_mtu_forwards_ping_kwargs(monkeypatch):
+    """ipv6/tries and friends reach ping rather than being dropped."""
+    seen = []
+
+    def ping(dst, size=None, dont_fragment=False, timeout=None, src=None, **kw):
+        seen.append(kw)
+        return netimps.PingResult((size or 0) + 28 <= 1500, dst)
+
+    monkeypatch.setattr(netimps, "ping", ping)
+    netimps.discover_mtu("10.0.0.1", tries=3, ipv6=False)
+    assert seen and all(k == {"tries": 3, "ipv6": False} for k in seen)
+
+
+@pytest.mark.parametrize("owned", ["size", "dont_fragment"])
+def test_discover_mtu_rejects_search_owned_kwargs(owned):
+    """Overriding what the search varies would silently break the result."""
+    with pytest.raises(TypeError, match="sets"):
+        netimps.discover_mtu("10.0.0.1", **{owned: 1})
