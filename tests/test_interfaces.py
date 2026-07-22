@@ -224,3 +224,54 @@ def test_primary_ip_returns_parsed_not_string():
         if chosen is not None:
             assert not isinstance(chosen, str)
             assert isinstance(chosen, (ipaddress.IPv4Address, ipaddress.IPv6Address))
+
+
+# --------------------------------------------------------------------------- #
+# macOS/BSD sockaddr_dl MAC extraction                                         #
+# --------------------------------------------------------------------------- #
+
+
+def test_sockaddr_dl_mac_extraction():
+    """The AF_LINK branch reads the MAC through the struct's own address.
+
+    Regression: `sdl_data` is a `c_char` array, so ctypes converts it to
+    `bytes` on attribute access -- `addressof()` on that copy raises
+    `TypeError: addressof() argument must be _ctypes._CData, not bytes`. Only
+    macOS/BSD take this branch, so CI on those runners was the first to see it.
+
+    The MAC also starts `sdl_nlen` bytes in, after the interface name, rather
+    than at a fixed offset.
+    """
+    import ctypes
+
+    from netimps._ifaddrs import _SockaddrDl
+
+    sdl = _SockaddrDl()
+    sdl.sdl_nlen = 4  # b"en01"
+    sdl.sdl_alen = 6
+    payload = b"en01" + bytes([0x00, 0x00, 0x5E, 0x00, 0x53, 0x01])
+    payload += b"\x00" * (_SockaddrDl.sdl_data.size - len(payload))
+    ctypes.memmove(
+        ctypes.addressof(sdl) + _SockaddrDl.sdl_data.offset,
+        payload,
+        _SockaddrDl.sdl_data.size,
+    )
+
+    # Exactly what the enumeration does.
+    raw = ctypes.string_at(
+        ctypes.addressof(sdl) + _SockaddrDl.sdl_data.offset,
+        _SockaddrDl.sdl_data.size,
+    )
+    extracted = raw[sdl.sdl_nlen : sdl.sdl_nlen + 6]
+    assert MACAddress(extracted) == MACAddress("00:00:5e:00:53:01")
+
+
+def test_sockaddr_dl_data_is_not_addressable_directly():
+    """Pins *why* the offset arithmetic is needed, so it is not 'simplified'."""
+    import ctypes
+
+    from netimps._ifaddrs import _SockaddrDl
+
+    sdl = _SockaddrDl()
+    with pytest.raises(TypeError):
+        ctypes.addressof(sdl.sdl_data)
