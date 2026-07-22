@@ -43,6 +43,7 @@ from __future__ import annotations
 import ctypes as _ctypes
 import ipaddress as _ipaddress
 import socket as _socket
+import struct as _struct
 import sys as _sys
 from ctypes import (
     POINTER,
@@ -88,12 +89,15 @@ class Interface:
             (loopback, tunnels).
         ips: Every address bound to the interface, each as an
             ``IPv4Interface``/``IPv6Interface`` carrying its real prefix.
+        mtu: Link MTU in bytes, or ``None`` when the platform does not report
+            it. This is the *local link* MTU -- for a bottleneck further along
+            a path see :func:`netimps.path_mtu`.
         raw: ``None`` unless enumerated with ``get_interfaces(raw=True)``, in
             which case a platform-specific dict of leftovers. **Not portable**
             and explicitly outside the stability guarantee.
     """
 
-    __slots__ = ("name", "index", "mac", "ips", "raw")
+    __slots__ = ("name", "index", "mac", "ips", "mtu", "raw")
 
     def __init__(
         self,
@@ -101,12 +105,14 @@ class Interface:
         index: int = 0,
         mac: "Optional[Any]" = None,
         ips: "Optional[List[_IPInterface]]" = None,
+        mtu: "Optional[int]" = None,
         raw: "Optional[Dict[str, Any]]" = None,
     ) -> None:
         self.name = name
         self.index = index
         self.mac = mac
         self.ips = ips if ips is not None else []
+        self.mtu = mtu
         self.raw = raw
 
     @property
@@ -130,11 +136,12 @@ class Interface:
         return [ip for ip in self.ips if isinstance(ip, _ipaddress.IPv6Interface)]
 
     def __repr__(self) -> str:
-        return "Interface(name=%r, index=%r, mac=%r, ips=%r)" % (
+        return "Interface(name=%r, index=%r, mac=%r, ips=%r, mtu=%r)" % (
             self.name,
             self.index,
             None if self.mac is None else str(self.mac),
             [str(ip) for ip in self.ips],
+            self.mtu,
         )
 
     def __eq__(self, other: object) -> bool:
@@ -145,6 +152,7 @@ class Interface:
             and self.index == other.index
             and self.mac == other.mac
             and self.ips == other.ips
+            and self.mtu == other.mtu
         )
 
 
@@ -267,6 +275,36 @@ _Ifaddrs._fields_ = [
 ]
 
 
+#: SIOCGIFMTU differs per platform: Linux has its own value, the BSDs share
+#: another. Absent elsewhere, in which case MTU is simply unavailable.
+_SIOCGIFMTU = 0x8921 if _sys.platform.startswith("linux") else 0xC0206933
+
+
+def _posix_mtu(name: str) -> "Optional[int]":
+    """Link MTU for ``name`` via ioctl, or None when unavailable.
+
+    getifaddrs does not report MTU, so it takes a separate SIOCGIFMTU ioctl.
+    Every failure mode (no fcntl, unknown request, permission) collapses to
+    None -- MTU is a nice-to-have and must never break enumeration.
+    """
+    try:
+        import fcntl
+    except ImportError:
+        return None
+    try:
+        sock = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+    except OSError:
+        return None
+    try:
+        request = _struct.pack("16sI12x", name.encode("utf-8")[:15], 0)
+        packed = fcntl.ioctl(sock.fileno(), _SIOCGIFMTU, request)
+        return int(_struct.unpack("16sI12x", packed)[1]) or None
+    except (OSError, ValueError, _struct.error):
+        return None
+    finally:
+        sock.close()
+
+
 def _cast_sockaddr(ptr, struct_type):
     """Reinterpret a sockaddr pointer as a more specific sockaddr struct."""
     return _ctypes.cast(ptr, POINTER(struct_type)).contents
@@ -319,6 +357,7 @@ def _posix_interfaces(want_raw: bool) -> "List[Interface]":
                 iface = Interface(
                     name=name,
                     index=index,
+                    mtu=_posix_mtu(name),
                     raw={"flags": node.ifa_flags, "families": []} if want_raw else None,
                 )
                 found[name] = iface
@@ -543,12 +582,15 @@ def _windows_interfaces(want_raw: bool) -> "List[Interface]":
                 "flags": int(node.Flags),
             }
 
+        # 0xFFFFFFFF is the "unknown" sentinel some adapters report.
+        mtu = int(node.Mtu)
         interfaces.append(
             Interface(
                 name=name,
                 index=int(node.IfIndex),
                 mac=mac,
                 ips=ips,
+                mtu=mtu if 0 < mtu < 0xFFFFFFFF else None,
                 raw=raw,
             )
         )
