@@ -24,9 +24,14 @@ from subprocess import TimeoutExpired as _SubprocessTimeout
 from subprocess import run as _subprocess_run
 import sys as _sys
 import time as _time
+
+from ._iface_spec import interface_address as _interface_address
 from typing import Optional, Tuple
 
 __all__ = [
+    "bind",
+    "bind_error_hint",
+    "interface_for",
     "get_source_ip",
     "free_port",
     "tcp_check",
@@ -43,6 +48,171 @@ _IS_WINDOWS = _sys.platform == "win32"
 #: public address forces the default route; it is never contacted (see
 #: get_source_ip).
 _DEFAULT_PROBE = "8.8.8.8"
+
+
+def bind(
+    address: str = "",
+    port: int = 0,
+    *,
+    family: int = _socket.AF_INET,
+    kind: int = _socket.SOCK_DGRAM,
+    reuse_address: bool = True,
+    reuse_port: bool = False,
+    broadcast: bool = False,
+    interface=None,
+    options=(),
+    listen: "Optional[int]" = None,
+):
+    """Create, configure and bind a socket in one call.
+
+    The setup every server repeats, with the options that are easy to get
+    wrong handled once::
+
+        sock = bind("", 67, broadcast=True)               # DHCP-style listener
+        sock = bind("127.0.0.1", 0, kind=SOCK_STREAM, listen=5)
+        sock = bind(port=5353, interface="eth0")          # pin to one adapter
+
+    :param address: local address to bind. ``""`` (the default) is the
+        wildcard, which is what a server almost always wants.
+    :param port: local port; ``0`` lets the OS choose.
+    :param interface: bind to this adapter's address instead of ``address``.
+        Accepts an :class:`Interface`, a MAC, an adapter name or an address --
+        the same union as ``ping(source=)``. Raises :class:`ValueError` if it
+        cannot be resolved, rather than silently binding the wildcard.
+    :param reuse_port: sets ``SO_REUSEPORT``. **A no-op where the option does
+        not exist** (Windows) rather than an error, so the same call works
+        everywhere.
+    :param options: extra ``(level, name, value)`` triples for anything not
+        covered by the named arguments.
+    :param listen: call ``listen(backlog)`` after binding. Ignored for
+        datagram sockets, where it is meaningless.
+
+    Raises :class:`OSError` if the bind fails -- see :func:`bind_error_hint`
+    for turning that into something a user can act on. The socket is closed
+    before the exception propagates, so a failed call leaks nothing.
+    """
+    if interface is not None:
+        resolved = _interface_address(interface, want_ipv6=(family == _socket.AF_INET6))
+        if resolved is None:
+            raise ValueError("cannot resolve interface %r to an address" % (interface,))
+        address = str(resolved)
+
+    sock = _socket.socket(family, kind)
+    try:
+        if reuse_address:
+            sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        if reuse_port:
+            # Absent on Windows; setting it unconditionally would raise there.
+            option = getattr(_socket, "SO_REUSEPORT", None)
+            if option is not None:
+                try:
+                    sock.setsockopt(_socket.SOL_SOCKET, option, 1)
+                except OSError:
+                    pass  # present but refused by this kernel -- not fatal
+        if broadcast:
+            sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_BROADCAST, 1)
+        for level, name, value in options:
+            sock.setsockopt(level, name, value)
+
+        sock.bind((address, port))
+        if listen is not None and kind == _socket.SOCK_STREAM:
+            sock.listen(listen)
+    except BaseException:
+        sock.close()
+        raise
+    return sock
+
+
+def bind_error_hint(
+    exc: BaseException, port: "Optional[int]" = None
+) -> "Optional[str]":
+    """Turn a bind failure into a sentence a user can act on, or ``None``.
+
+    The raw ``OSError`` from a failed bind is famously unhelpful, and the errno
+    differs per platform -- Windows reports ``WinError 10013``/``10048`` where
+    POSIX reports ``EACCES``/``EADDRINUSE``::
+
+        try:
+            sock = bind("", 67)
+        except OSError as exc:
+            raise OSError(bind_error_hint(exc, 67) or str(exc)) from exc
+
+    Returns ``None`` for anything unrecognised, so the caller keeps the
+    original error rather than a worse paraphrase. This **does not raise** --
+    deciding what to do with a failure belongs to the caller.
+    """
+    import errno as _errno
+
+    if not isinstance(exc, OSError):
+        return None
+
+    winerror = getattr(exc, "winerror", None)
+    where = "port %d" % port if port is not None else "that port"
+
+    if (
+        isinstance(exc, PermissionError)
+        or exc.errno == _errno.EACCES
+        or winerror == 10013
+    ):
+        hint = "permission denied binding %s" % where
+        if port is not None and port < 1024:
+            hint += "; ports below 1024 need root/Administrator"
+        return hint
+
+    if exc.errno == _errno.EADDRINUSE or winerror == 10048:
+        return "%s is already in use" % where.capitalize()
+
+    if exc.errno == _errno.EADDRNOTAVAIL or winerror == 10049:
+        return (
+            "that address is not available on this host; "
+            "it must belong to a local interface"
+        )
+
+    return None
+
+
+def interface_for(address, strict: bool = True):
+    """Return the :class:`Interface` holding ``address``, or ``None``.
+
+    The reverse of interface enumeration -- "a socket is bound here, which
+    adapter is that?"::
+
+        interface_for(sock.getsockname()[0])
+
+    :param strict: when True (the default), an address held by no local
+        interface returns ``None``. When False, a synthetic single-address
+        ``Interface`` is returned instead, so a caller that only needs
+        *something* to attribute traffic to does not have to special-case it.
+
+    The synthetic interface is named ``"<unknown>"`` and carries a host route
+    (``/32`` or ``/128``), matching how degraded enumeration reports itself.
+    """
+    from . import try_parse
+    from ._ifaddrs import Interface, get_interfaces
+
+    wanted = try_parse(address)
+    if wanted is None:
+        return None
+
+    for iface in get_interfaces():
+        for entry in iface.ips:
+            if entry.ip == wanted:
+                return iface
+
+    if strict:
+        return None
+
+    built = _make_host_route(wanted)
+    return Interface(name="<unknown>", ips=[built] if built else [])
+
+
+def _make_host_route(address):
+    import ipaddress as _ipaddress
+
+    try:
+        return _ipaddress.ip_interface("%s/%d" % (address, address.max_prefixlen))
+    except ValueError:
+        return None
 
 
 def get_source_ip(dest: str = _DEFAULT_PROBE, port: int = 80):

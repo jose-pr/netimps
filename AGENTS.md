@@ -91,14 +91,19 @@ map:
 | `IPv4Address`, `IPv4Interface`, `IPv4Network`, `IPv6Address`, `IPv6Interface`, `IPv6Network` | stdlib concrete-type re-exports |
 | `parse`, `try_parse`, `is_valid` | build a type from a value (raising / `None` / `bool`) |
 | `MACAddress` | parse / classify / render MAC addresses |
-| `get_interfaces`, `Interface` | native cross-platform NIC discovery |
+| `get_interfaces`, `Interface`, `iter_addresses` | native cross-platform NIC discovery |
 | `get_ip`, `is_link_scoped` | address resolution and scope classification |
 | `collapse`, `subtract` | CIDR set maths |
 | `normalize_host` | `host:port` splitting, IPv6-aware |
 | `get_default_port`, `get_default_scheme`, `register_port` | scheme ↔ port registry |
 | `resolve` | DNS lookup → native records (`[]` on failure) |
 | `ping`, `PingResult` | reachability with RTT and TTL |
+| `bind`, `bind_error_hint`, `interface_for` | socket creation and diagnosis |
 | `get_source_ip`, `free_port`, `tcp_check`, `wait_for_port` | socket helpers |
+| `UdpEndpoint`, `Datagram` | UDP receive with arrival interface (`IP_PKTINFO`) |
+| `Host` | hostname-or-address value type |
+| `retry`, `backoff_delays` | bounded retry with exponential backoff |
+| `APIPA`, `LOOPBACK_V4`, `LOOPBACK_V6`, `LINK_LOCAL_V6` | named networks |
 | `get_route`, `Route`, `hop_count`, `path_mtu` | routing, distance and MTU |
 | `scan_ports`, `scan_hosts`, `PORT_RANGES` | concurrent scanning |
 | `multicast_socket`, `join_group`, `leave_group`, `is_multicast` | multicast |

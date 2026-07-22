@@ -23,6 +23,11 @@ from ipaddress import (
 )
 
 __all__ = [
+    "Host",
+    "APIPA",
+    "LOOPBACK_V4",
+    "LOOPBACK_V6",
+    "LINK_LOCAL_V6",
     "IPAddress",
     "IPInterface",
     "IPNetwork",
@@ -277,3 +282,102 @@ def is_link_scoped(ip: IPAddress) -> bool:
        they return ``False`` -- use ``ip.is_private`` for that question.
     """
     return ip.is_loopback or ip.is_link_local
+
+
+# ---------------------------------------------------------------------------
+# Well-known networks
+# ---------------------------------------------------------------------------
+# Named so callers read as the RFC does, instead of repeating literals. These
+# are the ranges consumers kept spelling out by hand.
+
+#: RFC 3927 link-local ("Automatic Private IP Addressing") -- what a host gives
+#: itself when DHCP fails, so its presence usually means "no lease".
+APIPA = _ipaddress.ip_network("169.254.0.0/16")
+
+#: RFC 1122 loopback. Note this is the whole /8, not just 127.0.0.1.
+LOOPBACK_V4 = _ipaddress.ip_network("127.0.0.0/8")
+
+#: The single IPv6 loopback address, as a network for symmetry.
+LOOPBACK_V6 = _ipaddress.ip_network("::1/128")
+
+#: RFC 4291 IPv6 link-local.
+LINK_LOCAL_V6 = _ipaddress.ip_network("fe80::/10")
+
+
+class Host:
+    """A host named by either an address or a hostname.
+
+    Config files and URLs hold "the host" as a string that may be either, and
+    the useful operations differ. This keeps the original text and resolves on
+    demand::
+
+        host = Host("db.internal")
+        host.ip()                  # IPv4Address(...) once DNS answers
+        str(host)                  # 'db.internal' -- always the original
+
+        Host("10.0.0.5").is_address    # True, no DNS involved
+
+    The point is that ``str(host)`` is **always what was given**, so a URL can
+    still be rebuilt when resolution fails -- which is the case a bare
+    ``get_ip()`` handles badly, since it returns ``None`` and loses the name.
+    """
+
+    __slots__ = ("value", "_resolved", "_attempted")
+
+    def __init__(self, value) -> None:
+        if isinstance(value, Host):
+            value = value.value
+        self.value = "" if value is None else str(value).strip()
+        self._resolved = None
+        self._attempted = False
+
+    @property
+    def is_address(self) -> bool:
+        """True if the value is already an IP literal -- no DNS needed."""
+        from . import is_valid
+
+        return is_valid(self.value, IPAddress)
+
+    def ip(self, refresh: bool = False):
+        """Resolve to an address, or ``None``.
+
+        A literal is parsed directly; a hostname goes to DNS. **The result is
+        cached**, including a failure, because the common use is several
+        lookups in a row on the same object. Pass ``refresh=True`` to retry --
+        a name that failed once may resolve later.
+        """
+        if refresh:
+            self._attempted = False
+            self._resolved = None
+        if self._attempted:
+            return self._resolved
+
+        self._attempted = True
+        if not self.value:
+            self._resolved = None
+            return None
+
+        from . import get_ip, try_parse
+
+        literal = try_parse(self.value, IPAddress)
+        self._resolved = literal if literal is not None else get_ip(self.value)
+        return self._resolved
+
+    def __str__(self) -> str:
+        return self.value
+
+    def __repr__(self) -> str:
+        return "Host(%r)" % (self.value,)
+
+    def __bool__(self) -> bool:
+        return bool(self.value)
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, Host):
+            return self.value == other.value
+        if isinstance(other, str):
+            return self.value == other
+        return NotImplemented
+
+    def __hash__(self) -> int:
+        return hash(self.value)
