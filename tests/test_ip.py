@@ -4,26 +4,27 @@ import pytest
 
 import netimps
 from netimps import (
-    IPAddr,
-    IPIface,
-    IPNet,
+    IPAddress,
+    IPInterface,
+    IPNetwork,
     IPv4Address,
     IPv4Interface,
     MACAddress,
     is_valid_ip,
+    parse,
     try_parse,
 )
 
 
 def test_ipaddress_forms():
-    assert IPAddr("10.0.0.5") == ipaddress.ip_address("10.0.0.5")
-    assert IPAddr(0x0A000005) == IPv4Address("10.0.0.5")
+    assert parse("10.0.0.5", IPAddress) == ipaddress.ip_address("10.0.0.5")
+    assert parse(0x0A000005, IPAddress) == IPv4Address("10.0.0.5")
     existing = IPv4Address("192.168.1.1")
-    assert IPAddr(existing) == existing
+    assert parse(existing, IPAddress) == existing
 
 
 def test_ipinterface_exploded_surface():
-    iface = IPIface("10.0.0.5/24")
+    iface = parse("10.0.0.5/24", IPInterface)
     assert isinstance(iface, IPv4Interface)
     assert iface.ip.exploded == "10.0.0.5"
     assert iface.netmask.exploded == "255.255.255.0"
@@ -31,41 +32,45 @@ def test_ipinterface_exploded_surface():
 
 
 def test_ipnetwork_membership_and_exploded():
-    net = IPNet("192.168.1.0/24")
+    net = parse("192.168.1.0/24", IPNetwork)
     assert net.network_address.exploded == "192.168.1.0"
     assert net.netmask.exploded == "255.255.255.0"
-    assert IPAddr("192.168.1.42") in net
-    assert IPAddr("10.0.0.1") not in net
+    assert parse("192.168.1.42", IPAddress) in net
+    assert parse("10.0.0.1", IPAddress) not in net
 
 
 def test_ipnetwork_non_strict_by_default():
     # A host address with a prefix must not raise; it normalises to its network.
-    net = IPNet("10.0.0.5/24")
+    net = parse("10.0.0.5/24", IPNetwork)
     assert net.network_address.exploded == "10.0.0.0"
     with pytest.raises(ValueError):
-        IPNet("10.0.0.5/24", strict=True)
+        parse("10.0.0.5/24", IPNetwork, strict=True)
 
 
 def test_try_parse_handles_empty_and_none():
     """try_parse replaces the old parse_ip empty-string special case."""
-    assert try_parse("", IPAddr) is None
-    assert try_parse("   ", IPAddr) is None
-    assert try_parse(None, IPAddr) is None
+    assert try_parse("", IPAddress) is None
+    assert try_parse("   ", IPAddress) is None
+    assert try_parse(None, IPAddress) is None
 
 
 def test_try_parse_ip_valid_and_invalid():
-    assert try_parse("10.0.0.5", IPAddr) == IPv4Address("10.0.0.5")
-    assert try_parse(IPv4Address("10.0.0.5"), IPAddr) == IPv4Address("10.0.0.5")
+    assert try_parse("10.0.0.5", IPAddress) == IPv4Address("10.0.0.5")
+    assert try_parse(IPv4Address("10.0.0.5"), IPAddress) == IPv4Address("10.0.0.5")
     # Unlike the removed parse_ip, malformed input is None rather than a raise.
-    assert try_parse("not-an-ip", IPAddr) is None
+    assert try_parse("not-an-ip", IPAddress) is None
 
 
 def test_try_parse_network():
-    assert try_parse("", IPNet) is None
-    assert try_parse(None, IPNet) is None
-    assert try_parse("192.168.0.0/16", IPNet).network_address.exploded == "192.168.0.0"
+    assert try_parse("", IPNetwork) is None
+    assert try_parse(None, IPNetwork) is None
+    assert (
+        try_parse("192.168.0.0/16", IPNetwork).network_address.exploded == "192.168.0.0"
+    )
     # non-strict: host bits tolerated
-    assert try_parse("192.168.0.7/16", IPNet).network_address.exploded == "192.168.0.0"
+    assert (
+        try_parse("192.168.0.7/16", IPNetwork).network_address.exploded == "192.168.0.0"
+    )
 
 
 @pytest.mark.parametrize(
@@ -105,9 +110,13 @@ def test_types_are_types_and_factories_are_callable():
         # A Union alias, not a callable factory.
         assert typing.get_origin(alias) is typing.Union, name
 
-    assert netimps.IPAddr("10.0.0.5") == IPv4Address("10.0.0.5")
-    assert netimps.IPIface("10.0.0.5/24").network == netimps.IPNet("10.0.0.0/24")
-    assert netimps.IPNet("10.0.0.5/24") == ipaddress.ip_network("10.0.0.0/24")
+    assert netimps.parse("10.0.0.5", IPAddress) == IPv4Address("10.0.0.5")
+    assert netimps.parse("10.0.0.5/24", IPInterface).network == netimps.parse(
+        "10.0.0.0/24", IPNetwork
+    )
+    assert netimps.parse("10.0.0.5/24", IPNetwork) == ipaddress.ip_network(
+        "10.0.0.0/24"
+    )
 
 
 def test_unions_usable_as_annotations():
@@ -127,14 +136,14 @@ def test_unions_usable_as_annotations():
 
 
 def test_is_valid_generic_with_any_factory():
-    from netimps import IPAddr, IPIface, IPNet, MACAddress, is_valid
+    from netimps import IPAddress, IPInterface, IPNetwork, MACAddress, is_valid
 
-    assert is_valid("10.0.0.5", IPAddr)
-    assert is_valid("10.0.0.5/24", IPIface)
-    assert is_valid("10.0.0.0/24", IPNet)
+    assert is_valid("10.0.0.5", IPAddress)
+    assert is_valid("10.0.0.5/24", IPInterface)
+    assert is_valid("10.0.0.0/24", IPNetwork)
     assert is_valid("aa:bb:cc:dd:ee:ff", MACAddress)
-    assert not is_valid("nonsense", IPAddr)
-    assert not is_valid(None, IPAddr)
+    assert not is_valid("nonsense", IPAddress)
+    assert not is_valid(None, IPAddress)
     assert not is_valid(object(), MACAddress)
 
 
@@ -151,8 +160,8 @@ def test_is_valid_only_swallows_bad_input_errors():
 
 def test_named_validators_match_generic():
     from netimps import (
-        IPAddr,
-        IPNet,
+        IPAddress,
+        IPNetwork,
         MACAddress,
         is_valid,
         is_valid_ip,
@@ -161,9 +170,9 @@ def test_named_validators_match_generic():
     )
 
     for value in ["10.0.0.5", "", "nope", None, "::1"]:
-        assert is_valid_ip(value) == is_valid(value, IPAddr)
+        assert is_valid_ip(value) == is_valid(value, IPAddress)
     for value in ["10.0.0.0/24", "10.0.0.5/24", "nope", None]:
-        assert is_valid_network(value) == is_valid(value, IPNet)
+        assert is_valid_network(value) == is_valid(value, IPNetwork)
     for value in ["aa:bb:cc:dd:ee:ff", "nope", None, 12]:
         assert is_valid_mac(value) == is_valid(value, MACAddress)
 
@@ -174,16 +183,18 @@ def test_named_validators_match_generic():
 
 
 def test_try_parse_returns_value_or_none():
-    from netimps import IPAddr, IPIface, IPNet, MACAddress, try_parse
+    from netimps import IPAddress, IPInterface, IPNetwork, MACAddress, try_parse
 
-    assert try_parse("10.0.0.5", IPAddr) == IPv4Address("10.0.0.5")
-    assert try_parse("10.0.0.5/24", IPIface) == ipaddress.ip_interface("10.0.0.5/24")
-    assert try_parse("10.0.0.0/24", IPNet) == ipaddress.ip_network("10.0.0.0/24")
+    assert try_parse("10.0.0.5", IPAddress) == IPv4Address("10.0.0.5")
+    assert try_parse("10.0.0.5/24", IPInterface) == ipaddress.ip_interface(
+        "10.0.0.5/24"
+    )
+    assert try_parse("10.0.0.0/24", IPNetwork) == ipaddress.ip_network("10.0.0.0/24")
     assert str(try_parse("aa:bb:cc:dd:ee:ff", MACAddress)) == "aa:bb:cc:dd:ee:ff"
 
-    assert try_parse("nonsense", IPAddr) is None
-    assert try_parse(None, IPAddr) is None
-    assert try_parse("", IPAddr) is None
+    assert try_parse("nonsense", IPAddress) is None
+    assert try_parse(None, IPAddress) is None
+    assert try_parse("", IPAddress) is None
     assert try_parse(object(), MACAddress) is None
 
 
@@ -199,9 +210,9 @@ def test_try_parse_only_swallows_bad_input_errors():
 
 def test_try_parse_agrees_with_is_valid():
     """The two must never disagree about whether a value parses."""
-    from netimps import IPAddr, IPNet, MACAddress, is_valid, try_parse
+    from netimps import IPAddress, IPNetwork, MACAddress, is_valid, try_parse
 
-    for parser in (IPAddr, IPNet, MACAddress):
+    for parser in (IPAddress, IPNetwork, MACAddress):
         for value in [
             "10.0.0.5",
             "10.0.0.0/24",
@@ -266,9 +277,7 @@ def test_is_valid_accepts_union_aliases():
 
 def test_aliases_and_factories_agree():
     for alias, factory in [
-        (netimps.IPAddress, IPAddr),
-        (netimps.IPInterface, IPIface),
-        (netimps.IPNetwork, IPNet),
+        (netimps.IPAddress, IPAddress),
     ]:
         for value in ["10.0.0.5", "10.0.0.5/24", "nope", "", None]:
             assert netimps.try_parse(value, alias) == netimps.try_parse(value, factory)
@@ -277,15 +286,15 @@ def test_aliases_and_factories_agree():
 def test_non_callable_parser_raises():
     """A bad parser is a caller bug, not a rejected value -- it must not be None."""
     for bad in [42, "not-a-parser", None]:
-        with pytest.raises(TypeError, match="must be a callable"):
+        with pytest.raises(TypeError, match="must be a result type or a callable"):
             netimps.try_parse("10.0.0.5", bad)
-        with pytest.raises(TypeError, match="must be a callable"):
+        with pytest.raises(TypeError, match="must be a result type or a callable"):
             netimps.is_valid("10.0.0.5", bad)
 
 
 def test_unhashable_parser_does_not_crash_lookup():
     """A dict lookup on an unhashable parser must be guarded."""
-    with pytest.raises(TypeError, match="must be a callable"):
+    with pytest.raises(TypeError, match="must be a result type or a callable"):
         netimps.try_parse("10.0.0.5", ["not", "callable"])
 
 
@@ -297,7 +306,7 @@ def test_input_aliases_are_not_parsers():
     more confusing error. They must be rejected up front on every version.
     """
     for alias in (netimps.IPAddressLike, netimps.IPNetworkLike, netimps.MACLike):
-        assert alias not in netimps._PARSER_FOR_TYPE
+        assert alias not in netimps._BUILDERS
         with pytest.raises(TypeError, match="typing construct"):
             netimps.try_parse("10.0.0.5", alias)
         with pytest.raises(TypeError, match="typing construct"):
@@ -309,12 +318,12 @@ def test_input_aliases_are_not_parsers():
     ["10.0.0.5", 0x0A000005, b"\x0a\x00\x00\x05", IPv4Address("10.0.0.5")],
 )
 def test_concrete_type_accepts_every_factory_input(value):
-    """A concrete type must take everything IPAddr does, not just strings."""
+    """A concrete type must take everything IPAddress does, not just strings."""
     assert netimps.try_parse(value, IPv4Address) == IPv4Address("10.0.0.5")
 
 
 def test_concrete_network_is_non_strict_like_ipnet():
-    """Regression: IPv4Network defaults to strict=True, IPNet does not.
+    """Regression: IPv4Network defaults to strict=True, IPNetwork does not.
 
     Routing through the factory keeps host-bits-set input working, so the
     concrete type and the union agree instead of diverging on the same input.
@@ -322,7 +331,7 @@ def test_concrete_network_is_non_strict_like_ipnet():
     assert netimps.try_parse(
         "10.0.0.5/24", netimps.IPv4Network
     ) == ipaddress.ip_network("10.0.0.0/24")
-    assert netimps.try_parse("10.0.0.5/24", IPNet) == ipaddress.ip_network(
+    assert netimps.try_parse("10.0.0.5/24", IPNetwork) == ipaddress.ip_network(
         "10.0.0.0/24"
     )
 
@@ -336,12 +345,12 @@ def test_concrete_types_round_trip_existing_objects():
 
 def test_try_parse_default():
     """A caller-supplied fallback replaces None on rejection."""
-    assert netimps.try_parse("nope", IPAddr, default="FALLBACK") == "FALLBACK"
-    assert netimps.try_parse("10.0.0.5", IPAddr, default="FALLBACK") == IPv4Address(
+    assert netimps.try_parse("nope", IPAddress, default="FALLBACK") == "FALLBACK"
+    assert netimps.try_parse("10.0.0.5", IPAddress, default="FALLBACK") == IPv4Address(
         "10.0.0.5"
     )
     # Default default is still None.
-    assert netimps.try_parse("nope", IPAddr) is None
+    assert netimps.try_parse("nope", IPAddress) is None
 
 
 def test_is_valid_distinguishes_none_result_from_rejection():

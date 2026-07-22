@@ -220,7 +220,7 @@ def test_get_ip_returns_none_on_failure(monkeypatch):
     ],
 )
 def test_is_link_scoped(addr, expected):
-    assert netimps.is_link_scoped(netimps.IPAddr(addr)) is expected
+    assert netimps.is_link_scoped(netimps.parse(addr)) is expected
 
 
 @pytest.mark.parametrize(
