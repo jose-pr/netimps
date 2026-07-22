@@ -1,4 +1,4 @@
-# netutils
+# netimps
 
 A **small, self-contained network-utilities library** — a thin, typed layer over
 the standard library's `ipaddress` plus a handful of host helpers (DNS lookup,
@@ -6,16 +6,16 @@ ping, local NIC discovery). One flat import surface, minimal dependencies, and
 behaviour that stays faithful to the stdlib.
 
 ```python
-import netutils
+import netimps
 
-iface = netutils.IPInterface("10.0.0.5/24")
+iface = netimps.IPInterface("10.0.0.5/24")
 iface.network.network_address.exploded      # '10.0.0.0'
 
-mac = netutils.MACAddress("AA-BB-CC-DD-EE-FF")
+mac = netimps.MACAddress("AA-BB-CC-DD-EE-FF")
 mac.as_str("-")                             # 'aa-bb-cc-dd-ee-ff'
 
-netutils.nslookup("example.com")            # ['93.184.216.34']  (or [] on failure)
-netutils.ping("127.0.0.1")                  # True / False
+netimps.nslookup("example.com")            # ['93.184.216.34']  (or [] on failure)
+netimps.ping("127.0.0.1")                  # True / False
 ```
 
 - **IP types** — `IPAddress`, `IPInterface`, `IPNetwork` factories over
@@ -38,7 +38,7 @@ netutils.ping("127.0.0.1")                  # True / False
 ## Install
 
 ```bash
-pip install netutils
+pip install netimps
 ```
 
 Requires Python 3.9+. Runtime dependency: `dnspython` (used only inside
@@ -47,18 +47,18 @@ Requires Python 3.9+. Runtime dependency: `dnspython` (used only inside
 ## Code layout
 
 ```
-src/netutils/
-├── __init__.py   # the entire public API (see src/netutils/AGENTS.md for the header)
+src/netimps/
+├── __init__.py   # the entire public API (see src/netimps/AGENTS.md for the header)
 └── py.typed      # PEP 561 marker — the package ships inline type hints
 ```
 
 The library is intentionally a single flat module — no subpackages, no
-plugin system. Everything importable from `netutils` is declared in
+plugin system. Everything importable from `netimps` is declared in
 `__all__` at the top of `__init__.py`.
 
 ## Entry points
 
-See **`src/netutils/AGENTS.md`** for the header-file-style public API (every
+See **`src/netimps/AGENTS.md`** for the header-file-style public API (every
 export with its signature, arguments, return contract, and gotchas). Quick
 map:
 

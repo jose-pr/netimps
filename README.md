@@ -1,9 +1,9 @@
-# netutils
+# netimps
 
-[![Version](https://img.shields.io/pypi/v/netutils.svg)](https://pypi.org/project/netutils/)
-[![Python versions](https://img.shields.io/pypi/pyversions/netutils.svg)](https://pypi.org/project/netutils/)
+[![Version](https://img.shields.io/pypi/v/netimps.svg)](https://pypi.org/project/netimps/)
+[![Python versions](https://img.shields.io/pypi/pyversions/netimps.svg)](https://pypi.org/project/netimps/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![CI](https://img.shields.io/github/actions/workflow/status/jose-pr/netutils/test.yml)](https://github.com/jose-pr/netutils/actions/workflows/test.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/jose-pr/netimps/test.yml)](https://github.com/jose-pr/netimps/actions/workflows/test.yml)
 
 A **small, self-contained network-utilities library** — a thin, typed layer over
 the standard library's `ipaddress` plus a handful of host helpers (DNS lookup,
@@ -28,31 +28,31 @@ behaviour that stays faithful to the stdlib.
 ## Installation
 
 ```bash
-pip install netutils
+pip install netimps
 ```
 
 ## Quick start
 
 ```python
-import netutils
+import netimps
 
 # IP / network types
-iface = netutils.IPInterface("10.0.0.5/24")
+iface = netimps.IPInterface("10.0.0.5/24")
 iface.network.network_address.exploded      # '10.0.0.0'
-netutils.IPAddress("10.0.0.5") in netutils.IPNetwork("10.0.0.0/24")  # True
+netimps.IPAddress("10.0.0.5") in netimps.IPNetwork("10.0.0.0/24")  # True
 
 # MAC addresses
-mac = netutils.MACAddress("AA-BB-CC-DD-EE-FF")
+mac = netimps.MACAddress("AA-BB-CC-DD-EE-FF")
 mac.as_str("-")                             # 'aa-bb-cc-dd-ee-ff'
 mac == "aabb.ccdd.eeff"                     # True
 
 # Tolerant parsing
-netutils.parse_ip("")                       # None
-netutils.is_valid_ip("not-an-ip")           # False
+netimps.parse_ip("")                       # None
+netimps.is_valid_ip("not-an-ip")           # False
 
 # DNS + reachability
-netutils.nslookup("example.com")            # ['93.184.216.34']  (or [] on failure)
-netutils.ping("127.0.0.1")                  # True / False
+netimps.nslookup("example.com")            # ['93.184.216.34']  (or [] on failure)
+netimps.ping("127.0.0.1")                  # True / False
 ```
 
 ## API overview
