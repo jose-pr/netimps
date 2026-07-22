@@ -107,6 +107,15 @@ __all__ = [
     "tcp_check",
     "wait_for_port",
     "get_route",
+    # Scanning.
+    "scan_ports",
+    "scan_hosts",
+    "PORT_RANGES",
+    # Multicast.
+    "multicast_socket",
+    "join_group",
+    "leave_group",
+    "is_multicast",
     "Route",
     "hop_count",
     "path_mtu",
@@ -569,6 +578,13 @@ from ._scheme import (  # noqa: E402
 from ._ifaddrs import Interface, get_interfaces  # noqa: E402
 from ._dns import resolve  # noqa: E402
 from ._ping import PingResult, ping  # noqa: E402
+from ._scan import PORT_RANGES, scan_hosts, scan_ports  # noqa: E402
+from ._multicast import (  # noqa: E402
+    is_multicast,
+    join_group,
+    leave_group,
+    multicast_socket,
+)
 from ._sockets import (  # noqa: E402
     Route,
     free_port,
