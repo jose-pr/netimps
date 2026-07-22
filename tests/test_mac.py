@@ -66,10 +66,10 @@ def test_equality_across_forms_and_types():
     a = MACAddress("AA:BB:CC:DD:EE:FF")
     b = MACAddress("aa-bb-cc-dd-ee-ff")
     assert a == b
-    assert a == "aabb.ccdd.eeff"        # compares against a string form
+    assert a == "aabb.ccdd.eeff"  # compares against a string form
     assert a != MACAddress("00:11:22:33:44:55")
-    assert a != "garbage"                # invalid string is unequal, not an error
-    assert (a == 123) is False           # unrelated type
+    assert a != "garbage"  # invalid string is unequal, not an error
+    assert (a == 123) is False  # unrelated type
 
 
 def test_hashable_as_dict_key():

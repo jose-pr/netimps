@@ -92,8 +92,14 @@ def test_types_are_types_and_factories_are_callable():
     """The noun names are unions to annotate with; the short names build values."""
     import typing
 
-    for name in ("IPAddress", "IPInterface", "IPNetwork", "IPAddressLike",
-                 "IPNetworkLike", "MACLike"):
+    for name in (
+        "IPAddress",
+        "IPInterface",
+        "IPNetwork",
+        "IPAddressLike",
+        "IPNetworkLike",
+        "MACLike",
+    ):
         alias = getattr(netimps, name)
         # A Union alias, not a callable factory.
         assert typing.get_origin(alias) is typing.Union, name
@@ -107,8 +113,7 @@ def test_unions_usable_as_annotations():
     """Regression: the aliases must resolve under get_type_hints."""
     import typing
 
-    def annotated(a: netimps.IPAddress, b: netimps.IPNetwork) -> None:
-        ...
+    def annotated(a: netimps.IPAddress, b: netimps.IPNetwork) -> None: ...
 
     hints = typing.get_type_hints(annotated)
     assert hints["a"] == netimps.IPAddress
@@ -118,6 +123,7 @@ def test_unions_usable_as_annotations():
 # --------------------------------------------------------------------------- #
 # generic is_valid                                                             #
 # --------------------------------------------------------------------------- #
+
 
 def test_is_valid_generic_with_any_factory():
     from netimps import IPAddr, IPIface, IPNet, MACAddress, is_valid
@@ -165,6 +171,7 @@ def test_named_validators_match_generic():
 # generic try_parse                                                            #
 # --------------------------------------------------------------------------- #
 
+
 def test_try_parse_returns_value_or_none():
     from netimps import IPAddr, IPIface, IPNet, MACAddress, try_parse
 
@@ -194,6 +201,13 @@ def test_try_parse_agrees_with_is_valid():
     from netimps import IPAddr, IPNet, MACAddress, is_valid, try_parse
 
     for parser in (IPAddr, IPNet, MACAddress):
-        for value in ["10.0.0.5", "10.0.0.0/24", "aa:bb:cc:dd:ee:ff",
-                      "nope", "", None, 5]:
+        for value in [
+            "10.0.0.5",
+            "10.0.0.0/24",
+            "aa:bb:cc:dd:ee:ff",
+            "nope",
+            "",
+            None,
+            5,
+        ]:
             assert (try_parse(value, parser) is not None) == is_valid(value, parser)

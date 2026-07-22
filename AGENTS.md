@@ -112,6 +112,14 @@ Tests live in `tests/` (`test_ip.py`, `test_mac.py`, `test_net.py`,
 `pyproject.toml` puts `src/` on the path. Run against **3.9 and 3.14** — 3.9 is
 the floor, so no unquoted `X | Y` unions at runtime.
 
+Code is formatted with **black** (`target-version = py39`, configured in
+`pyproject.toml`; installed by the `dev` extra):
+
+```bash
+.venv/dev/Scripts/black src/ tests/          # format
+.venv/dev/Scripts/black --check src/ tests/  # verify, for CI
+```
+
 ### Releasing
 
 This project follows [Semantic Versioning](https://semver.org/) and keeps a

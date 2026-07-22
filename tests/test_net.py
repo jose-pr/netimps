@@ -9,10 +9,10 @@ import netimps
 from netimps import active_nic_addresses, ping, resolve
 from netimps import IPv4Address
 
-
 # --------------------------------------------------------------------------- #
 # resolve                                                                     #
 # --------------------------------------------------------------------------- #
+
 
 class _FakeAnswer:
     def __init__(self, records):
@@ -149,6 +149,7 @@ def test_resolve_custom_nameserver_string(fake_dns):
 # ping                                                                         #
 # --------------------------------------------------------------------------- #
 
+
 def test_ping_empty_hostname_is_false():
     assert ping("") is False
 
@@ -182,6 +183,7 @@ def test_ping_failure_exhausts_tries(monkeypatch):
 # active_nic_addresses                                                         #
 # --------------------------------------------------------------------------- #
 
+
 def test_active_nic_addresses_filters_loopback(monkeypatch):
     monkeypatch.setattr(
         netimps._socket,
@@ -207,8 +209,10 @@ def test_active_nic_addresses_only_loopback_is_empty(monkeypatch):
 # get_ip / is_link_scoped / get_default_port                        #
 # --------------------------------------------------------------------------- #
 
+
 def test_get_ip_parses_literals_without_dns(monkeypatch):
     """A literal must never trigger a lookup."""
+
     def explode(_):
         raise AssertionError("gethostbyname must not be called for a literal")
 
@@ -234,10 +238,10 @@ def test_get_ip_returns_none_on_failure(monkeypatch):
     [
         ("127.0.0.1", True),
         ("::1", True),
-        ("169.254.1.1", True),   # IPv4 link-local
-        ("fe80::1", True),       # IPv6 link-local
+        ("169.254.1.1", True),  # IPv4 link-local
+        ("fe80::1", True),  # IPv6 link-local
         ("8.8.8.8", False),
-        ("10.0.0.5", False),     # private, but routable -- not link-local
+        ("10.0.0.5", False),  # private, but routable -- not link-local
         ("2606:2800::1", False),
     ],
 )
@@ -247,8 +251,14 @@ def test_is_link_scoped(addr, expected):
 
 @pytest.mark.parametrize(
     "scheme, expected",
-    [("http", 80), ("https", 443), ("HTTPS", 443), ("ftp", 21),
-     ("socks", 1080), ("socks5", 1080)],
+    [
+        ("http", 80),
+        ("https", 443),
+        ("HTTPS", 443),
+        ("ftp", 21),
+        ("socks", 1080),
+        ("socks5", 1080),
+    ],
 )
 def test_get_default_port_known(scheme, expected):
     assert netimps.get_default_port(scheme) == expected
@@ -261,6 +271,7 @@ def test_get_default_port_unknown_is_none():
 # --------------------------------------------------------------------------- #
 # ping options                                                                 #
 # --------------------------------------------------------------------------- #
+
 
 def _capture_ping(monkeypatch, returncode=0):
     calls = []
