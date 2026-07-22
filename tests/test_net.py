@@ -6,7 +6,7 @@ import types
 import pytest
 
 import netimps
-from netimps import active_nic_addresses, ping, resolve
+from netimps import ping, resolve
 from netimps import IPv4Address
 
 # --------------------------------------------------------------------------- #
@@ -180,32 +180,6 @@ def test_ping_failure_exhausts_tries(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# active_nic_addresses                                                         #
-# --------------------------------------------------------------------------- #
-
-
-def test_active_nic_addresses_filters_loopback(monkeypatch):
-    monkeypatch.setattr(
-        netimps._socket,
-        "gethostbyname_ex",
-        lambda host: ("host", [], ["127.0.0.1", "192.168.1.10"]),
-    )
-    monkeypatch.setattr(netimps._socket, "gethostname", lambda: "host")
-    addrs = active_nic_addresses()
-    assert addrs == [IPv4Address("192.168.1.10")]
-
-
-def test_active_nic_addresses_only_loopback_is_empty(monkeypatch):
-    monkeypatch.setattr(
-        netimps._socket,
-        "gethostbyname_ex",
-        lambda host: ("host", [], ["127.0.0.1"]),
-    )
-    monkeypatch.setattr(netimps._socket, "gethostname", lambda: "host")
-    assert active_nic_addresses() == []
-
-
-# --------------------------------------------------------------------------- #
 # get_ip / is_link_scoped / get_default_port                        #
 # --------------------------------------------------------------------------- #
 
@@ -345,3 +319,72 @@ def test_ping_returns_false_when_subprocess_hangs(monkeypatch):
 
     monkeypatch.setattr(netimps, "_run", hang)
     assert netimps.ping("host") is False
+
+
+# --------------------------------------------------------------------------- #
+# port registry                                                                #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def clean_ports():
+    """Snapshot/restore the port tables -- registration mutates module state."""
+    import netimps as n
+
+    ports = dict(n._DEFAULT_PORTS)
+    schemes = dict(n._PORT_SCHEMES)
+    yield
+    n._DEFAULT_PORTS.clear()
+    n._DEFAULT_PORTS.update(ports)
+    n._PORT_SCHEMES.clear()
+    n._PORT_SCHEMES.update(schemes)
+
+
+def test_port_scheme_is_inverse_of_get_default_port():
+    assert netimps.port_scheme(443) == "https"
+    assert netimps.port_scheme(80) == "http"
+    assert netimps.get_default_port(netimps.port_scheme(443)) == 443
+
+
+def test_port_scheme_returns_canonical_not_alias():
+    """1080 has three schemes; the first registered wins, not whichever is last."""
+    assert netimps.port_scheme(1080) == "socks"
+
+
+def test_register_port_round_trips(clean_ports):
+    netimps.register_port("myproto", 9999)
+    assert netimps.get_default_port("myproto") == 9999
+    assert netimps.port_scheme(9999) == "myproto"
+
+
+def test_register_port_is_case_insensitive(clean_ports):
+    netimps.register_port("MyProto", 9998)
+    assert netimps.get_default_port("myproto") == 9998
+    assert netimps.get_default_port("MYPROTO") == 9998
+
+
+def test_register_alias_does_not_steal_canonical_name(clean_ports):
+    """Adding an alias must not silently change what a port maps back to."""
+    netimps.register_port("secure-web", 443)
+    assert netimps.get_default_port("secure-web") == 443
+    assert netimps.port_scheme(443) == "https"  # unchanged
+
+    netimps.register_port("secure-web", 443, canonical=True)
+    assert netimps.port_scheme(443) == "secure-web"  # explicit override honoured
+
+
+@pytest.mark.parametrize("port", [-1, 65536, 100000])
+def test_register_port_rejects_out_of_range(clean_ports, port):
+    with pytest.raises(ValueError):
+        netimps.register_port("bad", port)
+
+
+def test_register_port_rejects_bad_input(clean_ports):
+    with pytest.raises(ValueError):
+        netimps.register_port("", 80)
+    with pytest.raises(TypeError):
+        netimps.register_port("x", "80")
+
+
+def test_port_scheme_unknown_is_none():
+    assert netimps.port_scheme(65000) is None

@@ -81,13 +81,12 @@ __all__ = [
     "get_ip",
     "is_link_scoped",
     "get_default_port",
+    "port_scheme",
+    "register_port",
     "resolve",
     "ping",
     "Interface",
     "get_interfaces",
-    "active_nic_addresses",
-    "get_ip_address",
-    "nic_info",
     "HOST_DN",
 ]
 
@@ -461,27 +460,100 @@ def is_link_scoped(ip: IPAddress) -> bool:
     return ip.is_loopback or ip.is_link_local
 
 
-#: Conventional ports for schemes :func:`socket.getservbyname` gets wrong or
-#: does not know (it has no entry for the socks variants).
+#: Conventional scheme -> port mappings, consulted before the system services
+#: database. Seeded with the entries :func:`socket.getservbyname` gets wrong or
+#: does not know (it has no entry for the socks variants at all). Mutable via
+#: :func:`register_port`; not a frozen table, deliberately -- consumers keep
+#: needing to add their own.
 _DEFAULT_PORTS = {
     "http": 80,
     "https": 443,
     "ftp": 21,
+    "ftps": 990,
+    "ssh": 22,
+    "sftp": 22,
+    "telnet": 23,
+    "smtp": 25,
+    "dns": 53,
+    "tftp": 69,
+    "pop3": 110,
+    "ntp": 123,
+    "imap": 143,
+    "ldap": 389,
+    "smb": 445,
+    "smtps": 465,
+    "syslog": 514,
+    "ldaps": 636,
+    "imaps": 993,
+    "pop3s": 995,
     "socks": 1080,
     "socks4": 1080,
     "socks5": 1080,
+    "mysql": 3306,
+    "rdp": 3389,
+    "postgresql": 5432,
+    "redis": 6379,
+    "http-alt": 8080,
 }
+
+#: Reverse index, rebuilt by :func:`register_port`. The *first* scheme
+#: registered for a port wins as its canonical name, so ``port_scheme(1080)``
+#: is ``"socks"`` rather than whichever alias happens to be last.
+_PORT_SCHEMES: "dict" = {}
+
+
+def _reindex_ports() -> None:
+    _PORT_SCHEMES.clear()
+    for name, num in _DEFAULT_PORTS.items():
+        _PORT_SCHEMES.setdefault(num, name)
+
+
+_reindex_ports()
+
+
+def register_port(scheme: str, port: int, canonical: bool = False) -> None:
+    """Register (or override) a scheme's conventional port.
+
+    The built-in table covers the common cases, but every consumer eventually
+    has a protocol of its own::
+
+        register_port("myproto", 9999)
+        get_default_port("myproto")     # 9999
+        port_scheme(9999)               # 'myproto'
+
+    :param scheme: scheme name; matched case-insensitively.
+    :param port: TCP/UDP port number, 0-65535.
+    :param canonical: make ``scheme`` the name :func:`port_scheme` returns for
+        ``port``, displacing any existing one. By default the first registration
+        for a port keeps that slot, so adding an alias does not silently change
+        what an existing port maps back to.
+
+    Raises :class:`ValueError` on an out-of-range port or empty scheme.
+    """
+    if not scheme or not scheme.strip():
+        raise ValueError("scheme must be a non-empty string")
+    if not isinstance(port, int) or isinstance(port, bool):
+        raise TypeError("port must be an int, got %r" % (type(port).__name__,))
+    if not 0 <= port <= 65535:
+        raise ValueError("port out of range: %r" % (port,))
+
+    scheme = scheme.strip().lower()
+    _DEFAULT_PORTS[scheme] = port
+    if canonical or port not in _PORT_SCHEMES:
+        _PORT_SCHEMES[port] = scheme
 
 
 def get_default_port(scheme: str) -> Optional[int]:
     """Return the conventional port for a URL scheme, or ``None`` if unknown.
 
-    Checks a small built-in table first, then falls back to the system services
-    database via :func:`socket.getservbyname`::
+    Checks the built-in/registered table first, then falls back to the system
+    services database via :func:`socket.getservbyname`::
 
         get_default_port("https")    # 443
         get_default_port("socks5")   # 1080  (absent from /etc/services)
         get_default_port("nope")     # None
+
+    Case-insensitive. Extend the table with :func:`register_port`.
     """
     scheme = scheme.lower()
     if scheme in _DEFAULT_PORTS:
@@ -489,6 +561,27 @@ def get_default_port(scheme: str) -> Optional[int]:
     try:
         return _socket.getservbyname(scheme)
     except OSError:
+        return None
+
+
+def port_scheme(port: int) -> Optional[str]:
+    """Return the conventional scheme for a port, or ``None`` if unknown.
+
+    The inverse of :func:`get_default_port`::
+
+        port_scheme(443)     # 'https'
+        port_scheme(1080)    # 'socks'   (canonical name, not an alias)
+        port_scheme(9999)    # None
+
+    Falls back to the system services database via
+    :func:`socket.getservbyport`. Where several schemes share a port, the
+    canonical one is returned -- see :func:`register_port`.
+    """
+    if port in _PORT_SCHEMES:
+        return _PORT_SCHEMES[port]
+    try:
+        return _socket.getservbyport(port)
+    except (OSError, OverflowError, TypeError):
         return None
 
 
@@ -650,63 +743,6 @@ def ping(
         if response.returncode == 0:
             return True
     return False
-
-
-# ---------------------------------------------------------------------------
-# Local NIC discovery
-# ---------------------------------------------------------------------------
-
-
-def active_nic_addresses() -> List[IPv4Address]:
-    """Return the host's active (non-loopback) IPv4 address as a 1-element list.
-
-    Resolves the local hostname and filters out ``127.*`` loopback entries.
-    Returns an empty list if only loopback addresses are found. Cross-platform.
-    """
-    try:
-        _, _, ips = _socket.gethostbyname_ex(_socket.gethostname())
-    except OSError:
-        return []
-    return [IPv4Address(ip) for ip in ips if not ip.startswith("127.")][:1]
-
-
-def get_ip_address(nic_name: str) -> str:
-    """Return the IPv4 address bound to interface ``nic_name`` (POSIX only).
-
-    Uses an ``SIOCGIFADDR`` ioctl and therefore requires the POSIX-only
-    :mod:`fcntl` module. Raises :class:`OSError` (``NotImplementedError`` under
-    Windows, where ``fcntl`` is unavailable).
-    """
-    import struct
-
-    try:
-        import fcntl
-    except ImportError as exc:  # pragma: no cover - platform dependent
-        raise NotImplementedError("get_ip_address requires POSIX fcntl") from exc
-
-    s = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
-    try:
-        return _socket.inet_ntoa(
-            fcntl.ioctl(
-                s.fileno(),
-                0x8915,  # SIOCGIFADDR
-                struct.pack("256s", nic_name[:15].encode("utf-8")),
-            )[20:24]
-        )
-    finally:
-        s.close()
-
-
-def nic_info() -> List[tuple]:
-    """Return ``[(name, ipv4), ...]`` for each interface (POSIX only).
-
-    Enumerates interfaces via :func:`socket.if_nameindex` (POSIX only) and pairs
-    each with its :func:`get_ip_address`. Raises on platforms without these
-    facilities (e.g. Windows).
-    """
-    if not hasattr(_socket, "if_nameindex"):  # pragma: no cover - platform dependent
-        raise NotImplementedError("nic_info requires POSIX socket.if_nameindex")
-    return [(name, get_ip_address(name)) for _, name in _socket.if_nameindex()]
 
 
 # Imported last: _ifaddrs builds MACAddress objects, so it must load after the

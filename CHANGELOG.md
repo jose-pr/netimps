@@ -64,9 +64,20 @@ updated.
   `ping` implementations read 0 as "wait forever".
 - `get_ip`, `get_default_port`, and `is_link_scoped`, ported from a downstream
   consumer.
+- **`port_scheme(port)`** — the inverse of `get_default_port`, and
+  **`register_port(scheme, port, canonical=False)`** to extend or override the
+  table. The built-in list grew from 6 entries to ~30. Where several schemes
+  share a port, the canonical one is returned, and registering an alias does not
+  silently change what a port maps back to.
 
 ### Removed
 
+- **`active_nic_addresses`, `get_ip_address`, `nic_info`.** All three are
+  superseded by `get_interfaces()`, which is correct where they were not.
+  `active_nic_addresses()` returned an arbitrary *single* address — whatever
+  `gethostbyname_ex` happened to list first, routinely a WSL/VM/VPN adapter
+  rather than the real NIC — and discarded the rest despite the plural name.
+  `get_ip_address`/`nic_info` were POSIX-only.
 - **`nslookup`.** Superseded by `resolve()`, which is the same lookup with a
   better argument order; keeping both would have been two names for one thing.
 - **`parse_ip` / `parse_network`.** They mapped only empty strings to `None`
