@@ -330,7 +330,7 @@ def test_ping_timeout_never_rounds_down_to_zero(monkeypatch):
     calls = _capture_ping(monkeypatch)
     netimps.ping("host", timeout=0.2)
     cmd = calls[0][0]
-    flag = "-w" if netimps._os.name == "nt" else "-W"
+    flag = "-w" if _ping._os.name == "nt" else "-W"
     value = int(cmd[cmd.index(flag) + 1])
     assert value >= 1
 

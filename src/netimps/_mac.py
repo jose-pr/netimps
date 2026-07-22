@@ -10,7 +10,7 @@ Re-exported from :mod:`netimps`.
 from __future__ import annotations
 
 import re as _re
-from typing import TYPE_CHECKING, Union
+from typing import TYPE_CHECKING, Optional, Union
 
 if TYPE_CHECKING:
     try:
@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     except ImportError:  # pragma: no cover - 3.9
         from typing_extensions import TypeGuard
 
-__all__ = ["MACAddress", "is_valid_mac", "MACLike"]
+__all__ = ["MACAddress", "MACLike"]
 
 #: Anything :class:`MACAddress` accepts.
 MACLike = Union[str, int, bytes, "MACAddress"]
@@ -73,6 +73,39 @@ class MACAddress:
             self._octets = bytes.fromhex(hexdigits)
             return
         raise TypeError("Cannot build MACAddress from %r" % (type(value).__name__,))
+
+    @classmethod
+    def is_valid(cls, value: object) -> "TypeGuard[MACAddress]":
+        """Return True if ``value`` can be parsed as a MAC. Never raises.
+
+        The type-local spelling of ``netimps.is_valid(value, MACAddress)``,
+        which is often what reads best at a call site::
+
+            if MACAddress.is_valid(user_input):
+                ...
+
+        A classmethod rather than a staticmethod so a subclass validates
+        against itself. Declared as a :data:`typing.TypeGuard`, so a checker
+        narrows ``value`` in the ``True`` branch.
+        """
+        try:
+            cls(value)  # type: ignore[arg-type]
+            return True
+        except (ValueError, TypeError):
+            return False
+
+    @classmethod
+    def try_parse(cls, value: object) -> "Optional[MACAddress]":
+        """Return a ``MACAddress``, or ``None`` if ``value`` is not one.
+
+        The type-local spelling of ``netimps.try_parse(value, MACAddress)``.
+        Prefer it to :meth:`is_valid` followed by construction -- one call, and
+        no window in which the two disagree.
+        """
+        try:
+            return cls(value)  # type: ignore[arg-type]
+        except (ValueError, TypeError):
+            return None
 
     def as_str(self, sep: str = ":", upper: bool = False) -> str:
         """Return the MAC as a string with ``sep`` between octets.
@@ -170,15 +203,3 @@ class MACAddress:
 
     def __hash__(self) -> int:
         return hash(self._octets)
-
-
-def is_valid_mac(value: object) -> "TypeGuard[MACAddress]":
-    """Return ``True`` if ``value`` is a valid MAC address. Never raises.
-
-    The MAC counterpart of :func:`is_valid_ip`: any input :class:`MACAddress`
-    rejects -- including wrong types and empty strings -- yields ``False``.
-    Shorthand for ``is_valid(value, MACAddress)``.
-    """
-    from . import is_valid
-
-    return is_valid(value, MACAddress)

@@ -24,7 +24,7 @@ from subprocess import TimeoutExpired as _SubprocessTimeout
 from subprocess import run as _subprocess_run
 import sys as _sys
 import time as _time
-from typing import List, Optional, Tuple
+from typing import Optional, Tuple
 
 __all__ = [
     "get_source_ip",
