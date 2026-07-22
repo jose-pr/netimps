@@ -6,12 +6,12 @@ import types
 import pytest
 
 import netimps
-from netimps import active_nic_addresses, nslookup, ping
+from netimps import active_nic_addresses, ping, resolve
 from netimps import IPv4Address
 
 
 # --------------------------------------------------------------------------- #
-# nslookup                                                                     #
+# resolve                                                                     #
 # --------------------------------------------------------------------------- #
 
 class _FakeAnswer:
@@ -91,39 +91,39 @@ def fake_dns(monkeypatch):
     return _FakeResolver
 
 
-def test_nslookup_returns_list_of_strings(fake_dns):
+def test_resolve_returns_list_of_strings(fake_dns):
     fake_dns.result = ["93.184.216.34"]
-    result = nslookup("example.com")
+    result = resolve("example.com")
     assert result == ["93.184.216.34"]
     assert isinstance(result, list)
     assert result[0] == "93.184.216.34"  # index-0 access is the documented contract
 
 
-def test_nslookup_multiple_records(fake_dns):
+def test_resolve_multiple_records(fake_dns):
     fake_dns.result = ["1.2.3.4", "5.6.7.8"]
-    assert nslookup("example.com") == ["1.2.3.4", "5.6.7.8"]
+    assert resolve("example.com") == ["1.2.3.4", "5.6.7.8"]
 
 
 @pytest.mark.parametrize(
     "exc",
     [_NXDOMAIN, _NoAnswer, _NoNameservers, _LifetimeTimeout],
 )
-def test_nslookup_returns_empty_list_on_lookup_failure(fake_dns, exc):
+def test_resolve_returns_empty_list_on_lookup_failure(fake_dns, exc):
     """Every genuine 'no result' outcome honours the [] contract."""
     fake_dns.error = exc("boom")
-    assert nslookup("does-not-exist.invalid") == []
+    assert resolve("does-not-exist.invalid") == []
 
 
-def test_nslookup_raises_on_caller_error(fake_dns):
+def test_resolve_raises_on_caller_error(fake_dns):
     """A malformed query is a bug, not a lookup result -- it must not become []."""
     fake_dns.error = ValueError("unknown rdtype 'nope'")
     with pytest.raises(ValueError, match="invalid DNS query"):
-        nslookup("example.com", type="nope")
+        resolve("example.com", "nope")
 
 
-def test_nslookup_forwards_timeout_port_and_tcp(fake_dns):
+def test_resolve_forwards_timeout_port_and_tcp(fake_dns):
     fake_dns.result = ["1.2.3.4"]
-    nslookup("example.com", timeout=2.5, port=5353, tcp=True)
+    resolve("example.com", timeout=2.5, port=5353, tcp=True)
     assert fake_dns.last["tcp"] is True
     assert fake_dns.last["port"] == 5353
     # Both must be set: timeout bounds one query, lifetime the whole
@@ -132,16 +132,17 @@ def test_nslookup_forwards_timeout_port_and_tcp(fake_dns):
     assert fake_dns.last["lifetime"] == 2.5
 
 
-def test_resolve_is_nslookup_with_rdtype_second(fake_dns):
+def test_resolve_takes_rdtype_second(fake_dns):
+    """The record type is positional-second -- the argument callers vary."""
     fake_dns.result = ["2606:2800::1"]
-    assert netimps.resolve("example.com", "aaaa") == ["2606:2800::1"]
+    assert resolve("example.com", "aaaa") == ["2606:2800::1"]
     assert fake_dns.last["rtype"] == "aaaa"
 
 
-def test_nslookup_custom_nameserver_string(fake_dns):
+def test_resolve_custom_nameserver_string(fake_dns):
     fake_dns.result = ["8.8.8.8"]
     # Should not raise when a single ns string is provided.
-    assert nslookup("example.com", ns="1.1.1.1") == ["8.8.8.8"]
+    assert resolve("example.com", ns="1.1.1.1") == ["8.8.8.8"]
 
 
 # --------------------------------------------------------------------------- #
@@ -203,7 +204,7 @@ def test_active_nic_addresses_only_loopback_is_empty(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# get_ip / is_loopback_or_link_local / get_default_port                        #
+# get_ip / is_link_scoped / get_default_port                        #
 # --------------------------------------------------------------------------- #
 
 def test_get_ip_parses_literals_without_dns(monkeypatch):
@@ -240,8 +241,8 @@ def test_get_ip_returns_none_on_failure(monkeypatch):
         ("2606:2800::1", False),
     ],
 )
-def test_is_loopback_or_link_local(addr, expected):
-    assert netimps.is_loopback_or_link_local(netimps.IPAddr(addr)) is expected
+def test_is_link_scoped(addr, expected):
+    assert netimps.is_link_scoped(netimps.IPAddr(addr)) is expected
 
 
 @pytest.mark.parametrize(
