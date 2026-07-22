@@ -20,7 +20,7 @@ Types and parsing
 ``IPAddress``/``IPInterface``/``IPNetwork`` are the v4/v6 unions you annotate
 with, reading the way :class:`ipaddress.IPv4Address` does::
 
-    def route(dst: netimps.IPAddress, via: netimps.IPNetwork) -> None: ...
+    def get_route(dst: netimps.IPAddress, via: netimps.IPNetwork) -> None: ...
 
 The same names are what you *parse into*, via one entry point::
 
@@ -41,6 +41,7 @@ import os as _os
 import platform as _platform
 import re as _re
 import socket as _socket
+import sys as _sys
 from subprocess import TimeoutExpired as _SubprocessTimeout
 from subprocess import run as _run
 from typing import (
@@ -99,13 +100,26 @@ __all__ = [
     "is_valid_mac",
     "get_ip",
     "is_link_scoped",
+    "collapse",
+    "subtract",
+    "normalize_host",
     "get_default_port",
     "port_scheme",
     "register_port",
     "resolve",
     "ping",
+    "PingResult",
     "Interface",
     "get_interfaces",
+    # Socket / route helpers.
+    "get_source_ip",
+    "free_port",
+    "tcp_check",
+    "wait_for_port",
+    "get_route",
+    "Route",
+    "hop_count",
+    "path_mtu",
     "HOST_DN",
 ]
 
@@ -586,6 +600,133 @@ def get_ip(address: str) -> Optional[IPAddress]:
         return None
 
 
+def collapse(networks) -> "List[IPNetwork]":
+    """Merge an iterable of networks into the smallest equivalent list.
+
+    Adjacent and overlapping networks are combined; the result is sorted and
+    covers exactly the same addresses::
+
+        collapse(["10.0.0.0/25", "10.0.0.128/25"])   # [IPv4Network('10.0.0.0/24')]
+        collapse(["10.0.0.0/24", "10.0.0.8/29"])     # [IPv4Network('10.0.0.0/24')]
+
+    Accepts anything :func:`parse` does, mixed v4 and v6 -- the families are
+    collapsed independently and returned v4 first. Raises :class:`ValueError`
+    on malformed input.
+    """
+    v4, v6 = [], []
+    for item in networks:
+        net = parse(item, IPNetwork)
+        (v4 if net.version == 4 else v6).append(net)
+    out = []
+    for group in (v4, v6):
+        if group:
+            out.extend(_ipaddress.collapse_addresses(group))
+    return out
+
+
+def subtract(networks, remove) -> "List[IPNetwork]":
+    """Return ``networks`` minus every address in ``remove``.
+
+    The set difference :mod:`ipaddress` leaves out -- it ships
+    ``collapse_addresses`` but nothing to punch holes::
+
+        subtract(["10.0.0.0/24"], ["10.0.0.64/26"])
+        # [IPv4Network('10.0.0.0/26'), IPv4Network('10.0.0.128/25')]
+
+        subtract(["0.0.0.0/0"], ["10.0.0.0/8", "192.168.0.0/16"])  # public v4
+
+    The result is collapsed, so it is the minimal set of networks covering
+    what is left. Removing something absent is a no-op, and removing a
+    superset yields ``[]``. Mixed families are handled independently: an IPv6
+    exclusion never affects IPv4 output.
+    """
+    remaining = collapse(networks)
+    for item in remove:
+        excluded = parse(item, IPNetwork)
+        next_round = []
+        for net in remaining:
+            if net.version != excluded.version:
+                next_round.append(net)  # different family: untouched
+                continue
+            if not (
+                net.subnet_of(excluded)
+                or excluded.subnet_of(net)
+                or net.overlaps(excluded)
+            ):
+                next_round.append(net)
+                continue
+            if net.subnet_of(excluded):
+                continue  # fully removed
+            next_round.extend(net.address_exclude(excluded))
+        remaining = next_round
+    return collapse(remaining)
+
+
+def normalize_host(text: str, default_port: Optional[int] = None):
+    """Split ``"host:port"`` into ``(host, port)``, handling IPv6 brackets.
+
+    The parsing that looks trivial until IPv6 arrives, because a bare v6
+    address is *full of colons*::
+
+        normalize_host("example.com:8080")     # ('example.com', 8080)
+        normalize_host("10.0.0.5")             # ('10.0.0.5', None)
+        normalize_host("[::1]:8080")           # ('::1', 8080)
+        normalize_host("::1")                  # ('::1', None)   -- not port 1
+        normalize_host("example.com", 443)     # ('example.com', 443)
+
+    The rule this implements: a bare IPv6 address must **not** be split on its
+    last colon, and only a bracketed one may carry a port. ``"::1"`` is the
+    address, never host ``"::"`` port ``1`` -- the mistake hand-rolled splitters
+    almost always make.
+
+    Brackets are stripped from the returned host, and a scope id is preserved
+    (``"[fe80::1%eth0]:80"`` -> ``("fe80::1%eth0", 80)``). ``default_port`` is
+    used when no port is present.
+
+    Raises :class:`ValueError` on empty input, an unclosed bracket, or a port
+    that is not an integer in 0-65535.
+    """
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("host must be a non-empty string, got %r" % (text,))
+    text = text.strip()
+
+    if text.startswith("["):
+        end = text.find("]")
+        if end == -1:
+            raise ValueError("unclosed '[' in %r" % (text,))
+        host = text[1:end]
+        rest = text[end + 1 :]
+        if not rest:
+            port = default_port
+        elif rest.startswith(":"):
+            port = _parse_port(rest[1:], text)
+        else:
+            raise ValueError("unexpected %r after ']' in %r" % (rest, text))
+    elif text.count(":") > 1:
+        # More than one colon and no brackets: a bare IPv6 address. Splitting
+        # here would turn "::1" into host "::" port 1.
+        host, port = text, default_port
+    elif ":" in text:
+        host, _, raw_port = text.partition(":")
+        port = _parse_port(raw_port, text)
+    else:
+        host, port = text, default_port
+
+    if not host:
+        raise ValueError("empty host in %r" % (text,))
+    return host, port
+
+
+def _parse_port(raw: str, original: str) -> int:
+    try:
+        port = int(raw)
+    except (TypeError, ValueError):
+        raise ValueError("invalid port %r in %r" % (raw, original))
+    if not 0 <= port <= 65535:
+        raise ValueError("port out of range in %r" % (original,))
+    return port
+
+
 def is_link_scoped(ip: IPAddress) -> bool:
     """True if ``ip`` is confined to link scope or narrower.
 
@@ -740,6 +881,25 @@ def port_scheme(port: int) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
+def _native_record(record):
+    """Convert a dnspython record to a native Python value.
+
+    Address records become :mod:`ipaddress` objects, so a caller can compare
+    and do membership tests without re-parsing. Everything else stays a
+    ``str``, with the trailing root dot stripped from names and the quotes
+    stripped from TXT strings -- the forms callers actually want.
+    """
+    text = str(record)
+    address = try_parse(text)
+    if address is not None:
+        return address
+    if len(text) > 1 and text.startswith('"') and text.endswith('"'):
+        return text[1:-1]  # TXT records arrive quoted
+    if text.endswith(".") and not text.endswith(".."):
+        return text[:-1]  # names are fully qualified with a root dot
+    return text
+
+
 def resolve(
     query: str,
     rdtype: str = "a",
@@ -747,7 +907,7 @@ def resolve(
     timeout: Optional[float] = 5.0,
     port: int = 53,
     tcp: bool = False,
-) -> List[str]:
+) -> "List[Any]":
     """Resolve ``query`` via DNS and return the answers as a list of strings.
 
     ::
@@ -756,9 +916,19 @@ def resolve(
         resolve("example.com", "aaaa")
         resolve("example.com", "mx", ns="1.1.1.1")
 
-    Contract: always a ``list`` of string records, and an **empty list** when
-    the name does not resolve -- never ``None``. Callers can therefore write
-    ``if result:`` and index ``result[0]`` safely.
+    Contract: always a ``list``, **empty** when the name does not resolve --
+    never ``None``. Callers can therefore write ``if result:`` and index
+    ``result[0]`` safely.
+
+    Records come back as **native types**: address records (``A``/``AAAA``) are
+    :class:`ipaddress` objects, everything else is a ``str``::
+
+        resolve("example.com")[0].is_private     # an IPv4Address, not "1.2.3.4"
+        resolve("example.com", "mx")             # ['10 mail.example.com']
+        resolve("example.com", "txt")            # ['v=spf1 -all']  -- unquoted
+
+    Names lose their trailing root dot and TXT strings lose their surrounding
+    quotes, since neither is wanted in practice.
 
     :param query: the name (or address, for reverse types) to look up.
     :param rdtype: DNS record type (``"a"``, ``"aaaa"``, ``"mx"`` ...). Second
@@ -824,7 +994,134 @@ def resolve(
         # rather than a lookup outcome. The old code swallowed these into [],
         # which turned a typo'd record type into a silent empty result.
         raise ValueError("invalid DNS query %r (%s): %s" % (query, rdtype, exc))
-    return [str(record) for record in answer]
+    return [_native_record(record) for record in answer]
+
+
+def _source_argument(source, want_ipv6: bool = False) -> Optional[str]:
+    """Coerce a source spec to the address string ``ping`` needs.
+
+    Accepts an :class:`Interface`, an address object, or a string. Interfaces
+    are reduced to an address because Windows ``-S`` will not take an adapter
+    name; ``None`` means "nothing usable here", which the caller must treat as
+    a failure rather than silently omitting the flag.
+    """
+    # A MAC identifies an adapter, so look up which one carries it. Unknown
+    # MACs are None ("no such interface"), never a silent fallback.
+    if isinstance(source, MACAddress) or (
+        isinstance(source, str) and is_valid_mac(source)
+    ):
+        wanted = MACAddress(source)
+        source = next(
+            (iface for iface in get_interfaces() if iface.mac == wanted), None
+        )
+        if source is None:
+            return None
+
+    if isinstance(source, Interface):
+        candidates = source.ipv6 if want_ipv6 else source.ipv4
+        for entry in candidates:
+            if not entry.ip.is_loopback:
+                return str(entry.ip)
+        # Fall back to a loopback address if that is genuinely all it has.
+        return str(candidates[0].ip) if candidates else None
+
+    text = str(source).strip()
+    return text or None
+
+
+class PingResult:
+    """Outcome of a :func:`ping`, usable directly as a boolean.
+
+    ``ping()`` has always answered "did it reply?", so this stays truthy on
+    success and falsy on failure -- ``if ping(host):`` keeps working -- while
+    carrying the details a caller would otherwise re-run ``ping`` to scrape.
+
+    Attributes:
+        ok: whether the destination replied.
+        host: the destination as given.
+        rtt_ms: round-trip time in milliseconds, or ``None`` if not reported.
+            Sub-millisecond replies (``time<1ms``) are recorded as ``0.0``,
+            which is falsy -- test ``is None`` rather than truthiness.
+        ttl: TTL/hop-limit of the reply, or ``None``. Counts *down* from the
+            sender's initial value, so a smaller number means more hops.
+        source: address that answered, which on success is the destination.
+        attempts: how many probes were sent before this outcome.
+    """
+
+    __slots__ = ("ok", "host", "rtt_ms", "ttl", "source", "attempts")
+
+    def __init__(self, ok, host, rtt_ms=None, ttl=None, source=None, attempts=1):
+        self.ok = ok
+        self.host = host
+        self.rtt_ms = rtt_ms
+        self.ttl = ttl
+        self.source = source
+        self.attempts = attempts
+
+    def __bool__(self) -> bool:
+        return bool(self.ok)
+
+    def __repr__(self) -> str:
+        return "PingResult(ok=%r, host=%r, rtt_ms=%r, ttl=%r)" % (
+            self.ok,
+            self.host,
+            self.rtt_ms,
+            self.ttl,
+        )
+
+    def __eq__(self, other: object) -> bool:
+        # Compares equal to a plain bool so existing `== True` assertions and
+        # boolean-returning call sites keep behaving.
+        if isinstance(other, bool):
+            return bool(self) is other
+        if isinstance(other, PingResult):
+            return (
+                self.ok == other.ok
+                and self.host == other.host
+                and self.rtt_ms == other.rtt_ms
+                and self.ttl == other.ttl
+            )
+        return NotImplemented
+
+    def __hash__(self) -> int:
+        return hash((self.ok, self.host, self.rtt_ms, self.ttl))
+
+
+#: ``time=5ms`` / ``time<1ms`` / ``time=0.043 ms`` across platforms.
+_PING_RTT = _re.compile(r"time[=<]\s*([0-9]+(?:\.[0-9]+)?)\s*ms", _re.IGNORECASE)
+#: ``TTL=119`` (Windows) / ``ttl=54`` (POSIX).
+_PING_TTL = _re.compile(r"ttl[=\s]\s*([0-9]+)", _re.IGNORECASE)
+
+
+def _parse_ping_output(text: str, expect):
+    """Pull (rtt_ms, ttl, source) out of ping's stdout.
+
+    Reads only numeric tokens that are stable across platforms and locales;
+    the surrounding prose is never matched.
+    """
+    rtt = ttl = source = None
+    for line in text.splitlines():
+        lowered = line.lower()
+        if "expired" in lowered or "unreachable" in lowered:
+            continue
+        found_rtt = _PING_RTT.search(line)
+        found_ttl = _PING_TTL.search(line)
+        if found_rtt is None and found_ttl is None:
+            continue
+        if found_rtt is not None and rtt is None:
+            try:
+                rtt = float(found_rtt.group(1))
+            except ValueError:
+                pass
+        if found_ttl is not None and ttl is None:
+            try:
+                ttl = int(found_ttl.group(1))
+            except ValueError:
+                pass
+        if source is None and expect is not None and str(expect) in line:
+            source = expect
+        break
+    return rtt, ttl, source
 
 
 def ping(
@@ -832,8 +1129,21 @@ def ping(
     tries: int = 1,
     timeout: float = 1.0,
     ipv6: Optional[bool] = None,
-) -> bool:
-    """Return ``True`` if ``hostname`` answers an ICMP echo within ``tries`` attempts.
+    source: Optional[str] = None,
+    size: Optional[int] = None,
+    ttl: Optional[int] = None,
+    dont_fragment: bool = False,
+) -> "PingResult":
+    """Ping ``hostname``; the result is truthy if it answered.
+
+    Returns a :class:`PingResult` rather than a bare bool, so the reply details
+    are available without re-running and re-parsing ``ping``::
+
+        if ping("8.8.8.8"):                  # still reads as a boolean
+            ...
+        result = ping("8.8.8.8")
+        result.rtt_ms                        # 5.0
+        result.ttl                           # 119
 
     Shells out to the platform ``ping`` binary, translating ``timeout`` into the
     right per-platform flags (Windows ``-n``/``-w`` in milliseconds; POSIX
@@ -849,9 +1159,49 @@ def ping(
         never down to 0, which some implementations read as "wait forever".
     :param ipv6: force the IPv6 (``-6``) or IPv4 (``-4``) binary. ``None``
         (default) lets the system resolver decide.
+    :param source: send from this local address, choosing which interface the
+        echo leaves by. Accepts an :class:`Interface`, an address object, or a
+        string::
 
-    An empty ``hostname`` is ``False``. Never raises: a missing ``ping`` binary
-    or a non-zero exit both yield ``False``.
+            ping("8.8.8.8", source=get_source_ip())            # address object
+            ping("8.8.8.8", source=get_interfaces()[0])        # Interface
+            ping("8.8.8.8", source="192.0.2.10")               # literal
+            ping("8.8.8.8", source=MACAddress("00:00:5e:00:53:01"))  # by MAC
+
+        A **MAC address** (object or string) is resolved to the interface
+        holding it -- convenient when the adapter is known by hardware address
+        rather than by a possibly-changing IP. An unknown MAC yields a falsy
+        result rather than falling back.
+
+        An ``Interface`` contributes its first non-loopback IPv4 address (its
+        IPv6 address when ``ipv6=True``), because Windows ``-S`` requires an
+        *address* -- passing an adapter name there fails. POSIX ``-I`` would
+        accept a name, but resolving it here keeps behaviour identical on both.
+        An interface holding no usable address yields a falsy result rather
+        than falling back to the default route.
+
+        Likewise an address not held by any local interface makes ``ping``
+        fail, so the result is falsy -- this never silently reroutes.
+    :param size: ICMP payload bytes (Windows ``-l``, POSIX ``-s``). The wire
+        packet is 28 bytes larger (20 IP + 8 ICMP header), which matters when
+        sizing against an MTU: payload 1472 is exactly 1500 on the wire.
+    :param ttl: initial hop limit (``-i`` on Windows, ``-t`` on POSIX -- the
+        letters are **swapped** between platforms, a classic source of scripts
+        that silently do the wrong thing).
+
+        A ``ttl`` too small to reach the target yields ``False`` on every
+        platform. That takes explicit work on Windows, whose ``ping`` exits
+        ``0`` for "TTL expired in transit" -- counting a router's error as a
+        received reply -- so the raw exit code would report success although
+        the target was never reached. The reply address is verified instead
+        (see below), which is locale-independent.
+    :param dont_fragment: set the DF bit (Windows ``-f``, Linux ``-M do``).
+        Combined with ``size``, the standard manual MTU probe: the largest
+        ``size`` that still succeeds is the path MTU minus 28. Unsupported on
+        macOS/BSD ping, where it is ignored.
+
+    An empty ``hostname`` gives a falsy result. Never raises: a missing ``ping``
+    binary or a non-zero exit both yield a falsy :class:`PingResult`.
 
     .. note::
        This measures whether *ICMP echo* is answered, which is not the same as
@@ -860,7 +1210,7 @@ def ping(
        the port you actually care about when you can.
     """
     if not hostname:
-        return False
+        return PingResult(False, hostname, attempts=0)
 
     tries = max(1, tries)
     if _os.name == "nt":
@@ -876,11 +1226,48 @@ def ping(
     elif ipv6 is False:
         options.append("-4")
 
+    if source is not None:
+        resolved_source = _source_argument(source, want_ipv6=bool(ipv6))
+        if resolved_source is None:
+            # An interface with no usable address cannot be a source.
+            return PingResult(False, hostname, attempts=0)
+        # Windows spells it -S <addr>; POSIX uses -I <addr-or-ifname>.
+        options.extend(["-S" if _os.name == "nt" else "-I", resolved_source])
+
+    if size is not None:
+        if size < 0:
+            raise ValueError("size must be non-negative, got %r" % (size,))
+        options.extend(["-l" if _os.name == "nt" else "-s", str(size)])
+
+    if ttl is not None:
+        if not 1 <= ttl <= 255:
+            raise ValueError("ttl must be 1-255, got %r" % (ttl,))
+        # -i on Windows is TTL; on POSIX -i is the *interval* and -t is TTL.
+        options.extend(["-i" if _os.name == "nt" else "-t", str(ttl)])
+
+    if dont_fragment:
+        if _os.name == "nt":
+            options.append("-f")
+        elif _sys.platform.startswith("linux"):
+            options.extend(["-M", "do"])
+        # macOS/BSD ping has no portable DF flag; silently omitted.
+
     # A hard cap on the subprocess itself: -W bounds how long ping waits for a
     # reply, but not how long name resolution can hang beforehand.
     wall_timeout = max(timeout, 1.0) + 5.0
 
-    for _ in range(tries):
+    # Windows exits 0 for "TTL expired in transit", so a zero exit alone does
+    # not mean the target answered. Confirm the reply came from the target
+    # itself by matching its address in the output -- an address comparison,
+    # never the localised prose around it.
+    expect_address = try_parse(hostname)
+    if expect_address is None:
+        try:
+            expect_address = try_parse(_socket.gethostbyname(hostname))
+        except OSError:
+            expect_address = None
+
+    for attempt in range(1, tries + 1):
         try:
             response = _run(
                 ["ping", *options, hostname],
@@ -889,12 +1276,53 @@ def ping(
             )
         except (OSError, _SubprocessTimeout):
             # No ping binary, or it hung past the wall clock.
-            return False
-        if response.returncode == 0:
-            return True
-    return False
+            return PingResult(False, hostname, attempts=attempt)
+        if response.returncode != 0:
+            continue
+
+        text = (response.stdout or b"").decode("utf-8", "replace")
+
+        # A zero exit is not proof the *target* answered: Windows also exits 0
+        # for "TTL expired in transit", where a router replied instead. Confirm
+        # by address, which is locale-independent -- but only when the target's
+        # address is known, since a bare exit code is all we have otherwise.
+        if expect_address is not None:
+            needle = "%s:" % expect_address
+            answered = False
+            for line in text.splitlines():
+                if needle not in line:
+                    continue
+                lowered = line.lower()
+                if "expired" in lowered or "unreachable" in lowered:
+                    continue  # a router's error, not the destination
+                if "bytes=" in lowered or "time" in lowered or "ttl=" in lowered:
+                    answered = True
+                    break
+            if not answered:
+                continue
+
+        rtt, reply_ttl, source = _parse_ping_output(text, expect_address)
+        return PingResult(
+            True,
+            hostname,
+            rtt_ms=rtt,
+            ttl=reply_ttl,
+            source=source if source is not None else expect_address,
+            attempts=attempt,
+        )
+    return PingResult(False, hostname, attempts=tries)
 
 
 # Imported last: _ifaddrs builds MACAddress objects, so it must load after the
 # class above exists.
 from ._ifaddrs import Interface, get_interfaces  # noqa: E402
+from ._sockets import (  # noqa: E402
+    Route,
+    free_port,
+    get_source_ip,
+    hop_count,
+    path_mtu,
+    get_route,
+    tcp_check,
+    wait_for_port,
+)

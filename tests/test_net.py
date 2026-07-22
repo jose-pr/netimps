@@ -91,17 +91,38 @@ def fake_dns(monkeypatch):
     return _FakeResolver
 
 
-def test_resolve_returns_list_of_strings(fake_dns):
+def test_resolve_returns_native_address_objects(fake_dns):
+    """Address records come back as ipaddress objects, not strings."""
     fake_dns.result = ["93.184.216.34"]
     result = resolve("example.com")
-    assert result == ["93.184.216.34"]
     assert isinstance(result, list)
-    assert result[0] == "93.184.216.34"  # index-0 access is the documented contract
+    assert result == [IPv4Address("93.184.216.34")]
+    # Usable as an address without re-parsing -- the point of the change.
+    assert result[0].is_global
+
+
+def test_resolve_non_address_records_stay_strings(fake_dns):
+    """Non-address records stay str -- with the trailing root dot removed."""
+    fake_dns.result = ["10 mail.example.com."]
+    assert resolve("example.com", "mx") == ["10 mail.example.com"]
+
+
+def test_resolve_strips_root_dot_from_names(fake_dns):
+    fake_dns.result = ["ns1.example.com."]
+    assert resolve("example.com", "ns") == ["ns1.example.com"]
+
+
+def test_resolve_unquotes_txt(fake_dns):
+    fake_dns.result = ['"v=spf1 -all"']
+    assert resolve("example.com", "txt") == ["v=spf1 -all"]
 
 
 def test_resolve_multiple_records(fake_dns):
     fake_dns.result = ["1.2.3.4", "5.6.7.8"]
-    assert resolve("example.com") == ["1.2.3.4", "5.6.7.8"]
+    assert resolve("example.com") == [
+        IPv4Address("1.2.3.4"),
+        IPv4Address("5.6.7.8"),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -135,14 +156,14 @@ def test_resolve_forwards_timeout_port_and_tcp(fake_dns):
 def test_resolve_takes_rdtype_second(fake_dns):
     """The record type is positional-second -- the argument callers vary."""
     fake_dns.result = ["2606:2800::1"]
-    assert resolve("example.com", "aaaa") == ["2606:2800::1"]
+    assert resolve("example.com", "aaaa") == [netimps.parse("2606:2800::1")]
     assert fake_dns.last["rtype"] == "aaaa"
 
 
 def test_resolve_custom_nameserver_string(fake_dns):
     fake_dns.result = ["8.8.8.8"]
     # Should not raise when a single ns string is provided.
-    assert resolve("example.com", ns="1.1.1.1") == ["8.8.8.8"]
+    assert resolve("example.com", ns="1.1.1.1") == [IPv4Address("8.8.8.8")]
 
 
 # --------------------------------------------------------------------------- #
@@ -151,7 +172,10 @@ def test_resolve_custom_nameserver_string(fake_dns):
 
 
 def test_ping_empty_hostname_is_false():
-    assert ping("") is False
+    assert bool(ping("")) is False
+
+
+_REPLY = b"Reply from 127.0.0.1: bytes=32 time=1ms TTL=128\n"
 
 
 def test_ping_success(monkeypatch):
@@ -159,12 +183,54 @@ def test_ping_success(monkeypatch):
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
-        return types.SimpleNamespace(returncode=0)
+        return subprocess.CompletedProcess(cmd, 0, stdout=_REPLY)
 
     monkeypatch.setattr(netimps, "_run", fake_run)
-    assert ping("127.0.0.1") is True
+    assert bool(ping("127.0.0.1")) is True
     assert calls[0][0] == "ping"
     assert "127.0.0.1" in calls[0]
+
+
+def test_ping_reports_rtt_and_ttl(monkeypatch):
+    """The result carries the reply details, not just a boolean."""
+
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 0, stdout=_REPLY)
+
+    monkeypatch.setattr(netimps, "_run", fake_run)
+    result = ping("127.0.0.1")
+    assert result.ok is True
+    assert result.rtt_ms == 1.0
+    assert result.ttl == 128
+    assert result.attempts == 1
+
+
+def test_ping_zero_exit_is_not_enough_without_a_matching_reply(monkeypatch):
+    """Windows exits 0 for 'TTL expired in transit' -- a router, not the target.
+
+    The reply address is verified, so output that never names the destination
+    as an answering host must not count as success.
+    """
+
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(
+            cmd, 0, stdout=b"Reply from 192.0.2.1: TTL expired in transit.\n"
+        )
+
+    monkeypatch.setattr(netimps, "_run", fake_run)
+    assert bool(ping("8.8.8.8")) is False
+
+
+def test_ping_result_is_boolean_compatible():
+    """Existing `if ping(...)` and `== True` call sites must keep working."""
+    ok = netimps.PingResult(True, "h", rtt_ms=1.0, ttl=64)
+    bad = netimps.PingResult(False, "h")
+    assert ok and not bad
+    assert ok == True  # noqa: E712 - the compatibility being asserted
+    assert bad == False  # noqa: E712
+    assert bool(ok) is True and bool(bad) is False
+    # rtt_ms of 0.0 (sub-millisecond) is falsy but present.
+    assert netimps.PingResult(True, "h", rtt_ms=0.0).rtt_ms is not None
 
 
 def test_ping_failure_exhausts_tries(monkeypatch):
@@ -172,10 +238,10 @@ def test_ping_failure_exhausts_tries(monkeypatch):
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
-        return types.SimpleNamespace(returncode=1)
+        return subprocess.CompletedProcess(cmd, 1, stdout=b"")
 
     monkeypatch.setattr(netimps, "_run", fake_run)
-    assert ping("10.255.255.1", tries=3) is False
+    assert bool(ping("10.255.255.1", tries=3)) is False
     assert len(calls) == 3
 
 
@@ -252,7 +318,7 @@ def _capture_ping(monkeypatch, returncode=0):
 
     def fake_run(cmd, **kwargs):
         calls.append((cmd, kwargs))
-        return subprocess.CompletedProcess(cmd, returncode)
+        return subprocess.CompletedProcess(cmd, returncode, stdout=b"")
 
     monkeypatch.setattr(netimps, "_run", fake_run)
     return calls
@@ -270,19 +336,19 @@ def test_ping_timeout_never_rounds_down_to_zero(monkeypatch):
 
 def test_ping_stops_at_first_success(monkeypatch):
     calls = _capture_ping(monkeypatch, returncode=0)
-    assert netimps.ping("host", tries=5) is True
+    assert bool(netimps.ping("host", tries=5)) is True
     assert len(calls) == 1  # succeeded first go, no wasted attempts
 
 
 def test_ping_retries_until_tries_exhausted(monkeypatch):
     calls = _capture_ping(monkeypatch, returncode=1)
-    assert netimps.ping("host", tries=3) is False
+    assert bool(netimps.ping("host", tries=3)) is False
     assert len(calls) == 3
 
 
 def test_ping_treats_zero_tries_as_one(monkeypatch):
     calls = _capture_ping(monkeypatch, returncode=1)
-    assert netimps.ping("host", tries=0) is False
+    assert bool(netimps.ping("host", tries=0)) is False
     assert len(calls) == 1
 
 
@@ -310,7 +376,7 @@ def test_ping_returns_false_when_binary_missing(monkeypatch):
         raise FileNotFoundError("ping not installed")
 
     monkeypatch.setattr(netimps, "_run", no_binary)
-    assert netimps.ping("host") is False
+    assert bool(netimps.ping("host")) is False
 
 
 def test_ping_returns_false_when_subprocess_hangs(monkeypatch):
@@ -318,7 +384,7 @@ def test_ping_returns_false_when_subprocess_hangs(monkeypatch):
         raise subprocess.TimeoutExpired(cmd, 1)
 
     monkeypatch.setattr(netimps, "_run", hang)
-    assert netimps.ping("host") is False
+    assert bool(netimps.ping("host")) is False
 
 
 # --------------------------------------------------------------------------- #
