@@ -33,7 +33,7 @@ __all__ = [
     "bind_error_hint",
     "interface_for",
     "get_source_ip",
-    "free_port",
+    "get_free_port",
     "tcp_check",
     "wait_for_port",
     "get_route",
@@ -253,13 +253,16 @@ def get_source_ip(dst: str = _DEFAULT_PROBE, port: int = 80) -> "Optional[Any]":
         sock.close()
 
 
-def free_port(src: str = "127.0.0.1", family: int = _socket.AF_INET) -> int:
+def get_free_port(src: str = "127.0.0.1", family: int = _socket.AF_INET) -> int:
     """Return a port number that was free a moment ago.
 
-    Binds port 0, reads back what the OS assigned, and closes::
+    Binds port 0, reads back whatever the OS assigned, and closes::
 
-        port = free_port()
+        port = get_free_port()
         server = start_my_server(port=port)
+
+    A *getter*, despite "free" in the name -- it acquires a number, it does not
+    release anything. The port is **not** held open for you.
 
     .. warning::
        **Inherently racy.** The port is released the instant this returns, so

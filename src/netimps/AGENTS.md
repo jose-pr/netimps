@@ -25,7 +25,7 @@ The package is consistent about what the first argument means:
 | Name | Meaning | Examples |
 | --- | --- | --- |
 | `dst` | where traffic is **sent** | `ping`, `tcp_check`, `wait_for_port`, `get_route`, `hop_count`, `discover_mtu` |
-| `src` | where traffic is **sent from** | `ping(src=)`, `free_port(src=)`, `discover_mtu(src=)` |
+| `src` | where traffic is **sent from** | `ping(src=)`, `get_free_port(src=)`, `discover_mtu(src=)` |
 | `host` / `network` | the thing being **examined** | `scan_ports(host)`, `scan_hosts(network)` |
 | `address` / `ip` | an address being **classified** (no DNS) | `get_ip`, `interface_for`, `is_multicast`, `is_link_scoped` |
 
@@ -257,7 +257,7 @@ else is `str` with the trailing root dot stripped and TXT strings unquoted.
   would use to reach `dst`. **Sends no packets.** The answer depends on
   `dst`: with a VPN up, a public probe returns the tunnel address and a LAN
   probe the physical one. Correct where hostname resolution picks a VM adapter.
-- **`free_port(src="127.0.0.1", family=AF_INET) -> int`** — bind port 0 and
+- **`get_free_port(src="127.0.0.1", family=AF_INET) -> int`** — bind port 0 and
   read it back. **Inherently racy** — the port frees the instant it returns; if
   you can, bind port 0 in the server itself instead. `SO_REUSEADDR` is
   deliberately *not* set (it would hand back a `TIME_WAIT` port).

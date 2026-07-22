@@ -25,7 +25,7 @@ and no wheel to miss for your platform.
 - **`MACAddress`** — colon/hyphen/dot/bare plus `int`/`bytes`, hashable and
   ordered, with `.oui`, `.is_multicast`, `.is_local` and case-selectable
   rendering.
-- **The socket helpers everyone rewrites** — `get_source_ip`, `free_port`,
+- **The socket helpers everyone rewrites** — `get_source_ip`, `get_free_port`,
   `tcp_check`, `wait_for_port`.
 - **Routing and MTU** — `get_route` (first hop, unprivileged), `hop_count`
   (raw sockets *or* traceroute fallback), `discover_mtu` / `get_pmtu`, `Interface.mtu`.
@@ -126,7 +126,7 @@ netimps.retry(lambda: netimps.tcp_check("example.com", 443), attempts=3)
 | `resolve` | DNS lookup → native records (`[]` on failure) |
 | `ping`, `PingResult` | reachability with RTT and TTL |
 | `bind`, `bind_error_hint`, `interface_for` | socket creation and diagnosis |
-| `get_source_ip`, `free_port`, `tcp_check`, `wait_for_port` | socket helpers |
+| `get_source_ip`, `get_free_port`, `tcp_check`, `wait_for_port` | socket helpers |
 | `UdpEndpoint`, `Datagram` | UDP receive with arrival interface (`IP_PKTINFO`) |
 | `Host` | hostname-or-address value type |
 | `retry`, `backoff_delays` | bounded retry with exponential backoff |

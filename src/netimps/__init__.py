@@ -127,7 +127,7 @@ __all__ = [
     "iter_addresses",
     # Socket / route helpers.
     "get_source_ip",
-    "free_port",
+    "get_free_port",
     "tcp_check",
     "wait_for_port",
     "get_route",
@@ -394,7 +394,7 @@ from ._sockets import (  # noqa: E402
     bind_error_hint,
     interface_for,
     Route,
-    free_port,
+    get_free_port,
     get_source_ip,
     hop_count,
     get_route,

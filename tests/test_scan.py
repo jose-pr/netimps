@@ -27,7 +27,7 @@ def listener():
 
 
 def test_scan_ports_finds_a_listener(listener):
-    closed = netimps.free_port()
+    closed = netimps.get_free_port()
     result = scan_ports("127.0.0.1", [listener, closed], timeout=1.0)
     assert listener in result
     assert closed not in result
@@ -103,7 +103,7 @@ def test_scan_ports_empty_is_empty():
 
 def test_scan_ports_closed_host_is_empty():
     """An unreachable host yields nothing rather than raising."""
-    assert scan_ports("127.0.0.1", [netimps.free_port()], timeout=0.3) == []
+    assert scan_ports("127.0.0.1", [netimps.get_free_port()], timeout=0.3) == []
 
 
 def test_port_ranges_are_sane():
@@ -129,7 +129,7 @@ def test_scan_hosts_finds_loopback(listener):
 
 
 def test_scan_hosts_skips_hosts_with_nothing_open():
-    assert scan_hosts("127.0.0.1/32", port=netimps.free_port(), timeout=0.3) == []
+    assert scan_hosts("127.0.0.1/32", port=netimps.get_free_port(), timeout=0.3) == []
 
 
 @pytest.mark.parametrize("network", ["10.0.0.0/8", "0.0.0.0/0", "172.16.0.0/12"])
