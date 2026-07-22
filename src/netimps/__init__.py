@@ -149,7 +149,7 @@ __all__ = [
     "is_multicast",
     "Route",
     "hop_count",
-    "path_mtu",
+    "get_pmtu",
     "discover_mtu",
     "HOST_DN",
 ]
@@ -390,13 +390,13 @@ from ._udp import Datagram, UdpEndpoint  # noqa: E402
 from ._sockets import (  # noqa: E402
     bind,
     discover_mtu,
+    get_pmtu,
     bind_error_hint,
     interface_for,
     Route,
     free_port,
     get_source_ip,
     hop_count,
-    path_mtu,
     get_route,
     tcp_check,
     wait_for_port,

@@ -294,19 +294,61 @@ def test_is_icmp_reply_rejects_short_packets():
 
 
 # --------------------------------------------------------------------------- #
-# path_mtu                                                                     #
+# MTU: get_pmtu (lookup) and discover_mtu (measurement)                       #
 # --------------------------------------------------------------------------- #
 
 
-def test_path_mtu_returns_none_without_ip_mtu(monkeypatch):
+def test_get_pmtu_returns_none_without_ip_mtu(monkeypatch):
     """Windows has no IP_MTU; the documented answer is None, not a guess."""
     monkeypatch.delattr(_sockets._socket, "IP_MTU", raising=False)
-    assert netimps.path_mtu("127.0.0.1") is None
+    assert netimps.get_pmtu("127.0.0.1") is None
 
 
-def test_path_mtu_shape():
-    result = netimps.path_mtu("127.0.0.1")
+def test_get_pmtu_shape():
+    """A lookup, so None is a perfectly normal answer."""
+    result = netimps.get_pmtu("127.0.0.1")
     assert result is None or (isinstance(result, int) and result > 0)
+
+
+def test_get_pmtu_sends_nothing(monkeypatch):
+    """It is a lookup, not a measurement -- no packets leave."""
+    calls = []
+    real = _sockets._socket.socket
+
+    class NoSend(real):
+        def send(self, *a, **k):  # pragma: no cover - must not run
+            calls.append("send")
+            raise AssertionError("get_pmtu must not send")
+
+        def sendto(self, *a, **k):  # pragma: no cover - must not run
+            calls.append("sendto")
+            raise AssertionError("get_pmtu must not send")
+
+    monkeypatch.setattr(_sockets._socket, "socket", NoSend)
+    netimps.get_pmtu("127.0.0.1")
+    assert not calls
+
+
+def test_discover_mtu_probe_false_delegates_to_get_pmtu(monkeypatch):
+    """probe=False is exactly get_pmtu -- and must not ping."""
+    monkeypatch.setattr(_sockets, "get_pmtu", lambda dest, port=80: 1400)
+    monkeypatch.setattr(
+        netimps, "ping", lambda *a, **k: pytest.fail("probe=False must not ping")
+    )
+    assert netimps.discover_mtu("10.0.0.1", probe=False) == 1400
+
+
+def test_discover_mtu_ignores_the_kernel_by_default(monkeypatch):
+    """The default measures the real path rather than trusting a cached guess.
+
+    Verified on a real host where the two genuinely disagreed: the local link
+    was 9000 and get_pmtu returned None, while probing found the true 1500.
+    """
+    monkeypatch.setattr(
+        _sockets, "get_pmtu", lambda *a, **k: pytest.fail("default must probe")
+    )
+    monkeypatch.setattr(netimps, "ping", _fake_ping(1500))
+    assert netimps.discover_mtu("10.0.0.1") == 1500
 
 
 # --------------------------------------------------------------------------- #

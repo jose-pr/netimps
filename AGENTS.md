@@ -33,7 +33,7 @@ netimps.ping("8.8.8.8").rtt_ms             # 9.0
 - **Socket helpers** — `get_source_ip`, `free_port`, `tcp_check`,
   `wait_for_port`: the four every network tool rewrites.
 - **Routing and MTU** — `get_route` (first hop, unprivileged), `hop_count`
-  (raw sockets or traceroute fallback), `path_mtu`, `Interface.mtu`.
+  (raw sockets or traceroute fallback), `discover_mtu` / `get_pmtu`, `Interface.mtu`.
 - **CIDR maths and host parsing** — `collapse`, `subtract` (absent from
   `ipaddress`), and `normalize_host` with correct IPv6 bracket handling.
 - **Scanning** — concurrent `scan_ports` / `scan_hosts`, ports addressable by
@@ -104,7 +104,8 @@ map:
 | `Host` | hostname-or-address value type |
 | `retry`, `backoff_delays` | bounded retry with exponential backoff |
 | `APIPA`, `LOOPBACK_V4`, `LOOPBACK_V6`, `LINK_LOCAL_V6` | named networks |
-| `get_route`, `Route`, `hop_count`, `path_mtu` | routing, distance and MTU |
+| `get_route`, `Route`, `hop_count` | routing and distance |
+| `discover_mtu`, `get_pmtu` | path MTU: measured, or the kernel's cached guess |
 | `scan_ports`, `scan_hosts`, `PORT_RANGES` | concurrent scanning |
 | `multicast_socket`, `join_group`, `leave_group`, `is_multicast` | multicast |
 | `HOST_DN` | `platform.node()` of the running host, captured at import time |
@@ -132,6 +133,14 @@ map:
 - **Check for silent platform gaps before adding a socket option.** `IP_MTU`,
   `IP_MTU_DISCOVER`, `IP_DONTFRAG` and `SO_REUSEPORT` do not exist on Windows;
   binding a multicast socket to the group address fails there too.
+- **Windows exposes no cached path MTU.** Already investigated, so do not
+  re-derive it: `MIB_IPFORWARDROW.dwForwardMtu` reads 0 (unsupported), and
+  `MIB_IPFORWARD_ROW2` has no MTU field. `Interface.mtu` is the link MTU;
+  `discover_mtu` probing is the only way to get a path MTU there.
+- **`GetBestRoute`, not `GetIpForwardTable`.** It asks Windows which route it
+  would pick, so the kernel does longest-prefix matching. The POSIX side has no
+  equivalent and must parse `/proc/net/route` by hand — which is where the
+  loopback bug came from, since that file omits loopback entirely.
 - Run `black src/ tests/` before committing; CI uses `--check`.
 
 ## Develop

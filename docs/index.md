@@ -51,8 +51,9 @@ A few behaviours are deliberate:
 - **`ping(ttl=...)` behaves the same on every OS.** Windows `ping` exits `0`
   for "TTL expired in transit", so the reply address is verified instead of
   trusting the exit code.
-- **`path_mtu` returns `None` on Windows** — `IP_MTU` does not exist there, and
-  guessing would be worse. Use `Interface.mtu` for the local link.
+- **`discover_mtu` measures the real path**, sending DF-flagged pings, while
+  `get_pmtu` only reports what the kernel already cached (usually nothing, and
+  never anything on Windows).
 
 ## Learn more
 

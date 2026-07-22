@@ -38,7 +38,8 @@ below is simply what the package contains.
   on via `IP_PKTINFO`, degrading where `recvmsg` does not exist.
 - **Routing and MTU** -- `get_route()` (first hop, unprivileged), `hop_count()`
   (raw sockets or a traceroute fallback, so it works without elevation),
-  `path_mtu()`, `Interface.mtu`.
+  `discover_mtu()` (measures the real path with DF-flagged pings) and
+  `get_pmtu()` (the kernel's cached answer, usually `None`), `Interface.mtu`.
 - **CIDR maths and host parsing** -- `collapse()`, `subtract()` (absent from
   `ipaddress`), and `normalize_host()`, which keeps `"::1"` an address rather
   than host `"::"` port `1`.

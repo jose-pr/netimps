@@ -260,10 +260,22 @@ else is `str` with the trailing root dot stripped and TXT strings unquoted.
   `allow_traceroute=False` requires the in-process path and raises
   `PermissionError` instead. **`None` means "no answer", never "unreachable"** —
   firewalls routinely drop ICMP even for an elevated process.
-- **`path_mtu(dest, port=80) -> int | None`** — reads `IP_MTU`. **Linux only in
-  practice**: `IP_MTU`, `IP_MTU_DISCOVER` and `IP_DONTFRAG` do not exist on
-  Windows, so it returns `None` there rather than guessing. For the local link
-  MTU — which *is* available everywhere — use `Interface.mtu`.
+- **`discover_mtu(dest, low=576, high=9000, timeout=1.0, source=None, probe=True)`**
+  — **measures** the path MTU by binary-searching DF-flagged pings, so packets
+  really traverse the path. Works on every platform (it only needs the `ping`
+  binary) and is the one to use when the answer must be right. Returns the MTU
+  **including headers**, comparable with `Interface.mtu`. `None` means the
+  destination never answered — indistinguishable from "every size was too big".
+- **`get_pmtu(dest, port=80) -> int | None`** — a **lookup**, not a
+  measurement: reads the `IP_MTU` the kernel has *already* learned, and sends
+  nothing. Usually `None`, because the kernel only knows a path MTU once prior
+  traffic forced it to learn one; **always `None` on Windows**, which has no
+  `IP_MTU`. `discover_mtu(..., probe=False)` is exactly this.
+
+> **The two answer different questions.** On one real host the local link was
+> 9000, `get_pmtu` returned `None`, and `discover_mtu` found the true 1500 —
+> a bottleneck several hops away that nothing local could reveal. Use
+> `Interface.mtu` for the local link, `discover_mtu` for the path.
 
 ## Scanning
 
