@@ -38,18 +38,18 @@ class PingResult:
             which is falsy -- test ``is None`` rather than truthiness.
         ttl: TTL/hop-limit of the reply, or ``None``. Counts *down* from the
             sender's initial value, so a smaller number means more hops.
-        source: address that answered, which on success is the destination.
+        src: address that answered, which on success is the destination.
         attempts: how many probes were sent before this outcome.
     """
 
-    __slots__ = ("ok", "host", "rtt_ms", "ttl", "source", "attempts")
+    __slots__ = ("ok", "host", "rtt_ms", "ttl", "src", "attempts")
 
-    def __init__(self, ok, host, rtt_ms=None, ttl=None, source=None, attempts=1):
+    def __init__(self, ok, host, rtt_ms=None, ttl=None, src=None, attempts=1):
         self.ok = ok
         self.host = host
         self.rtt_ms = rtt_ms
         self.ttl = ttl
-        self.source = source
+        self.src = src
         self.attempts = attempts
 
     def __bool__(self) -> bool:
@@ -88,12 +88,12 @@ _PING_TTL = _re.compile(r"ttl[=\s]\s*([0-9]+)", _re.IGNORECASE)
 
 
 def _parse_ping_output(text: str, expect):
-    """Pull (rtt_ms, ttl, source) out of ping's stdout.
+    """Pull (rtt_ms, ttl, src) out of ping's stdout.
 
     Reads only numeric tokens that are stable across platforms and locales;
     the surrounding prose is never matched.
     """
-    rtt = ttl = source = None
+    rtt = ttl = src = None
     for line in text.splitlines():
         lowered = line.lower()
         if "expired" in lowered or "unreachable" in lowered:
@@ -112,23 +112,23 @@ def _parse_ping_output(text: str, expect):
                 ttl = int(found_ttl.group(1))
             except ValueError:
                 pass
-        if source is None and expect is not None and str(expect) in line:
-            source = expect
+        if src is None and expect is not None and str(expect) in line:
+            src = expect
         break
-    return rtt, ttl, source
+    return rtt, ttl, src
 
 
 def ping(
-    hostname: str,
+    dst: str,
     tries: int = 1,
     timeout: float = 1.0,
     ipv6: Optional[bool] = None,
-    source: Optional[str] = None,
+    src=None,
     size: Optional[int] = None,
     ttl: Optional[int] = None,
     dont_fragment: bool = False,
 ) -> "PingResult":
-    """Ping ``hostname``; the result is truthy if it answered.
+    """Ping ``dst``; the result is truthy if it answered.
 
     Returns a :class:`PingResult` rather than a bare bool, so the reply details
     are available without re-running and re-parsing ``ping``::
@@ -153,14 +153,14 @@ def ping(
         never down to 0, which some implementations read as "wait forever".
     :param ipv6: force the IPv6 (``-6``) or IPv4 (``-4``) binary. ``None``
         (default) lets the system resolver decide.
-    :param source: send from this local address, choosing which interface the
+    :param src: send from this local address, choosing which interface the
         echo leaves by. Accepts an :class:`Interface`, an address object, or a
         string::
 
-            ping("8.8.8.8", source=get_source_ip())            # address object
-            ping("8.8.8.8", source=get_interfaces()[0])        # Interface
-            ping("8.8.8.8", source="192.0.2.10")               # literal
-            ping("8.8.8.8", source=MACAddress("00:00:5e:00:53:01"))  # by MAC
+            ping("8.8.8.8", src=get_source_ip())            # address object
+            ping("8.8.8.8", src=get_interfaces()[0])        # Interface
+            ping("8.8.8.8", src="192.0.2.10")               # literal
+            ping("8.8.8.8", src=MACAddress("00:00:5e:00:53:01"))  # by MAC
 
         A **MAC address** (object or string) is resolved to the interface
         holding it -- convenient when the adapter is known by hardware address
@@ -183,7 +183,7 @@ def ping(
         Verified on Windows against the DF boundary (1472 passes, 1473 does
         not); ``ping(8)`` documents ``-s`` as "data bytes" identically.
     :param ttl: initial hop limit (``-i`` on Windows, ``-t`` on POSIX -- the
-        letters are **swapped** between platforms, a classic source of scripts
+        letters are **swapped** between platforms, a classic src of scripts
         that silently do the wrong thing).
 
         A ``ttl`` too small to reach the target yields ``False`` on every
@@ -197,7 +197,7 @@ def ping(
         ``size`` that still succeeds is the path MTU minus 28. Unsupported on
         macOS/BSD ping, where it is ignored.
 
-    An empty ``hostname`` gives a falsy result. Never raises: a missing ``ping``
+    An empty ``dst`` gives a falsy result. Never raises: a missing ``ping``
     binary or a non-zero exit both yield a falsy :class:`PingResult`.
 
     .. note::
@@ -206,8 +206,8 @@ def ping(
        echo requests while serving traffic normally. Prefer a TCP connect to
        the port you actually care about when you can.
     """
-    if not hostname:
-        return PingResult(False, hostname, attempts=0)
+    if not dst:
+        return PingResult(False, dst, attempts=0)
 
     tries = max(1, tries)
     if _os.name == "nt":
@@ -223,10 +223,10 @@ def ping(
     elif ipv6 is False:
         options.append("-4")
 
-    if source is not None:
-        resolved_source = _interface_address(source, want_ipv6=bool(ipv6), strict=False)
+    if src is not None:
+        resolved_source = _interface_address(src, want_ipv6=bool(ipv6), strict=False)
         if resolved_source is None:
-            # An interface with no usable address cannot be a source.
+            # An interface with no usable address cannot be a src.
             return PingResult(False, hostname, attempts=0)
         # Windows spells it -S <addr>; POSIX uses -I <addr-or-ifname>.
         options.extend(["-S" if _os.name == "nt" else "-I", str(resolved_source)])
@@ -259,23 +259,23 @@ def ping(
     # never the localised prose around it.
     from . import try_parse as _try_parse
 
-    expect_address = _try_parse(hostname)
+    expect_address = _try_parse(dst)
     if expect_address is None:
         try:
-            expect_address = _try_parse(_socket.gethostbyname(hostname))
+            expect_address = _try_parse(_socket.gethostbyname(dst))
         except OSError:
             expect_address = None
 
     for attempt in range(1, tries + 1):
         try:
             response = _run(
-                ["ping", *options, hostname],
+                ["ping", *options, dst],
                 capture_output=True,
                 timeout=wall_timeout,
             )
         except (OSError, _SubprocessTimeout):
             # No ping binary, or it hung past the wall clock.
-            return PingResult(False, hostname, attempts=attempt)
+            return PingResult(False, dst, attempts=attempt)
         if response.returncode != 0:
             continue
 
@@ -300,13 +300,13 @@ def ping(
             if not answered:
                 continue
 
-        rtt, reply_ttl, source = _parse_ping_output(text, expect_address)
+        rtt, reply_ttl, src = _parse_ping_output(text, expect_address)
         return PingResult(
             True,
-            hostname,
+            dst,
             rtt_ms=rtt,
             ttl=reply_ttl,
-            source=source if source is not None else expect_address,
+            src=src if src is not None else expect_address,
             attempts=attempt,
         )
-    return PingResult(False, hostname, attempts=tries)
+    return PingResult(False, dst, attempts=tries)

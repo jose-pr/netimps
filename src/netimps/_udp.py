@@ -141,26 +141,26 @@ class UdpEndpoint:
             interface=interface,
         )
 
-    def send(self, data, address, port: int, source=None) -> int:
-        """Send a datagram, optionally forcing the *source* interface.
+    def send(self, data, address, port: int, src=None) -> int:
+        """Send a datagram, optionally forcing the *src* interface.
 
-        ``source`` accepts the usual union (an :class:`Interface`, a MAC, an
+        ``src`` accepts the usual union (an :class:`Interface`, a MAC, an
         adapter name or an address). Where ``IP_PKTINFO`` is available this
         pins the outgoing interface via ``sendmsg`` -- which matters when
         replying to a broadcast on a multi-homed host, since the routing table
         would otherwise pick for you.
 
         Falls back to plain ``sendto`` when unsupported, so the call works
-        everywhere; the source is then whatever the kernel chooses.
+        everywhere; the src is then whatever the kernel chooses.
         """
         target = (str(address), int(port))
 
-        if source is None or not self.supports_pktinfo:
+        if src is None or not self.supports_pktinfo:
             return self.socket.sendto(data, target)
 
         from ._iface_spec import interface_address
 
-        local = interface_address(source, strict=False)
+        local = interface_address(src, strict=False)
         if local is None or not hasattr(self.socket, "sendmsg"):
             return self.socket.sendto(data, target)
 

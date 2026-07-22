@@ -160,9 +160,9 @@ def test_route_to_loopback_is_on_link():
 def test_route_shape():
     route = get_route("8.8.8.8")
     assert isinstance(route, Route)
-    assert route.dest is not None
-    if route.source is not None:
-        assert isinstance(route.source, (netimps.IPv4Address, netimps.IPv6Address))
+    assert route.dst is not None
+    if route.src is not None:
+        assert isinstance(route.src, (netimps.IPv4Address, netimps.IPv6Address))
     assert isinstance(route.interface_index, int)
 
 
@@ -172,15 +172,15 @@ def test_route_never_raises_for_bad_destination():
 
 
 def test_route_on_link_is_derived_from_gateway():
-    assert Route(dest="x", gateway=None).on_link is True
-    assert Route(dest="x", gateway=netimps.parse("10.0.0.1")).on_link is False
+    assert Route(dst="x", gateway=None).on_link is True
+    assert Route(dst="x", gateway=netimps.parse("10.0.0.1")).on_link is False
 
 
 def test_route_equality_and_repr():
-    a = Route(dest=netimps.parse("8.8.8.8"), source=netimps.parse("10.0.0.5"))
-    b = Route(dest=netimps.parse("8.8.8.8"), source=netimps.parse("10.0.0.5"))
+    a = Route(dst=netimps.parse("8.8.8.8"), src=netimps.parse("10.0.0.5"))
+    b = Route(dst=netimps.parse("8.8.8.8"), src=netimps.parse("10.0.0.5"))
     assert a == b
-    assert a != Route(dest=netimps.parse("1.1.1.1"))
+    assert a != Route(dst=netimps.parse("1.1.1.1"))
     assert a != "not a route"
     assert "8.8.8.8" in repr(a)
 
@@ -331,7 +331,7 @@ def test_get_pmtu_sends_nothing(monkeypatch):
 
 def test_discover_mtu_probe_false_delegates_to_get_pmtu(monkeypatch):
     """probe=False is exactly get_pmtu -- and must not ping."""
-    monkeypatch.setattr(_sockets, "get_pmtu", lambda dest, port=80: 1400)
+    monkeypatch.setattr(_sockets, "get_pmtu", lambda dst, port=80: 1400)
     monkeypatch.setattr(
         netimps, "ping", lambda *a, **k: pytest.fail("probe=False must not ping")
     )
@@ -359,9 +359,9 @@ def test_discover_mtu_ignores_the_kernel_by_default(monkeypatch):
 def _fake_ping(limit):
     """A ping that succeeds only when the wire packet fits within `limit`."""
 
-    def ping(dest, size=None, dont_fragment=False, timeout=None, source=None):
+    def ping(dst, size=None, dont_fragment=False, timeout=None, src=None):
         assert dont_fragment, "the probe must set DF or it measures nothing"
-        return netimps.PingResult((size or 0) + 28 <= limit, dest)
+        return netimps.PingResult((size or 0) + 28 <= limit, dst)
 
     return ping
 
@@ -388,9 +388,9 @@ def test_discover_mtu_short_circuits_at_the_ceiling(monkeypatch):
     """If the ceiling survives there is nothing to search for."""
     calls = []
 
-    def ping(dest, size=None, **kwargs):
+    def ping(dst, size=None, **kwargs):
         calls.append(size)
-        return netimps.PingResult(True, dest)
+        return netimps.PingResult(True, dst)
 
     monkeypatch.setattr(netimps, "ping", ping)
     assert netimps.discover_mtu("10.0.0.1", low=576, high=9000) == 9000
@@ -406,11 +406,11 @@ def test_discover_mtu_result_includes_headers(monkeypatch):
     """
     survived = []
 
-    def ping(dest, size=None, **kwargs):
+    def ping(dst, size=None, **kwargs):
         ok = (size or 0) + 28 <= 1500
         if ok:
             survived.append(size)
-        return netimps.PingResult(ok, dest)
+        return netimps.PingResult(ok, dst)
 
     monkeypatch.setattr(netimps, "ping", ping)
     result = netimps.discover_mtu("10.0.0.1")

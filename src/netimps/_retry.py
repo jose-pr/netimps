@@ -10,7 +10,7 @@ Re-exported from :mod:`netimps`.
 from __future__ import annotations
 
 import time as _time
-from typing import Callable, Optional, Tuple, Type
+from typing import Any, Callable, Iterator, Optional, Tuple, Type
 
 __all__ = ["retry", "backoff_delays"]
 
@@ -28,7 +28,7 @@ def backoff_delays(
     max_delay: float = 30.0,
     jitter: float = 0.1,
     _random=None,
-):
+) -> "Iterator[float]":
     """Yield the delay before each retry -- ``attempts - 1`` values.
 
     Exposed separately so a caller driving its own loop (async, or with
@@ -76,7 +76,7 @@ def retry(
     on_retry: "Optional[Callable[[int, BaseException, float], None]]" = None,
     _sleep=_time.sleep,
     _random=None,
-):
+) -> "Any":
     """Call ``func()``, retrying transient failures with exponential backoff.
 
     ::

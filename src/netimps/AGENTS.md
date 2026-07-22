@@ -6,10 +6,31 @@ consumed without reading its source.
 
 Everything is imported from `netimps` directly. The `_`-prefixed submodules
 (`_ip`, `_mac`, `_ifaddrs`, `_sockets`, `_dns`, `_ping`, `_scan`, `_multicast`,
-`_scheme`) are implementation detail — **do not import them**. For the project
-overview see the repo-root `AGENTS.md`.
+`_scheme`, `_retry`, `_udp`, `_iface_spec`) are implementation detail —
+**do not import them**.
+
+**This file documents using the library**, and ships inside the package, so it
+is self-contained: it references nothing outside the installed distribution.
+`README.md` ships alongside it as the overview -- read either with
+`importlib.resources.files("netimps")`. Development documentation (building,
+testing, releasing) is not shipped; it lives with the source at
+<https://github.com/jose-pr/netimps>.
 
 `netimps.__version__` — the package version string (currently `"0.0.0"`).
+
+## Argument naming
+
+The package is consistent about what the first argument means:
+
+| Name | Meaning | Examples |
+| --- | --- | --- |
+| `dst` | where traffic is **sent** | `ping`, `tcp_check`, `wait_for_port`, `get_route`, `hop_count`, `discover_mtu` |
+| `src` | where traffic is **sent from** | `ping(src=)`, `free_port(src=)`, `discover_mtu(src=)` |
+| `host` / `network` | the thing being **examined** | `scan_ports(host)`, `scan_hosts(network)` |
+| `address` / `ip` | an address being **classified** (no DNS) | `get_ip`, `interface_for`, `is_multicast`, `is_link_scoped` |
+
+`dst`/`src` are abbreviated symmetrically, matching packet-header convention.
+A `dst` accepts a hostname; an `address` does not.
 
 ## Types vs parsing — read this first
 
@@ -194,7 +215,7 @@ else is `str` with the trailing root dot stripped and TXT strings unquoted.
 
 ## Reachability
 
-**`ping(hostname, tries=1, timeout=1.0, ipv6=None, source=None, size=None, ttl=None, dont_fragment=False) -> PingResult`**
+**`ping(dst, tries=1, timeout=1.0, ipv6=None, src=None, size=None, ttl=None, dont_fragment=False) -> PingResult`**
 
 `PingResult` is **truthy on success** and compares equal to `bool`, so
 `if ping(host):` and `== True` keep working, while carrying `.ok`, `.rtt_ms`,
@@ -202,7 +223,7 @@ else is `str` with the trailing root dot stripped and TXT strings unquoted.
 
 | Argument | Notes |
 | --- | --- |
-| `source` | `Interface`, address, **MAC**, adapter name or string. A MAC is resolved to the adapter holding it. |
+| `src` | `Interface`, address, **MAC**, adapter name or string. A MAC is resolved to the adapter holding it. |
 | `size` | ICMP payload bytes. The wire packet is **28 bytes larger** (20 IP + 8 ICMP). |
 | `ttl` | initial hop limit — `-i` on Windows, `-t` on POSIX (the letters are **swapped**). |
 | `dont_fragment` | DF bit. With `size`, the manual MTU probe: largest passing `size` + 28 = path MTU. Ignored on macOS/BSD. |
@@ -211,7 +232,7 @@ else is `str` with the trailing root dot stripped and TXT strings unquoted.
   "TTL expired in transit", so the reply address is verified rather than
   trusting the exit code. Locale-independent — it matches on addresses, never
   prose.
-- An unusable `source` (unknown MAC, adapter with no address, foreign address)
+- An unusable `src` (unknown MAC, adapter with no address, foreign address)
   gives a falsy result — it **never silently falls back** to the default route.
 - Never raises: missing binary, hung subprocess and non-zero exit are all falsy.
 - **ICMP echo is not "is the host up"** — most cloud firewalls drop it. Prefer
@@ -232,41 +253,41 @@ else is `str` with the trailing root dot stripped and TXT strings unquoted.
 - **`interface_for(address, strict=True) -> Interface | None`** — reverse
   lookup. `strict=False` synthesizes a host-route interface named
   `"<unknown>"` instead of returning `None`.
-- **`get_source_ip(dest="8.8.8.8", port=80)`** — which local address the kernel
-  would use to reach `dest`. **Sends no packets.** The answer depends on
-  `dest`: with a VPN up, a public probe returns the tunnel address and a LAN
+- **`get_source_ip(dst="8.8.8.8", port=80)`** — which local address the kernel
+  would use to reach `dst`. **Sends no packets.** The answer depends on
+  `dst`: with a VPN up, a public probe returns the tunnel address and a LAN
   probe the physical one. Correct where hostname resolution picks a VM adapter.
-- **`free_port(host="127.0.0.1", family=AF_INET) -> int`** — bind port 0 and
+- **`free_port(src="127.0.0.1", family=AF_INET) -> int`** — bind port 0 and
   read it back. **Inherently racy** — the port frees the instant it returns; if
   you can, bind port 0 in the server itself instead. `SO_REUSEADDR` is
   deliberately *not* set (it would hand back a `TIME_WAIT` port).
-- **`tcp_check(host, port, timeout=3.0) -> bool`** — the honest reachability
+- **`tcp_check(dst, port, timeout=3.0) -> bool`** — the honest reachability
   test. Never raises. Proves the handshake completed, not that the service is
   healthy; a filtered port is indistinguishable from a closed one.
-- **`wait_for_port(host, port, timeout=30.0, interval=0.1, connect_timeout=None)`**
+- **`wait_for_port(dst, port, timeout=30.0, interval=0.1, connect_timeout=None)`**
   — poll until it answers. Backs off to 1s; honours the overall deadline even
   when individual connects block.
 
 ## Routing, hops and MTU
 
-- **`get_route(dest="8.8.8.8") -> Route`** — `.source`, `.gateway`,
+- **`get_route(dst="8.8.8.8") -> Route`** — `.source`, `.gateway`,
   `.interface_index`, `.on_link`. **First hop only, deliberately** — that is
   available unprivileged everywhere, unlike the full path. Never raises;
   unknown pieces are `None`/`0`. The gateway resolves on Windows and Linux only.
-- **`hop_count(dest, max_hops=30, timeout=1.0, allow_traceroute=True)`** — uses
+- **`hop_count(dst, max_hops=30, timeout=1.0, allow_traceroute=True)`** — uses
   raw-socket probes when permitted, otherwise drives the system
   `traceroute`/`tracert`, so it **works unprivileged**. Only the hop number and
   destination address are parsed, never localised prose.
   `allow_traceroute=False` requires the in-process path and raises
   `PermissionError` instead. **`None` means "no answer", never "unreachable"** —
   firewalls routinely drop ICMP even for an elevated process.
-- **`discover_mtu(dest, low=576, high=9000, timeout=1.0, source=None, probe=True)`**
+- **`discover_mtu(dst, low=576, high=9000, timeout=1.0, src=None, probe=True)`**
   — **measures** the path MTU by binary-searching DF-flagged pings, so packets
   really traverse the path. Works on every platform (it only needs the `ping`
   binary) and is the one to use when the answer must be right. Returns the MTU
   **including headers**, comparable with `Interface.mtu`. `None` means the
   destination never answered — indistinguishable from "every size was too big".
-- **`get_pmtu(dest, port=80) -> int | None`** — a **lookup**, not a
+- **`get_pmtu(dst, port=80) -> int | None`** — a **lookup**, not a
   measurement: reads the `IP_MTU` the kernel has *already* learned, and sends
   nothing. Usually `None`, because the kernel only knows a path MTU once prior
   traffic forced it to learn one; **always `None` on Windows**, which has no
