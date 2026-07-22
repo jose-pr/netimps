@@ -115,7 +115,7 @@ def test_classification_bits():
 
 
 def test_oui_is_first_three_bytes():
-    assert MACAddress("00:00:5e:00:53:01").oui == b"\xbc\x54\x2f"
+    assert MACAddress("00:00:5e:00:53:01").oui == b"\x00\x00\x5e"
 
 
 def test_ordering_and_sorting():

@@ -307,3 +307,72 @@ def test_path_mtu_returns_none_without_ip_mtu(monkeypatch):
 def test_path_mtu_shape():
     result = netimps.path_mtu("127.0.0.1")
     assert result is None or (isinstance(result, int) and result > 0)
+
+
+# --------------------------------------------------------------------------- #
+# discover_mtu                                                                 #
+# --------------------------------------------------------------------------- #
+
+
+def _fake_ping(limit):
+    """A ping that succeeds only when the wire packet fits within `limit`."""
+
+    def ping(dest, size=None, dont_fragment=False, timeout=None, source=None):
+        assert dont_fragment, "the probe must set DF or it measures nothing"
+        return netimps.PingResult((size or 0) + 28 <= limit, dest)
+
+    return ping
+
+
+def test_discover_mtu_finds_the_boundary(monkeypatch):
+    monkeypatch.setattr(netimps._sockets, "ping", _fake_ping(1500), raising=False)
+    monkeypatch.setattr(netimps, "ping", _fake_ping(1500))
+    assert netimps.discover_mtu("10.0.0.1") == 1500
+
+
+@pytest.mark.parametrize("limit", [576, 1280, 1420, 1500, 9000])
+def test_discover_mtu_across_common_values(monkeypatch, limit):
+    monkeypatch.setattr(netimps, "ping", _fake_ping(limit))
+    assert netimps.discover_mtu("10.0.0.1") == limit
+
+
+def test_discover_mtu_returns_none_when_nothing_answers(monkeypatch):
+    """A firewalled host must not read as a tiny MTU."""
+    monkeypatch.setattr(netimps, "ping", lambda *a, **k: netimps.PingResult(False, "x"))
+    assert netimps.discover_mtu("10.0.0.1") is None
+
+
+def test_discover_mtu_short_circuits_at_the_ceiling(monkeypatch):
+    """If the ceiling survives there is nothing to search for."""
+    calls = []
+
+    def ping(dest, size=None, **kwargs):
+        calls.append(size)
+        return netimps.PingResult(True, dest)
+
+    monkeypatch.setattr(netimps, "ping", ping)
+    assert netimps.discover_mtu("10.0.0.1", low=576, high=9000) == 9000
+    assert len(calls) == 2, "one probe at the floor, one at the ceiling"
+
+
+def test_discover_mtu_result_includes_headers(monkeypatch):
+    """The answer is comparable with Interface.mtu, so it counts headers.
+
+    A binary search necessarily probes *above* the boundary to bracket it, so
+    the assertion is about the largest **surviving** payload, not the largest
+    attempted one.
+    """
+    survived = []
+
+    def ping(dest, size=None, **kwargs):
+        ok = (size or 0) + 28 <= 1500
+        if ok:
+            survived.append(size)
+        return netimps.PingResult(ok, dest)
+
+    monkeypatch.setattr(netimps, "ping", ping)
+    result = netimps.discover_mtu("10.0.0.1")
+    assert result == 1500
+    # The reported MTU is the largest surviving payload plus the 28-byte
+    # IPv4 + ICMP overhead.
+    assert max(survived) + 28 == result

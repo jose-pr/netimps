@@ -455,3 +455,25 @@ def test_register_port_rejects_bad_input(clean_ports):
 
 def test_get_default_scheme_unknown_is_none():
     assert netimps.get_default_scheme(65000) is None
+
+
+def test_ping_size_is_the_payload_not_the_wire_packet(monkeypatch):
+    """size= is the ICMP payload on both platforms; neither flag counts headers.
+
+    Pinned because getting it backwards skews discover_mtu by exactly 28 bytes,
+    and the two platforms use different letters (-l on Windows, -s on POSIX)
+    for the same meaning.
+    """
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout=_REPLY)
+
+    monkeypatch.setattr(netimps._ping, "_run", fake_run)
+    ping("127.0.0.1", size=1472)
+    cmd = calls[0]
+    flag = "-l" if netimps._ping._os.name == "nt" else "-s"
+    assert flag in cmd
+    # Passed straight through -- no header arithmetic applied here.
+    assert cmd[cmd.index(flag) + 1] == "1472"
