@@ -155,7 +155,7 @@ __all__ = [
     "HOST_DN",
 ]
 
-__version__ = "0.0.0"
+__version__ = "0.0.1"
 
 #: Fully-qualified (or short) name of the host running this process.
 HOST_DN = _platform.node()

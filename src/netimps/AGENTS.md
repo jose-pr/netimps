@@ -16,7 +16,7 @@ is self-contained: it references nothing outside the installed distribution.
 testing, releasing) is not shipped; it lives with the source at
 <https://github.com/jose-pr/netimps>.
 
-`netimps.__version__` — the package version string (currently `"0.0.0"`).
+`netimps.__version__` — the package version string (currently `"0.0.1"`).
 
 ## Argument naming
 
