@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.1] - 2026-07-22
+
 ### Added
 
 - **Command-line interface** (`netimps ...` / `python -m netimps`), built on
@@ -75,5 +77,6 @@ below is simply what the package contains.
 - **`Host`**, **`retry()`/`backoff_delays()`**, and the named networks `APIPA`,
   `LOOPBACK_V4`, `LOOPBACK_V6`, `LINK_LOCAL_V6`.
 
-[Unreleased]: https://github.com/jose-pr/netimps/compare/v0.0.0...HEAD
+[Unreleased]: https://github.com/jose-pr/netimps/compare/v0.0.1...HEAD
+[0.0.1]: https://github.com/jose-pr/netimps/releases/tag/v0.0.1
 [0.0.0]: https://github.com/jose-pr/netimps/releases/tag/v0.0.0
