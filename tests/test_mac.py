@@ -37,6 +37,25 @@ def test_as_str_default_and_custom_separator():
     assert mac.as_str(".") == "aa.bb.cc.dd.ee.ff"
 
 
+def test_as_str_upper():
+    mac = MACAddress("aa:bb:cc:dd:ee:ff")
+    assert mac.as_str(upper=True) == "AA:BB:CC:DD:EE:FF"
+    assert mac.as_str("-", upper=True) == "AA-BB-CC-DD-EE-FF"
+    assert mac.as_str("", upper=True) == "AABBCCDDEEFF"
+    # Explicit upper=False is the documented default.
+    assert mac.as_str("-", upper=False) == "aa-bb-cc-dd-ee-ff"
+
+
+def test_case_does_not_affect_identity():
+    """Rendering case is presentational only -- it must not leak into equality."""
+    lower = MACAddress("aa:bb:cc:dd:ee:ff")
+    upper = MACAddress("AA:BB:CC:DD:EE:FF")
+    assert lower == upper
+    assert hash(lower) == hash(upper)
+    assert str(lower) == str(upper) == "aa:bb:cc:dd:ee:ff"
+    assert lower.as_str(upper=True) == upper.as_str(upper=True)
+
+
 def test_str_and_repr():
     mac = MACAddress("aa:bb:cc:dd:ee:ff")
     assert str(mac) == "aa:bb:cc:dd:ee:ff"

@@ -203,9 +203,21 @@ class MACAddress:
             return
         raise TypeError("Cannot build MACAddress from %r" % (type(value).__name__,))
 
-    def as_str(self, sep: str = ":") -> str:
-        """Return the MAC as a lowercase string with ``sep`` between octets."""
-        return sep.join("%02x" % b for b in self._octets)
+    def as_str(self, sep: str = ":", upper: bool = False) -> str:
+        """Return the MAC as a string with ``sep`` between octets.
+
+        Lowercase by default (the canonical form used by ``str(mac)`` and by
+        equality/hashing); pass ``upper=True`` for the uppercase rendering
+        favoured by Windows tooling and much vendor output::
+
+            mac.as_str("-")               # 'aa-bb-cc-dd-ee-ff'
+            mac.as_str("-", upper=True)   # 'AA-BB-CC-DD-EE-FF'
+
+        Case affects only this rendering -- two ``MACAddress`` values that
+        differ solely in the case they were parsed from remain equal.
+        """
+        fmt = "%02X" if upper else "%02x"
+        return sep.join(fmt % b for b in self._octets)
 
     @property
     def packed(self) -> bytes:
