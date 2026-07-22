@@ -16,7 +16,7 @@ Platform reality
 ``IP_PKTINFO`` and ``socket.recvmsg`` are **not universally available** --
 ``recvmsg`` is absent on Windows entirely. Rather than failing, this degrades
 to plain ``recvfrom`` and reports ``interface=None``, the same policy
-:func:`netimps.path_mtu` uses for the missing ``IP_MTU``. Check
+:func:`netimps.get_pmtu` uses for the missing ``IP_MTU``. Check
 :attr:`UdpEndpoint.supports_pktinfo` if you need to know which mode you are in.
 """
 

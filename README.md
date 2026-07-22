@@ -28,7 +28,7 @@ and no wheel to miss for your platform.
 - **The socket helpers everyone rewrites** — `get_source_ip`, `free_port`,
   `tcp_check`, `wait_for_port`.
 - **Routing and MTU** — `get_route` (first hop, unprivileged), `hop_count`
-  (raw sockets *or* traceroute fallback), `path_mtu`, `Interface.mtu`.
+  (raw sockets *or* traceroute fallback), `discover_mtu` / `get_pmtu`, `Interface.mtu`.
 - **CIDR set maths** — `collapse` and `subtract`, the latter missing from
   `ipaddress` entirely.
 - **`normalize_host`** — `host:port` splitting that gets IPv6 brackets right.
@@ -131,7 +131,8 @@ netimps.retry(lambda: netimps.tcp_check("example.com", 443), attempts=3)
 | `Host` | hostname-or-address value type |
 | `retry`, `backoff_delays` | bounded retry with exponential backoff |
 | `APIPA`, `LOOPBACK_V4`, `LOOPBACK_V6`, `LINK_LOCAL_V6` | named networks |
-| `get_route`, `Route`, `hop_count`, `path_mtu` | routing, distance and MTU |
+| `get_route`, `Route`, `hop_count` | routing and distance |
+| `discover_mtu`, `get_pmtu` | path MTU: measured, or the kernel's cached guess |
 | `scan_ports`, `scan_hosts`, `PORT_RANGES` | concurrent scanning |
 | `multicast_socket`, `join_group`, `leave_group`, `is_multicast` | multicast |
 | `HOST_DN` | `platform.node()`, captured at import time |
@@ -156,8 +157,9 @@ A few behaviours are deliberate and worth knowing:
   trusting the exit code.
 - **`hop_count` works unprivileged**, falling back to the system traceroute
   when a raw socket is unavailable.
-- **`path_mtu` returns `None` on Windows** — `IP_MTU` does not exist there, and
-  guessing would be worse. Use `Interface.mtu` for the local link.
+- **`discover_mtu` measures; `get_pmtu` only reports what the kernel cached.**
+  The latter is usually `None`, and always `None` on Windows. On one real host
+  the local link was 9000 and the true path MTU 1500 — only probing found it.
 
 ## Development
 

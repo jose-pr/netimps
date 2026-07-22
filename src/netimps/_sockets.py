@@ -39,7 +39,7 @@ __all__ = [
     "get_route",
     "Route",
     "hop_count",
-    "path_mtu",
+    "get_pmtu",
     "discover_mtu",
 ]
 
@@ -387,7 +387,14 @@ class Route:
 
 
 def _windows_next_hop(dest_v4: str) -> "Tuple[Optional[str], int]":
-    """(next_hop, if_index) from ``GetBestRoute``. IPv4 only."""
+    """(next_hop, if_index) from ``GetBestRoute``. IPv4 only.
+
+    ``GetBestRoute`` rather than ``GetIpForwardTable``: it asks Windows which
+    route *it* would choose for a destination, so the kernel does the
+    longest-prefix matching. Dumping the table and matching by hand -- which is
+    what the POSIX side has to do, lacking an equivalent -- is more code and
+    more ways to be wrong.
+    """
     import ctypes
     from ctypes import wintypes
 
@@ -699,24 +706,32 @@ def hop_count(
         icmp.close()
 
 
-def path_mtu(dest: str, port: int = 80) -> Optional[int]:
-    """Return the path MTU to ``dest`` in bytes, or ``None`` if undiscoverable.
+def get_pmtu(dest: str, port: int = 80) -> "Optional[int]":
+    """Return the path MTU the kernel has **already learned**, or ``None``.
 
-    Asks the kernel for the MTU it has learned for this destination::
+    A lookup, not a measurement -- it reads ``IP_MTU`` on a connected socket
+    and sends nothing::
 
-        path_mtu("example.com")     # 1500, or 1420 through a VPN
+        get_pmtu("example.com")      # 1420, or None if nothing is cached
 
-    **Linux only in practice.** It reads ``IP_MTU``, which the kernel fills in
-    after path-MTU discovery on a connected socket. ``IP_MTU``,
-    ``IP_MTU_DISCOVER`` and ``IP_DONTFRAG`` do not exist on Windows, and reading
-    the ICMP *fragmentation needed* replies that would let us probe manually
-    requires a raw socket -- so this returns ``None`` there rather than
-    guessing.
+    Instant and silent, but it answers a weaker question than
+    :func:`discover_mtu`:
 
-    For the local link MTU, which *is* available everywhere, use
-    ``Interface.mtu`` from :func:`netimps.get_interfaces` instead. That is the
-    number you want unless you specifically care about a bottleneck somewhere
-    along the path.
+    * **``None`` is the common answer.** The kernel only knows a path MTU once
+      its own discovery has learned one, which needs prior traffic that
+      actually hit the limit. A fresh destination reports nothing.
+    * **Windows has no ``IP_MTU``** (nor ``IP_MTU_DISCOVER`` / ``IP_DONTFRAG``),
+      so this always returns ``None`` there. Nor is there another route: the
+      ``dwForwardMtu`` field of ``MIB_IPFORWARDROW`` reads **0** (verified via
+      ``GetBestRoute``; Microsoft lists it as unsupported), and the newer
+      ``MIB_IPFORWARD_ROW2`` dropped the field entirely. Route MTU lives at the
+      interface level on Windows, which is :attr:`Interface.mtu`. Probing with
+      :func:`discover_mtu` is the only way to learn a *path* MTU there.
+    * When the kernel *has* an answer it can still be the **local link** MTU
+      rather than the path minimum, if nothing has yet forced it lower.
+
+    Use it as a free first guess; use :func:`discover_mtu` when the answer has
+    to be right.
     """
     ip_mtu = getattr(_socket, "IP_MTU", None)
     if ip_mtu is None:
@@ -736,8 +751,9 @@ def path_mtu(dest: str, port: int = 80) -> Optional[int]:
             except OSError:
                 pass
         sock.connect((dest, port))
-        return int(sock.getsockopt(_socket.IPPROTO_IP, ip_mtu))
-    except OSError:
+        value = int(sock.getsockopt(_socket.IPPROTO_IP, ip_mtu))
+        return value if value > 0 else None
+    except (OSError, OverflowError):
         return None
     finally:
         sock.close()
@@ -749,37 +765,52 @@ def discover_mtu(
     high: int = 9000,
     timeout: float = 1.0,
     source=None,
+    port: int = 80,
+    probe: bool = True,
 ) -> "Optional[int]":
-    """Find the path MTU to ``dest`` by binary-searching DF-flagged pings.
+    """Measure the path MTU to ``dest`` in bytes, or ``None`` if undiscoverable.
 
-    Sends echo requests with the *don't fragment* bit set, growing and
-    shrinking the payload until the largest one that survives is found::
+    Sends DF-flagged pings of growing size, binary-searching for the largest
+    packet that survives the whole path unfragmented::
 
-        discover_mtu("8.8.8.8")          # 1500
-        discover_mtu("vpn.internal")     # 1420, say
+        discover_mtu("example.com")      # 1500, or 1420 through a VPN
 
-    Unlike :func:`path_mtu` -- which asks the kernel and only works where
-    ``IP_MTU`` exists -- this **works on every platform**, because it only
-    needs the platform ``ping`` binary. The cost is that it is slow (a dozen
-    or so pings) and needs the destination to answer ICMP at all.
+    **This actually traverses the path**, which is the difference from
+    :func:`get_pmtu`: that reports what the kernel already knows (often
+    nothing), while this goes and finds out. Packets really reach ``dest`` and
+    come back, so the answer reflects every hop in between -- including a
+    router that silently drops oversized DF packets without sending
+    "fragmentation needed", which nothing else will reveal.
+
+    Measured on one host: the local link was 9000 and ``get_pmtu`` returned
+    ``None``, while this reported the true 1500.
+
+    The cost is a dozen or so probes and a destination willing to answer ICMP.
 
     :param low: smallest MTU to consider. 576 is the IPv4 minimum every host
         must accept, so anything smaller means the host is simply unreachable.
     :param high: largest to consider. 9000 covers jumbo frames; the search
-        starts by confirming the ceiling, so a generous value costs one probe.
+        confirms the ceiling first, so a generous value costs one probe.
     :param source: send from this interface -- same union as ``ping(source=)``.
+    :param port: destination port passed through to :func:`get_pmtu`.
+    :param probe: set ``False`` to skip probing entirely and just return
+        :func:`get_pmtu` -- the kernel's cached answer, usually ``None``.
 
-    Returns the MTU in **bytes including headers** (payload + 28 for IPv4 +
-    ICMP), so it is directly comparable with :attr:`Interface.mtu`. Returns
-    ``None`` when the destination never answers, which is common: many hosts
-    and most cloud firewalls drop echo entirely, and that is indistinguishable
-    from "every size was too big".
+    Returns the MTU **including headers** (payload + 28 for IPv4 + ICMP), so it
+    is directly comparable with :attr:`Interface.mtu`. Returns ``None`` when
+    the destination never answers -- common, since many hosts and most cloud
+    firewalls drop echo entirely, and that is indistinguishable from "every
+    size was too big".
 
     .. note::
-       A *silent* black hole -- a router that drops oversized DF packets
-       without sending "fragmentation needed" -- is exactly what this measures,
-       and is why the result can be lower than any local ``Interface.mtu``.
+       The result can be **lower than any local** ``Interface.mtu``, and that
+       is the useful case: the bottleneck is somewhere along the path, not on
+       this host.
     """
+    if not probe:
+        # Explicitly asked for the kernel's cached answer only.
+        return get_pmtu(dest, port)
+
     from . import ping
 
     # ping's size= is the ICMP *payload* on both Windows (-l) and POSIX (-s) --

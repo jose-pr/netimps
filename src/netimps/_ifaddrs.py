@@ -91,7 +91,7 @@ class Interface:
             ``IPv4Interface``/``IPv6Interface`` carrying its real prefix.
         mtu: Link MTU in bytes, or ``None`` when the platform does not report
             it. This is the *local link* MTU -- for a bottleneck further along
-            a path see :func:`netimps.path_mtu`.
+            a path see :func:`netimps.discover_mtu`.
         raw: ``None`` unless enumerated with ``get_interfaces(raw=True)``, in
             which case a platform-specific dict of leftovers. **Not portable**
             and explicitly outside the stability guarantee.
