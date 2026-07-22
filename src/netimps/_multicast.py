@@ -27,6 +27,8 @@ import socket as _socket
 import struct as _struct
 from typing import List, Optional, Union
 
+from ._iface_spec import interface_address as _interface_address
+
 __all__ = ["multicast_socket", "join_group", "leave_group", "is_multicast"]
 
 
@@ -45,56 +47,6 @@ def is_multicast(address) -> bool:
 
     parsed = try_parse(address, IPAddress)
     return bool(parsed is not None and parsed.is_multicast)
-
-
-def _interface_address(interface, want_ipv6: bool) -> "Optional[str]":
-    """Reduce an Interface/MAC/address/name to a usable local address.
-
-    Multicast membership needs an *address* (IPv4) or an interface *index*
-    (IPv6); an adapter name alone is not enough on either. Resolving here keeps
-    the caller from having to know that.
-    """
-    from . import MACAddress, is_valid
-    from ._ifaddrs import Interface, get_interfaces
-
-    if interface is None:
-        return None
-
-    if isinstance(interface, MACAddress) or (
-        isinstance(interface, str) and is_valid(interface, MACAddress)
-    ):
-        wanted = MACAddress(interface)
-        interface = next(
-            (iface for iface in get_interfaces() if iface.mac == wanted), None
-        )
-        if interface is None:
-            raise ValueError("no interface with MAC %s" % (wanted,))
-
-    from . import IPAddress
-
-    if isinstance(interface, str) and not is_valid(interface, IPAddress):
-        # Not an address literal, so treat it as an adapter name and look it
-        # up -- failing here beats a confusing setsockopt error later.
-        match = next(
-            (iface for iface in get_interfaces() if iface.name == interface), None
-        )
-        if match is None:
-            raise ValueError("no interface named %r" % (interface,))
-        interface = match
-
-    if isinstance(interface, Interface):
-        candidates = interface.ipv6 if want_ipv6 else interface.ipv4
-        for entry in candidates:
-            if not entry.ip.is_loopback:
-                return str(entry.ip)
-        if candidates:
-            return str(candidates[0].ip)
-        raise ValueError(
-            "interface %r has no %s address to join from"
-            % (interface.name, "IPv6" if want_ipv6 else "IPv4")
-        )
-
-    return str(interface)
 
 
 def _membership_request(group: str, interface_address: "Optional[str]", ipv6: bool):
@@ -128,7 +80,9 @@ def join_group(sock, group: str, interface=None) -> None:
 
     ipv6 = ":" in group
     address = _interface_address(interface, want_ipv6=ipv6)
-    request = _membership_request(group, address, ipv6)
+    request = _membership_request(
+        group, None if address is None else str(address), ipv6
+    )
     if ipv6:
         sock.setsockopt(_socket.IPPROTO_IPV6, _socket.IPV6_JOIN_GROUP, request)
     else:
@@ -146,7 +100,9 @@ def leave_group(sock, group: str, interface=None) -> None:
 
     ipv6 = ":" in group
     address = _interface_address(interface, want_ipv6=ipv6)
-    request = _membership_request(group, address, ipv6)
+    request = _membership_request(
+        group, None if address is None else str(address), ipv6
+    )
     if ipv6:
         sock.setsockopt(_socket.IPPROTO_IPV6, _socket.IPV6_LEAVE_GROUP, request)
     else:
@@ -221,11 +177,11 @@ def multicast_socket(
         # Pin outgoing traffic to the chosen adapter as well as incoming, or
         # sends leave by the default route while joins listen elsewhere.
         outgoing = _interface_address(interface, want_ipv6=ipv6)
-        if outgoing and not ipv6:
+        if outgoing is not None and not ipv6:
             sock.setsockopt(
                 _socket.IPPROTO_IP,
                 _socket.IP_MULTICAST_IF,
-                _socket.inet_aton(outgoing),
+                _socket.inet_aton(str(outgoing)),
             )
 
         if bind:

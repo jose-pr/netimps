@@ -33,6 +33,9 @@ and no wheel to miss for your platform.
   `ipaddress` entirely.
 - **`normalize_host`** — `host:port` splitting that gets IPv6 brackets right.
 - **Scanning** — concurrent `scan_ports` / `scan_hosts`.
+- **Socket setup** — `bind()` with the options named, `UdpEndpoint` for UDP
+  servers that need to know which interface a datagram arrived on, and
+  `retry()` for the backoff loop everyone writes without jitter.
 - **Multicast** — `multicast_socket` handling the join dance whose failure
   modes are otherwise silent.
 - **DNS and ping** — `resolve()` returning native types; `ping()` returning
@@ -97,6 +100,13 @@ result.ok, result.rtt_ms, result.ttl     # (True, 9.0, 119)
 # Scanning and multicast
 netimps.scan_ports("192.168.1.1", ["ssh", "https"])   # [22, 443]
 sock = netimps.multicast_socket("224.0.0.251", 5353)  # mDNS listener
+
+# Server-side: bind with the options named, and know where packets came from
+server = netimps.bind("", 6767, broadcast=True)
+endpoint = netimps.UdpEndpoint(server)
+
+# Retry with backoff and jitter
+netimps.retry(lambda: netimps.tcp_check("example.com", 443), attempts=3)
 ```
 
 ## API overview
@@ -108,14 +118,19 @@ sock = netimps.multicast_socket("224.0.0.251", 5353)  # mDNS listener
 | `IPv4Address`, `IPv4Interface`, ... | stdlib concrete-type re-exports |
 | `parse`, `try_parse`, `is_valid` | build a type from a value (raising / `None` / `bool`) |
 | `MACAddress` | parse / classify / render MAC addresses |
-| `get_interfaces`, `Interface` | native cross-platform NIC discovery |
+| `get_interfaces`, `Interface`, `iter_addresses` | native cross-platform NIC discovery |
 | `get_ip`, `is_link_scoped` | address resolution and scope classification |
 | `collapse`, `subtract` | CIDR set maths |
 | `normalize_host` | `host:port` splitting, IPv6-aware |
 | `get_default_port`, `get_default_scheme`, `register_port` | scheme ↔ port registry |
 | `resolve` | DNS lookup → native records (`[]` on failure) |
 | `ping`, `PingResult` | reachability with RTT and TTL |
+| `bind`, `bind_error_hint`, `interface_for` | socket creation and diagnosis |
 | `get_source_ip`, `free_port`, `tcp_check`, `wait_for_port` | socket helpers |
+| `UdpEndpoint`, `Datagram` | UDP receive with arrival interface (`IP_PKTINFO`) |
+| `Host` | hostname-or-address value type |
+| `retry`, `backoff_delays` | bounded retry with exponential backoff |
+| `APIPA`, `LOOPBACK_V4`, `LOOPBACK_V6`, `LINK_LOCAL_V6` | named networks |
 | `get_route`, `Route`, `hop_count`, `path_mtu` | routing, distance and MTU |
 | `scan_ports`, `scan_hosts`, `PORT_RANGES` | concurrent scanning |
 | `multicast_socket`, `join_group`, `leave_group`, `is_multicast` | multicast |

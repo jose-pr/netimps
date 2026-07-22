@@ -174,3 +174,53 @@ def test_fallback_raw_flags_degradation(monkeypatch):
 def test_exported_from_package():
     assert netimps.get_interfaces is _ifaddrs.get_interfaces
     assert netimps.Interface is _ifaddrs.Interface
+
+
+# --------------------------------------------------------------------------- #
+# Interface.primary_ip                                                            #
+# --------------------------------------------------------------------------- #
+
+
+def test_primary_ip_prefers_non_loopback():
+    iface = Interface(
+        name="eth0",
+        ips=[
+            ipaddress.ip_interface("127.0.0.1/8"),
+            ipaddress.ip_interface("10.0.0.5/24"),
+        ],
+    )
+    assert iface.primary_ip() == ipaddress.ip_interface("10.0.0.5/24")
+
+
+def test_primary_ip_falls_back_to_loopback_only_if_thats_all():
+    iface = Interface(name="lo", ips=[ipaddress.ip_interface("127.0.0.1/8")])
+    assert iface.primary_ip() == ipaddress.ip_interface("127.0.0.1/8")
+    # ...unless the caller needs something routable.
+    assert iface.primary_ip(loopback_ok=False) is None
+
+
+def test_primary_ip_family_selection():
+    iface = Interface(
+        name="eth0",
+        ips=[
+            ipaddress.ip_interface("10.0.0.5/24"),
+            ipaddress.ip_interface("2001:db8::1/64"),
+        ],
+    )
+    assert iface.primary_ip() == ipaddress.ip_interface("10.0.0.5/24")
+    assert iface.primary_ip(ipv6=True) == ipaddress.ip_interface("2001:db8::1/64")
+
+
+def test_primary_ip_returns_none_when_family_absent():
+    iface = Interface(name="eth0", ips=[ipaddress.ip_interface("10.0.0.5/24")])
+    assert iface.primary_ip(ipv6=True) is None
+    assert Interface(name="empty").primary_ip() is None
+
+
+def test_primary_ip_returns_parsed_not_string():
+    """Same element type as .ips -- one of them, not a different shape."""
+    for iface in get_interfaces():
+        chosen = iface.primary_ip()
+        if chosen is not None:
+            assert not isinstance(chosen, str)
+            assert isinstance(chosen, (ipaddress.IPv4Address, ipaddress.IPv6Address))

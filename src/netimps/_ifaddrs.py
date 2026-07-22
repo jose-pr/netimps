@@ -59,7 +59,7 @@ from ctypes import (
 )
 from typing import Any, Dict, List, Optional, Union
 
-__all__ = ["Interface", "get_interfaces"]
+__all__ = ["Interface", "get_interfaces", "iter_addresses"]
 
 _IPInterface = Union[_ipaddress.IPv4Interface, _ipaddress.IPv6Interface]
 
@@ -124,6 +124,41 @@ class Interface:
         common spelling, but ``127.0.0.0/8`` and ``::1`` do.
         """
         return bool(self.ips) and all(ip.ip.is_loopback for ip in self.ips)
+
+    def primary_ip(
+        self, ipv6: bool = False, loopback_ok: bool = True
+    ) -> "Optional[_IPInterface]":
+        """Pick the one entry that best represents this interface, or ``None``.
+
+        Answers "which of this adapter's addresses do I use?" -- the question
+        ``IP_MULTICAST_IF``, a bind target and ``ping -S`` all ask. A
+        **non-loopback** entry wins; a loopback one is returned only when that
+        is genuinely all the interface has::
+
+            iface.primary_ip()               # IPv4Interface('10.0.0.5/24')
+            iface.primary_ip().ip            # IPv4Address('10.0.0.5')
+            iface.primary_ip(ipv6=True)      # its IPv6 entry instead
+
+        Named *primary* rather than *ip* because this is a **selection**, not
+        "the" address: an interface routinely has several, and the full lists
+        remain on :attr:`ips` / :attr:`ipv4` / :attr:`ipv6`.
+
+        :param ipv6: pick from :attr:`ipv6` rather than :attr:`ipv4`.
+        :param loopback_ok: when False, an interface holding only loopback
+            addresses yields ``None`` instead -- for callers that need a
+            routable address specifically.
+
+        Returns an ``IPv4Interface``/``IPv6Interface``, the **same element type
+        as** :attr:`ips` -- one of them, not a different shape. Use ``.ip`` for
+        the bare address that socket options take.
+        """
+        candidates = self.ipv6 if ipv6 else self.ipv4
+        for entry in candidates:
+            if not entry.ip.is_loopback:
+                return entry
+        if candidates and loopback_ok:
+            return candidates[0]
+        return None
 
     @property
     def ipv4(self) -> "List[_ipaddress.IPv4Interface]":
@@ -683,3 +718,39 @@ def get_interfaces(raw: bool = False) -> "List[Interface]":
         return _posix_interfaces(raw)
     except (OSError, AttributeError, ValueError):
         return _fallback_interfaces(raw)
+
+
+def iter_addresses(interfaces=None, family=None):
+    """Yield ``(interface, address)`` once per address, not once per adapter.
+
+    :func:`get_interfaces` groups every address under its adapter, which is the
+    right shape for "describe this host". Consumers that filter or act *per
+    address* -- picking a bind target, excluding link-local, matching a subnet
+    -- want the flattened view instead, and would otherwise write the same
+    nested loop each time::
+
+        for iface, addr in iter_addresses():
+            if addr.ip in some_network:
+                bind_to(addr.ip)
+
+    :param interfaces: reuse an existing enumeration instead of calling
+        :func:`get_interfaces` again. Worth passing in a loop, since
+        enumeration is a syscall.
+    :param family: ``4`` or ``6`` to yield only that family; ``None`` for both.
+
+    The ``interface`` is the full :class:`Interface`, so its name, MAC and MTU
+    stay reachable -- the flattening loses no information.
+    """
+    if interfaces is None:
+        interfaces = get_interfaces()
+    for iface in interfaces:
+        if family == 4:
+            entries = iface.ipv4
+        elif family == 6:
+            entries = iface.ipv6
+        elif family is None:
+            entries = iface.ips
+        else:
+            raise ValueError("family must be 4, 6 or None, got %r" % (family,))
+        for entry in entries:
+            yield iface, entry

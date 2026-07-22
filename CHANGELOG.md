@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-22
+
+Additive: the helpers found duplicated across the sibling repos, centralized so
+they can adopt one implementation. No breaking changes.
+
+### Added
+
+- **`bind(address, port, ...)`** -- socket creation, option-setting and binding
+  in one call, with `reuse_address`/`reuse_port`/`broadcast`/`listen` named and
+  arbitrary `(level, name, value)` triples via `options`. `reuse_port` is a
+  **no-op where `SO_REUSEPORT` does not exist** (Windows) rather than an error.
+  The socket is closed before any exception propagates.
+- **`bind_error_hint(exc, port)`** -- turns a bind failure into an actionable
+  sentence, recognising both the POSIX errnos and the Windows `10013`/`10048`
+  codes. Returns `None` for anything unrecognised, so the caller keeps the
+  original error rather than a worse paraphrase.
+- **`interface_for(address, strict=True)`** -- reverse lookup from an address to
+  the `Interface` holding it. `strict=False` synthesizes a host-route interface
+  named `"<unknown>"` for callers that need *something* to attribute traffic to.
+- **`UdpEndpoint` / `Datagram`** -- UDP receive that reports which interface a
+  datagram arrived on, via `IP_PKTINFO`. Degrades to plain `recvfrom` with
+  `interface=None` where unavailable (Windows has no `recvmsg`); check
+  `.supports_pktinfo`. `send(..., source=)` pins the outgoing interface.
+- **`Interface.primary_ip(ipv6=False, loopback_ok=True)`** -- picks the one
+  entry representing an adapter, preferring non-loopback. Named *primary*
+  because it is a selection: the full lists stay on `.ips`/`.ipv4`/`.ipv6`.
+  Returns the same `ip_interface` element type as `.ips`, and the result is one
+  of them; use `.ip` for the bare address.
+- **`iter_addresses(interfaces=None, family=None)`** -- the flattened
+  `(interface, address)` view, for consumers that filter or act per address
+  rather than per adapter.
+- **`Host`** -- a hostname-or-address value type that keeps the original text,
+  resolves lazily and caches. `str(host)` is always what was given, so a URL can
+  still be rebuilt when resolution fails.
+- **`retry(func, ...)`** and **`backoff_delays(...)`** -- bounded retry with
+  exponential backoff and jitter. Only `OSError` is retried by default, since a
+  `ValueError` means the call is malformed and will fail identically; the last
+  exception is re-raised unwrapped so the traceback still points at the real
+  problem.
+- **Named networks**: `APIPA`, `LOOPBACK_V4`, `LOOPBACK_V6`, `LINK_LOCAL_V6`.
+
+### Changed
+
+- The loose "which interface?" coercion accepted by `ping(source=)`,
+  `multicast_socket(interface=)` and now `bind(interface=)` is one shared
+  implementation instead of two near-copies, and **returns a parsed address
+  rather than a string** -- matching the rest of the package, with `str()`
+  applied at the OS boundary.
+
 ## [0.2.0] - 2026-07-21
 
 The distribution was renamed and the API reshaped in one release. 0.1.0 was
@@ -148,6 +197,7 @@ updated.
   `ping`, and local NIC helpers `active_nic_addresses` / `get_ip_address` /
   `nic_info`.
 
-[Unreleased]: https://github.com/jose-pr/netimps/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/jose-pr/netimps/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/jose-pr/netimps/releases/tag/v0.3.0
 [0.2.0]: https://github.com/jose-pr/netimps/releases/tag/v0.2.0
 [0.1.0]: https://github.com/jose-pr/netimps/releases/tag/v0.1.0

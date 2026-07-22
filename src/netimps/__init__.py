@@ -67,6 +67,11 @@ from ipaddress import (
 )
 
 from ._ip import (
+    APIPA,
+    LINK_LOCAL_V6,
+    LOOPBACK_V4,
+    LOOPBACK_V6,
+    Host,
     _BUILDERS,
     _BUILDER_DEFAULTS,
     _CONCRETE,
@@ -102,7 +107,12 @@ __all__ = [
     "try_parse",
     "is_valid",
     "get_ip",
+    "Host",
     "is_link_scoped",
+    "APIPA",
+    "LOOPBACK_V4",
+    "LOOPBACK_V6",
+    "LINK_LOCAL_V6",
     "collapse",
     "subtract",
     "normalize_host",
@@ -114,12 +124,20 @@ __all__ = [
     "PingResult",
     "Interface",
     "get_interfaces",
+    "iter_addresses",
     # Socket / route helpers.
     "get_source_ip",
     "free_port",
     "tcp_check",
     "wait_for_port",
     "get_route",
+    "bind",
+    "bind_error_hint",
+    "interface_for",
+    "UdpEndpoint",
+    "Datagram",
+    "retry",
+    "backoff_delays",
     # Scanning.
     "scan_ports",
     "scan_hosts",
@@ -135,7 +153,7 @@ __all__ = [
     "HOST_DN",
 ]
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 #: Fully-qualified (or short) name of the host running this process.
 HOST_DN = _platform.node()
@@ -356,7 +374,7 @@ from ._scheme import (  # noqa: E402
     get_default_scheme,
     register_port,
 )
-from ._ifaddrs import Interface, get_interfaces  # noqa: E402
+from ._ifaddrs import Interface, get_interfaces, iter_addresses  # noqa: E402
 from ._dns import resolve  # noqa: E402
 from ._ping import PingResult, ping  # noqa: E402
 from ._scan import PORT_RANGES, scan_hosts, scan_ports  # noqa: E402
@@ -366,7 +384,12 @@ from ._multicast import (  # noqa: E402
     leave_group,
     multicast_socket,
 )
+from ._retry import backoff_delays, retry  # noqa: E402
+from ._udp import Datagram, UdpEndpoint  # noqa: E402
 from ._sockets import (  # noqa: E402
+    bind,
+    bind_error_hint,
+    interface_for,
     Route,
     free_port,
     get_source_ip,

@@ -18,42 +18,9 @@ from subprocess import TimeoutExpired as _SubprocessTimeout
 from subprocess import run as _run
 from typing import Optional
 
+from ._iface_spec import interface_address as _interface_address
+
 __all__ = ["ping", "PingResult"]
-
-
-def _source_argument(source, want_ipv6: bool = False) -> Optional[str]:
-    """Coerce a source spec to the address string ``ping`` needs.
-
-    Accepts an :class:`Interface`, an address object, or a string. Interfaces
-    are reduced to an address because Windows ``-S`` will not take an adapter
-    name; ``None`` means "nothing usable here", which the caller must treat as
-    a failure rather than silently omitting the flag.
-    """
-    # A MAC identifies an adapter, so look up which one carries it. Unknown
-    # MACs are None ("no such interface"), never a silent fallback.
-    from . import MACAddress, is_valid
-    from ._ifaddrs import Interface, get_interfaces
-
-    if isinstance(source, MACAddress) or (
-        isinstance(source, str) and is_valid(source, MACAddress)
-    ):
-        wanted = MACAddress(source)
-        source = next(
-            (iface for iface in get_interfaces() if iface.mac == wanted), None
-        )
-        if source is None:
-            return None
-
-    if isinstance(source, Interface):
-        candidates = source.ipv6 if want_ipv6 else source.ipv4
-        for entry in candidates:
-            if not entry.ip.is_loopback:
-                return str(entry.ip)
-        # Fall back to a loopback address if that is genuinely all it has.
-        return str(candidates[0].ip) if candidates else None
-
-    text = str(source).strip()
-    return text or None
 
 
 class PingResult:
@@ -254,12 +221,12 @@ def ping(
         options.append("-4")
 
     if source is not None:
-        resolved_source = _source_argument(source, want_ipv6=bool(ipv6))
+        resolved_source = _interface_address(source, want_ipv6=bool(ipv6), strict=False)
         if resolved_source is None:
             # An interface with no usable address cannot be a source.
             return PingResult(False, hostname, attempts=0)
         # Windows spells it -S <addr>; POSIX uses -I <addr-or-ifname>.
-        options.extend(["-S" if _os.name == "nt" else "-I", resolved_source])
+        options.extend(["-S" if _os.name == "nt" else "-I", str(resolved_source)])
 
     if size is not None:
         if size < 0:

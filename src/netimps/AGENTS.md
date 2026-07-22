@@ -9,7 +9,7 @@ Everything is imported from `netimps` directly. The `_`-prefixed submodules
 `_scheme`) are implementation detail — **do not import them**. For the project
 overview see the repo-root `AGENTS.md`.
 
-`netimps.__version__` — the package version string (currently `"0.2.0"`).
+`netimps.__version__` — the package version string (currently `"0.3.0"`).
 
 ## Types vs parsing — read this first
 
@@ -123,6 +123,7 @@ is deliberately not used.
 | `.ips` | every address with its real prefix |
 | `.ipv4` / `.ipv6` | the split views |
 | `.mtu` | link MTU in bytes, or `None` |
+| `.primary_ip(ipv6=False, loopback_ok=True)` | pick **one** entry from `.ips` (non-loopback preferred), or `None` |
 | `.is_loopback` | **computed from the addresses, not the name** |
 | `.raw` | `None` unless `raw=True`; platform-specific leftovers |
 
@@ -134,6 +135,15 @@ is deliberately not used.
   degrades to hostname resolution, where **prefixes are fiction** (every address
   becomes `/32` or `/128` under an interface named `"<unknown>"`). Check
   `iface.name == "<unknown>"` to detect it.
+- **`primary_ip()` is a selection, not "the" address** — an adapter routinely
+  has several. It returns the **same element type as `.ips`** (an
+  `ip_interface`, carrying the prefix) and the result *is* one of them; use
+  `.ip` for the bare address that socket options take.
+
+**`iter_addresses(interfaces=None, family=None)`** — the flattened
+`(interface, address)` view, yielded once per address rather than per adapter,
+for consumers that filter or act per address. The full `Interface` comes along,
+so nothing is lost. Pass an existing enumeration in a loop; it is a syscall.
 
 > **Removed in 0.2.0.** `active_nic_addresses`, `get_ip_address` and `nic_info`
 > are superseded by `get_interfaces()`, which is correct where they were not:
@@ -218,6 +228,19 @@ else is `str` with the trailing root dot stripped and TXT strings unquoted.
 
 ## Socket helpers
 
+- **`bind(address="", port=0, *, family, kind, reuse_address=True, reuse_port=False, broadcast=False, interface=None, options=(), listen=None)`**
+  — create, configure and bind in one call. `interface` accepts the usual union
+  (`Interface`, MAC, adapter name, address) and **raises** if unresolvable
+  rather than silently binding the wildcard. `reuse_port` is a **no-op where
+  `SO_REUSEPORT` does not exist** (Windows), not an error. The socket is closed
+  before any exception propagates, so a failed call leaks nothing.
+- **`bind_error_hint(exc, port=None) -> str | None`** — an actionable sentence
+  for a bind failure, recognising POSIX errnos *and* Windows `10013`/`10048`.
+  Returns `None` for anything unrecognised, so the caller keeps the original
+  error. **Does not raise** — what to do with a failure is the caller's call.
+- **`interface_for(address, strict=True) -> Interface | None`** — reverse
+  lookup. `strict=False` synthesizes a host-route interface named
+  `"<unknown>"` instead of returning `None`.
 - **`get_source_ip(dest="8.8.8.8", port=80)`** — which local address the kernel
   would use to reach `dest`. **Sends no packets.** The answer depends on
   `dest`: with a VPN up, a public probe returns the tunnel address and a LAN
@@ -292,8 +315,63 @@ receives nothing, and looks fine:
   on a multi-homed host is regularly the wrong adapter. An unknown interface
   **raises** rather than falling back.
 
+## UDP with arrival interface
+
+**`UdpEndpoint(sock, pktinfo=True)`** — wraps a bound UDP socket so each
+datagram reports which interface it arrived on, via `IP_PKTINFO`. Essential for
+broadcast protocols, where a wildcard-bound server otherwise cannot tell which
+network a request came from.
+
+`recv(bufsize, resolve_interface=True) -> Datagram`, with `.data`, `.sender`,
+`.local_address`, `.interface_index` and `.interface`.
+`send(data, address, port, source=None)` pins the outgoing interface.
+
+- **Degrades rather than failing.** `recvmsg` does not exist on Windows and
+  `IP_PKTINFO` is not universal; there the interface fields are simply empty.
+  Check `.supports_pktinfo` to know which mode you are in.
+- Pass `resolve_interface=False` in a hot loop and use `.interface_index` —
+  enumeration is a syscall.
+- Wraps rather than subclasses the socket; the raw one stays on `.socket`.
+
+## Retry
+
+**`retry(func, attempts=3, delay=0.5, multiplier=2.0, max_delay=30.0, jitter=0.1, retryable=(OSError,), on_retry=None)`**
+
+Calls `func()`, retrying transient failures with exponential backoff. Returns
+whatever `func` returns; if every attempt fails **the last exception is
+re-raised unwrapped**, so the traceback still points at the real problem.
+
+- **Only `OSError` is retried by default** — that covers the socket family. A
+  `ValueError` means the call is malformed and will fail identically, so it
+  propagates immediately.
+- `attempts` counts *total* calls: `attempts=1` calls once and never sleeps.
+- `jitter` spreads retries so simultaneous failures do not resynchronise into a
+  thundering herd. Applied **after** the cap and only ever shortens, so
+  `max_delay` is a real ceiling.
+- `on_retry(attempt, exc, next_delay)` is the logging hook; this logs nothing
+  itself.
+- Synchronous — it blocks. For async, drive **`backoff_delays(...)`** from your
+  own loop; it yields the same schedule.
+
+## Host
+
+**`Host(value)`** — a host named by either an address or a hostname.
+
+`str(host)` is **always the original text**, so a URL can still be rebuilt when
+resolution fails — the case a bare `get_ip()` handles badly, since it returns
+`None` and loses the name.
+
+- `.is_address` — already a literal, no DNS needed.
+- `.ip(refresh=False)` — resolve to an address or `None`. **Cached, including
+  failure**, since the common use is several lookups on one object; pass
+  `refresh=True` to retry.
+- Compares equal to a plain `str`, and hashes by its text.
+
 ## Constants
 
 - **`HOST_DN`** — `platform.node()`, captured **at import time** (a later
   hostname change is not reflected).
 - **`PORT_RANGES`** — `{"well-known", "common", "all"}` port tuples.
+- **`APIPA`** (`169.254.0.0/16`), **`LOOPBACK_V4`** (`127.0.0.0/8`),
+  **`LOOPBACK_V6`** (`::1/128`), **`LINK_LOCAL_V6`** (`fe80::/10`) — named
+  networks, so callers stop spelling the literals out.
