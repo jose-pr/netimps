@@ -6,6 +6,7 @@ import types
 import pytest
 
 import netimps
+from netimps import _ping
 from netimps import ping, resolve
 from netimps import IPv4Address
 
@@ -185,7 +186,7 @@ def test_ping_success(monkeypatch):
         calls.append(cmd)
         return subprocess.CompletedProcess(cmd, 0, stdout=_REPLY)
 
-    monkeypatch.setattr(netimps, "_run", fake_run)
+    monkeypatch.setattr(netimps._ping, "_run", fake_run)
     assert bool(ping("127.0.0.1")) is True
     assert calls[0][0] == "ping"
     assert "127.0.0.1" in calls[0]
@@ -197,7 +198,7 @@ def test_ping_reports_rtt_and_ttl(monkeypatch):
     def fake_run(cmd, **kwargs):
         return subprocess.CompletedProcess(cmd, 0, stdout=_REPLY)
 
-    monkeypatch.setattr(netimps, "_run", fake_run)
+    monkeypatch.setattr(netimps._ping, "_run", fake_run)
     result = ping("127.0.0.1")
     assert result.ok is True
     assert result.rtt_ms == 1.0
@@ -217,7 +218,7 @@ def test_ping_zero_exit_is_not_enough_without_a_matching_reply(monkeypatch):
             cmd, 0, stdout=b"Reply from 192.0.2.1: TTL expired in transit.\n"
         )
 
-    monkeypatch.setattr(netimps, "_run", fake_run)
+    monkeypatch.setattr(netimps._ping, "_run", fake_run)
     assert bool(ping("8.8.8.8")) is False
 
 
@@ -240,7 +241,7 @@ def test_ping_failure_exhausts_tries(monkeypatch):
         calls.append(cmd)
         return subprocess.CompletedProcess(cmd, 1, stdout=b"")
 
-    monkeypatch.setattr(netimps, "_run", fake_run)
+    monkeypatch.setattr(netimps._ping, "_run", fake_run)
     assert bool(ping("10.255.255.1", tries=3)) is False
     assert len(calls) == 3
 
@@ -320,7 +321,7 @@ def _capture_ping(monkeypatch, returncode=0):
         calls.append((cmd, kwargs))
         return subprocess.CompletedProcess(cmd, returncode, stdout=b"")
 
-    monkeypatch.setattr(netimps, "_run", fake_run)
+    monkeypatch.setattr(netimps._ping, "_run", fake_run)
     return calls
 
 
@@ -375,7 +376,7 @@ def test_ping_returns_false_when_binary_missing(monkeypatch):
     def no_binary(cmd, **kwargs):
         raise FileNotFoundError("ping not installed")
 
-    monkeypatch.setattr(netimps, "_run", no_binary)
+    monkeypatch.setattr(netimps._ping, "_run", no_binary)
     assert bool(netimps.ping("host")) is False
 
 
@@ -383,7 +384,7 @@ def test_ping_returns_false_when_subprocess_hangs(monkeypatch):
     def hang(cmd, **kwargs):
         raise subprocess.TimeoutExpired(cmd, 1)
 
-    monkeypatch.setattr(netimps, "_run", hang)
+    monkeypatch.setattr(netimps._ping, "_run", hang)
     assert bool(netimps.ping("host")) is False
 
 
