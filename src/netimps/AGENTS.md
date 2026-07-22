@@ -215,7 +215,7 @@ else is `str` with the trailing root dot stripped and TXT strings unquoted.
 
 ## Reachability
 
-**`ping(dst, tries=1, timeout=1.0, ipv6=None, src=None, size=None, ttl=None, dont_fragment=False) -> PingResult`**
+**`ping(dst, tries=1, timeout=1.0, ipv6=None, src=None, size=None, ttl=None, dont_fragment=False, method="icmp", port=None) -> PingResult`**
 
 `PingResult` is **truthy on success** and compares equal to `bool`, so
 `if ping(host):` and `== True` keep working, while carrying `.ok`, `.rtt_ms`,
@@ -227,6 +227,13 @@ else is `str` with the trailing root dot stripped and TXT strings unquoted.
 | `size` | ICMP payload bytes. The wire packet is **28 bytes larger** (20 IP + 8 ICMP). |
 | `ttl` | initial hop limit — `-i` on Windows, `-t` on POSIX (the letters are **swapped**). |
 | `dont_fragment` | DF bit. With `size`, the manual MTU probe: largest passing `size` + 28 = path MTU. Ignored on macOS/BSD. |
+| `method` | `"icmp"` (default), `"tcp"` or `"udp"`. The latter two reach hosts through firewalls that drop echo. |
+| `port` | required for `tcp`/`udp`, ignored for ICMP. |
+
+**All three methods ask "is the *host* up?"** — so a TCP refusal counts as
+success (the RST proves something answered), as does an ICMP port-unreachable
+for UDP. Use `tcp_check` for "is the *service* up?", where a refusal is a
+failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
 
 - **`ttl` behaves identically on every platform.** Windows `ping` exits `0` for
   "TTL expired in transit", so the reply address is verified rather than
@@ -281,22 +288,38 @@ else is `str` with the trailing root dot stripped and TXT strings unquoted.
   `allow_traceroute=False` requires the in-process path and raises
   `PermissionError` instead. **`None` means "no answer", never "unreachable"** —
   firewalls routinely drop ICMP even for an elevated process.
-- **`discover_mtu(dst, low=576, high=9000, timeout=1.0, src=None, probe=True)`**
-  — **measures** the path MTU by binary-searching DF-flagged pings, so packets
-  really traverse the path. Works on every platform (it only needs the `ping`
-  binary) and is the one to use when the answer must be right. Returns the MTU
-  **including headers**, comparable with `Interface.mtu`. `None` means the
-  destination never answered — indistinguishable from "every size was too big".
+- **`discover_mtu(dst, low=576, high=9000, timeout=1.0, src=None, port=80, probe=True, method="icmp", **ping_kwargs)`**
+  — **measures** the path MTU by binary-searching probes, so packets really
+  traverse the path. Returns the MTU **including headers**, comparable with
+  `Interface.mtu`. `None` means the destination never answered —
+  indistinguishable from "every size was too big".
+
+  | `method` | How |
+  | --- | --- |
+  | `"icmp"` | DF-flagged echo. Default; works anywhere `ping` does. |
+  | `"udp"` | Datagrams of growing size to `port`. Needs something there that replies. Measures what a **UDP application** can actually push, which a middlebox may cap below the ICMP figure. |
+  | `"tcp"` | **Does not probe** — TCP is a stream and the kernel segments it, so a large `send()` becomes many packets. Reads the negotiated MSS and adds the header back. |
+
+  Extra `**ping_kwargs` reach `ping` for the ICMP method (`ipv6=`, `tries=`).
+  `size` and `dont_fragment` are what the search varies, so passing them raises.
+- **`get_tcp_mss(dst, port, timeout=3.0) -> int | None`** — the negotiated TCP
+  maximum segment size. Opens a real connection to read it. A reduced value
+  signals a tunnel shrinking the path; `None` where `TCP_MAXSEG` is
+  unavailable.
 - **`get_pmtu(dst, port=80) -> int | None`** — a **lookup**, not a
   measurement: reads the `IP_MTU` the kernel has *already* learned, and sends
   nothing. Usually `None`, because the kernel only knows a path MTU once prior
   traffic forced it to learn one; **always `None` on Windows**, which has no
   `IP_MTU`. `discover_mtu(..., probe=False)` is exactly this.
 
-> **The two answer different questions.** On one real host the local link was
-> 9000, `get_pmtu` returned `None`, and `discover_mtu` found the true 1500 —
-> a bottleneck several hops away that nothing local could reveal. Use
+> **These answer different questions.** On one real host the local link was
+> 9000, `get_pmtu` returned `None`, and `discover_mtu` found the true 1500 — a
+> bottleneck several hops away that nothing local could reveal. Use
 > `Interface.mtu` for the local link, `discover_mtu` for the path.
+>
+> **Header sizes are family-aware.** IPv4 overhead is 20+8 (ICMP/UDP) or 20+20
+> (TCP); IPv6 is 40+8 and 40+20. Assuming IPv4 on a v6 path under-reports by
+> exactly 20 bytes.
 
 ## Scanning
 

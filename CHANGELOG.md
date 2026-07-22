@@ -38,8 +38,12 @@ below is simply what the package contains.
   on via `IP_PKTINFO`, degrading where `recvmsg` does not exist.
 - **Routing and MTU** -- `get_route()` (first hop, unprivileged), `hop_count()`
   (raw sockets or a traceroute fallback, so it works without elevation),
-  `discover_mtu()` (measures the real path with DF-flagged pings) and
-  `get_pmtu()` (the kernel's cached answer, usually `None`), `Interface.mtu`.
+  `discover_mtu()` (measures the real path -- `method="icmp"` with DF-flagged
+  pings, `"udp"` with datagrams, or `"tcp"` deriving from the negotiated MSS
+  since TCP cannot be probed), `get_pmtu()` (the kernel's cached answer, usually
+  `None`), `get_tcp_mss()`, and `Interface.mtu`. Header arithmetic is
+  family-aware: IPv6 adds 20 bytes over IPv4, and assuming v4 on a v6 path
+  under-reports by exactly that.
 - **CIDR maths and host parsing** -- `collapse()`, `subtract()` (absent from
   `ipaddress`), and `normalize_host()`, which keeps `"::1"` an address rather
   than host `"::"` port `1`.
@@ -49,7 +53,10 @@ below is simply what the package contains.
   objects), `[]` on a genuine lookup failure, and `ValueError` for a malformed
   query rather than a silent empty result.
 - **`ping()`** -- returns a `PingResult` with round-trip time and TTL that stays
-  truthy. `ttl=` behaves identically on every platform, because Windows `ping`
+  truthy. `method="icmp"|"tcp"|"udp"` reaches hosts through firewalls that drop
+  echo; all three ask "is the *host* up?", so a TCP refusal or an ICMP
+  port-unreachable counts as success. `tcp_check` remains the "is the *service*
+  up?" question, where a refusal is a failure. `ttl=` behaves identically on every platform, because Windows `ping`
   exits 0 for "TTL expired in transit" and the reply address is verified
   instead of the exit code.
 - **Scanning** -- concurrent `scan_ports()` / `scan_hosts()`, ports addressable

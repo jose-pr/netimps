@@ -93,9 +93,15 @@ mac.is_local, mac.oui.hex()              # (True, 'aabbcc') -- AA has the U/L bi
 netimps.resolve("example.com")[0].is_global   # an IPv4Address, not a str
 netimps.resolve("example.com", "txt")         # ['v=spf1 -all']  -- unquoted
 
-# ping carries the details
+# ping carries the details, and can use TCP or UDP where ICMP is blocked
 result = netimps.ping("8.8.8.8")
 result.ok, result.rtt_ms, result.ttl     # (True, 9.0, 119)
+netimps.ping("8.8.8.8", method="tcp", port=53)   # times the handshake
+
+# Path MTU, measured rather than guessed
+netimps.discover_mtu("8.8.8.8")                       # 1500
+netimps.discover_mtu("10.0.0.5", method="udp", port=9999)
+netimps.get_tcp_mss("example.com", 443)               # 1460
 
 # Scanning and multicast
 netimps.scan_ports("192.168.1.1", ["ssh", "https"])   # [22, 443]
@@ -132,7 +138,7 @@ netimps.retry(lambda: netimps.tcp_check("example.com", 443), attempts=3)
 | `retry`, `backoff_delays` | bounded retry with exponential backoff |
 | `APIPA`, `LOOPBACK_V4`, `LOOPBACK_V6`, `LINK_LOCAL_V6` | named networks |
 | `get_route`, `Route`, `hop_count` | routing and distance |
-| `discover_mtu`, `get_pmtu` | path MTU: measured, or the kernel's cached guess |
+| `discover_mtu`, `get_pmtu`, `get_tcp_mss` | path MTU by ICMP/UDP/TCP, the kernel's cached guess, or the negotiated MSS |
 | `scan_ports`, `scan_hosts`, `PORT_RANGES` | concurrent scanning |
 | `multicast_socket`, `join_group`, `leave_group`, `is_multicast` | multicast |
 | `HOST_DN` | `platform.node()`, captured at import time |
