@@ -9,6 +9,7 @@ from netimps import (
     IPNet,
     IPv4Address,
     IPv4Interface,
+    MACAddress,
     is_valid_ip,
     try_parse,
 )
@@ -211,3 +212,123 @@ def test_try_parse_agrees_with_is_valid():
             5,
         ]:
             assert (try_parse(value, parser) is not None) == is_valid(value, parser)
+
+
+# --------------------------------------------------------------------------- #
+# passing types (not just factories) as the parser                             #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "alias_name, value, expected",
+    [
+        ("IPAddress", "10.0.0.5", "10.0.0.5"),
+        ("IPInterface", "10.0.0.5/24", "10.0.0.5/24"),
+        ("IPNetwork", "10.0.0.0/24", "10.0.0.0/24"),
+    ],
+)
+def test_try_parse_accepts_union_aliases(alias_name, value, expected):
+    """The result-type aliases are not callable -- try_parse maps them."""
+    alias = getattr(netimps, alias_name)
+    assert str(netimps.try_parse(value, alias)) == expected
+
+
+def test_union_alias_is_not_directly_callable():
+    """Establishes *why* the mapping is needed."""
+    with pytest.raises(TypeError):
+        netimps.IPAddress("10.0.0.5")
+
+
+def test_concrete_types_stay_strict():
+    """Asking for one family must never hand back the other."""
+    assert netimps.try_parse("10.0.0.5", IPv4Address) == IPv4Address("10.0.0.5")
+    assert netimps.try_parse("::1", IPv4Address) is None
+    assert netimps.try_parse("10.0.0.5", netimps.IPv6Address) is None
+    assert not netimps.is_valid("::1", IPv4Address)
+    assert netimps.is_valid("::1", netimps.IPv6Address)
+
+    assert netimps.try_parse("10.0.0.0/24", netimps.IPv6Network) is None
+    assert netimps.try_parse("::/64", netimps.IPv4Network) is None
+
+
+def test_unions_accept_either_family():
+    """The union aliases are the 'either family' spelling."""
+    assert str(netimps.try_parse("::1", netimps.IPAddress)) == "::1"
+    assert str(netimps.try_parse("10.0.0.5", netimps.IPAddress)) == "10.0.0.5"
+    assert netimps.is_valid("::1", netimps.IPAddress)
+
+
+def test_is_valid_accepts_union_aliases():
+    assert netimps.is_valid("10.0.0.5", netimps.IPAddress)
+    assert not netimps.is_valid("nonsense", netimps.IPAddress)
+    assert netimps.is_valid("aa:bb:cc:dd:ee:ff", MACAddress)
+
+
+def test_aliases_and_factories_agree():
+    for alias, factory in [
+        (netimps.IPAddress, IPAddr),
+        (netimps.IPInterface, IPIface),
+        (netimps.IPNetwork, IPNet),
+    ]:
+        for value in ["10.0.0.5", "10.0.0.5/24", "nope", "", None]:
+            assert netimps.try_parse(value, alias) == netimps.try_parse(value, factory)
+
+
+def test_non_callable_parser_raises():
+    """A bad parser is a caller bug, not a rejected value -- it must not be None."""
+    for bad in [42, "not-a-parser", None]:
+        with pytest.raises(TypeError, match="must be a callable"):
+            netimps.try_parse("10.0.0.5", bad)
+        with pytest.raises(TypeError, match="must be a callable"):
+            netimps.is_valid("10.0.0.5", bad)
+
+
+def test_unhashable_parser_does_not_crash_lookup():
+    """A dict lookup on an unhashable parser must be guarded."""
+    with pytest.raises(TypeError, match="must be a callable"):
+        netimps.try_parse("10.0.0.5", ["not", "callable"])
+
+
+def test_input_aliases_are_not_parsers():
+    """*Like aliases describe accepted input, not a result type to build.
+
+    Regression guard: on Python 3.9 a ``Union`` alias is ``callable()``, so a
+    bare callable check lets these through and they fail later with a much
+    more confusing error. They must be rejected up front on every version.
+    """
+    for alias in (netimps.IPAddressLike, netimps.IPNetworkLike, netimps.MACLike):
+        assert alias not in netimps._PARSER_FOR_TYPE
+        with pytest.raises(TypeError, match="typing construct"):
+            netimps.try_parse("10.0.0.5", alias)
+        with pytest.raises(TypeError, match="typing construct"):
+            netimps.is_valid("10.0.0.5", alias)
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["10.0.0.5", 0x0A000005, b"\x0a\x00\x00\x05", IPv4Address("10.0.0.5")],
+)
+def test_concrete_type_accepts_every_factory_input(value):
+    """A concrete type must take everything IPAddr does, not just strings."""
+    assert netimps.try_parse(value, IPv4Address) == IPv4Address("10.0.0.5")
+
+
+def test_concrete_network_is_non_strict_like_ipnet():
+    """Regression: IPv4Network defaults to strict=True, IPNet does not.
+
+    Routing through the factory keeps host-bits-set input working, so the
+    concrete type and the union agree instead of diverging on the same input.
+    """
+    assert netimps.try_parse(
+        "10.0.0.5/24", netimps.IPv4Network
+    ) == ipaddress.ip_network("10.0.0.0/24")
+    assert netimps.try_parse("10.0.0.5/24", IPNet) == ipaddress.ip_network(
+        "10.0.0.0/24"
+    )
+
+
+def test_concrete_types_round_trip_existing_objects():
+    iface = ipaddress.ip_interface("10.0.0.5/24")
+    net = ipaddress.ip_network("10.0.0.0/24")
+    assert netimps.try_parse(iface, netimps.IPv4Interface) == iface
+    assert netimps.try_parse(net, netimps.IPv4Network) == net

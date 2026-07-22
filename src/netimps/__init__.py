@@ -42,7 +42,17 @@ import re as _re
 import socket as _socket
 from subprocess import TimeoutExpired as _SubprocessTimeout
 from subprocess import run as _run
-from typing import Callable, List, Optional, TypeVar, Union
+from typing import TYPE_CHECKING, Callable, List, Optional, Type, TypeVar, Union
+from typing import get_origin as _typing_get_origin
+
+if TYPE_CHECKING:
+    # TypeGuard landed in typing at 3.10 and typing_extensions before that.
+    # Under TYPE_CHECKING only, so 3.9 needs no runtime dependency: type
+    # checkers supply typing_extensions themselves.
+    try:
+        from typing import TypeGuard
+    except ImportError:  # pragma: no cover - 3.9
+        from typing_extensions import TypeGuard
 
 # Re-export the concrete stdlib types so consumers can annotate with them.
 from ipaddress import (
@@ -171,42 +181,152 @@ def IPNet(value: _NetworkValue, strict: bool = False) -> IPNetwork:
 
 _T = TypeVar("_T")
 
+# Result types accepted in a `parser` position, mapped to the callable that
+# builds them, so callers can pass the *type* they want (``try_parse(v,
+# IPAddress)``) rather than recall the factory's name.
+#
+# Only result types belong here. The ``*Like`` aliases describe accepted
+# *input*, so mapping them would conflate "what goes in" with "what comes out";
+# MACAddress and the factories are already callable and need no entry.
+_PARSER_FOR_TYPE = {
+    # The v4/v6 unions -- not callable, so these would be a TypeError otherwise.
+    # They accept either family, which is the point of the union.
+    IPAddress: IPAddr,
+    IPInterface: IPIface,
+    IPNetwork: IPNet,
+}
 
-def try_parse(value: object, parser: Callable[..., _T]) -> Optional[_T]:
+
+def _family_strict(factory, wanted):
+    """Parse with ``factory``, then require the result to be of type ``wanted``.
+
+    The concrete classes need an entry after all, for two reasons:
+
+    * ``IPv4Network("10.0.0.5/24")`` raises, because the stdlib constructors
+      default to ``strict=True`` while :func:`IPNet` deliberately does not.
+      Routing through the factory keeps host-bits-set input working uniformly.
+    * The family must still be enforced, so ``IPv4Address("::1")`` stays a
+      rejection rather than silently returning an ``IPv6Address``.
+    """
+
+    def parse(value):
+        result = factory(value)
+        if not isinstance(result, wanted):
+            raise ValueError("%r is not a %s" % (value, wanted.__name__))
+        return result
+
+    return parse
+
+
+# The concrete classes: same permissive parsing as the factories, but the
+# requested family is enforced -- ask for v4 and v6 input is rejected, never
+# quietly converted.
+_PARSER_FOR_TYPE.update(
+    {
+        IPv4Address: _family_strict(IPAddr, IPv4Address),
+        IPv6Address: _family_strict(IPAddr, IPv6Address),
+        IPv4Interface: _family_strict(IPIface, IPv4Interface),
+        IPv6Interface: _family_strict(IPIface, IPv6Interface),
+        IPv4Network: _family_strict(IPNet, IPv4Network),
+        IPv6Network: _family_strict(IPNet, IPv6Network),
+    }
+)
+
+
+def _resolve_parser(parser):
+    """Map a result type to its factory, or pass a callable straight through.
+
+    ``dict`` lookup on a ``Union`` alias works (they hash by their args), but
+    an unhashable ``parser`` would raise, so the lookup is guarded.
+    """
+    try:
+        resolved = _PARSER_FOR_TYPE.get(parser)
+    except TypeError:  # unhashable -- definitely not one of our types
+        resolved = None
+    if resolved is not None:
+        return resolved
+
+    # A typing construct that is not in the map (an input-only ``*Like`` alias,
+    # or any other Union) is a caller mistake. It must be rejected explicitly:
+    # on Python 3.9 these objects *are* callable -- ``Union[...](x)`` reaches
+    # ``_GenericAlias.__call__`` -- so a bare ``callable()`` test lets them
+    # through and they fail later with a far more confusing error.
+    if _typing_get_origin(parser) is not None:
+        raise TypeError(
+            "parser must be a result type or a callable, got the typing "
+            "construct %r (input-only aliases like IPAddressLike describe what "
+            "is accepted, not what to build)" % (parser,)
+        )
+
+    if not callable(parser):
+        raise TypeError(
+            "parser must be a callable or a netimps type, got %r" % (parser,)
+        )
+    return parser
+
+
+def try_parse(
+    value: object, parser: "Union[Type[_T], Callable[..., _T]]"
+) -> "Optional[_T]":
     """Return ``parser(value)``, or ``None`` if it rejects the input. Never raises.
 
-    The one non-raising parse for the whole package, usable with any of its
-    factories -- or any callable that signals bad input with
-    ``ValueError``/``TypeError``::
+    The one non-raising parse for the whole package. ``parser`` is either a
+    **type** -- including the union aliases, which are not themselves callable
+    -- or any callable that signals bad input with ``ValueError``/``TypeError``::
 
-        try_parse("10.0.0.5", IPAddr)        # IPv4Address('10.0.0.5')
-        try_parse("nonsense", IPAddr)        # None
+        try_parse("10.0.0.5", IPAddress)     # IPv4Address('10.0.0.5')
+        try_parse("10.0.0.5", IPAddr)        # same, via the factory directly
+        try_parse("nonsense", IPAddress)     # None
         try_parse(user_input, MACAddress) or DEFAULT_MAC
+
+    The union aliases ``IPAddress``/``IPInterface``/``IPNetwork`` accept either
+    family. A **concrete** type stays strict, so asking for one family and
+    getting the other is impossible::
+
+        try_parse("::1", IPAddress)      # IPv6Address('::1')  -- either family
+        try_parse("::1", IPv4Address)    # None                -- v4 was asked for
+        try_parse("10.0.0.5", IPv4Address)   # IPv4Address('10.0.0.5')
 
     Prefer this to ``is_valid`` followed by a parse: that pattern does the work
     twice and leaves a window where the two disagree.
 
+    Generic in the parser: ``try_parse(x, MACAddress)`` is typed
+    ``Optional[MACAddress]``, so a checker knows the result without a cast.
+
     Only ``ValueError`` and ``TypeError`` are swallowed -- the two exceptions
     that mean "bad input". Anything else (an ``OSError`` from a parser that
     touches the network, a bug in the parser) propagates, because turning it
-    into ``None`` would disguise a real failure as a rejected value.
+    into ``None`` would disguise a real failure as a rejected value. A
+    ``parser`` that is neither callable nor a known type raises ``TypeError``:
+    that is a caller bug, not a rejected value.
     """
+    parser = _resolve_parser(parser)
     try:
         return parser(value)
     except (ValueError, TypeError):
         return None
 
 
-def is_valid(value: object, parser: Callable[..., object]) -> bool:
+def is_valid(
+    value: object, parser: "Union[Type[_T], Callable[..., _T]]"
+) -> "TypeGuard[_T]":
     """Return ``True`` if ``parser(value)`` succeeds. Never raises.
 
     The generic "can this be parsed?" check behind :func:`is_valid_ip` and
-    :func:`is_valid_mac`::
+    :func:`is_valid_mac`. Accepts the same ``parser`` forms as
+    :func:`try_parse` -- a type, a union alias, or any callable::
 
-        is_valid("10.0.0.5", IPAddr)         # True
-        is_valid("10.0.0.0/24", IPNet)       # True
+        is_valid("10.0.0.5", IPAddress)      # True  (the type alias)
+        is_valid("10.0.0.0/24", IPNet)       # True  (the factory)
         is_valid("aa:bb:cc:dd:ee:ff", MACAddress)
-        is_valid("nonsense", IPAddr)         # False
+        is_valid("nonsense", IPAddress)      # False
+
+    Declared as a :data:`typing.TypeGuard`, so a checker **narrows the value**
+    in the ``True`` branch::
+
+        def handle(raw: object) -> None:
+            if is_valid(raw, IPAddr):
+                raw.is_private        # raw is IPv4Address | IPv6Address here
 
     When you want the parsed value too, use :func:`try_parse` instead of
     calling this first -- one call, no double work. Same exception policy: only
@@ -217,6 +337,7 @@ def is_valid(value: object, parser: Callable[..., object]) -> bool:
        indistinguishable from failure via :func:`try_parse`; this function
        reports such a case as ``True``, since the parse did succeed.
     """
+    parser = _resolve_parser(parser)
     try:
         parser(value)
         return True
@@ -224,7 +345,7 @@ def is_valid(value: object, parser: Callable[..., object]) -> bool:
         return False
 
 
-def is_valid_ip(value: object) -> bool:
+def is_valid_ip(value: object) -> "TypeGuard[IPAddress]":
     """Return ``True`` if ``value`` is a valid IPv4/IPv6 address.
 
     Never raises: any input that :func:`ipaddress.ip_address` rejects (including
@@ -234,7 +355,7 @@ def is_valid_ip(value: object) -> bool:
     return is_valid(value, _ipaddress.ip_address)
 
 
-def is_valid_network(value: object) -> bool:
+def is_valid_network(value: object) -> "TypeGuard[IPNetwork]":
     """Return ``True`` if ``value`` is a valid IPv4/IPv6 network. Never raises.
 
     Non-strict, matching :func:`IPNet`: ``"10.0.0.5/24"`` is valid and
@@ -396,7 +517,7 @@ class MACAddress:
         return hash(self._octets)
 
 
-def is_valid_mac(value: object) -> bool:
+def is_valid_mac(value: object) -> "TypeGuard[MACAddress]":
     """Return ``True`` if ``value`` is a valid MAC address. Never raises.
 
     The MAC counterpart of :func:`is_valid_ip`: any input :class:`MACAddress`
