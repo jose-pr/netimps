@@ -22,17 +22,51 @@ class _FakeAnswer:
         return iter(self._records)
 
 
+class _NXDOMAIN(Exception):
+    """Stand-in for dns.resolver.NXDOMAIN."""
+
+
+class _NoAnswer(Exception):
+    """Stand-in for dns.resolver.NoAnswer."""
+
+
+class _NoNameservers(Exception):
+    """Stand-in for dns.resolver.NoNameservers."""
+
+
+class _LifetimeTimeout(Exception):
+    """Stand-in for dns.resolver.LifetimeTimeout."""
+
+
 class _FakeResolver:
-    """Stand-in for dns.resolver.Resolver with a scripted result."""
+    """Stand-in for dns.resolver.Resolver with a scripted result.
+
+    Records the settings applied to it so tests can assert that timeout/port/
+    tcp are actually forwarded rather than silently dropped.
+    """
 
     result = None
     error = None
+    last = None
 
     def __init__(self, configure=True):
         self.configure = configure
         self.nameservers = []
+        self.timeout = None
+        self.lifetime = None
+        self.port = 53
 
-    def resolve(self, query, rtype):
+    def resolve(self, query, rtype, tcp=False):
+        type(self).last = {
+            "query": query,
+            "rtype": rtype,
+            "tcp": tcp,
+            "timeout": self.timeout,
+            "lifetime": self.lifetime,
+            "port": self.port,
+            "nameservers": list(self.nameservers),
+            "configure": self.configure,
+        }
         if type(self).error is not None:
             raise type(self).error
         return _FakeAnswer(type(self).result)
@@ -42,12 +76,18 @@ class _FakeResolver:
 def fake_dns(monkeypatch):
     fake_module = types.ModuleType("dns.resolver")
     fake_module.Resolver = _FakeResolver
+    # The lookup-failure classes netimps catches by name.
+    fake_module.NXDOMAIN = _NXDOMAIN
+    fake_module.NoAnswer = _NoAnswer
+    fake_module.NoNameservers = _NoNameservers
+    fake_module.LifetimeTimeout = _LifetimeTimeout
     dns_pkg = types.ModuleType("dns")
     dns_pkg.resolver = fake_module
     monkeypatch.setitem(__import__("sys").modules, "dns", dns_pkg)
     monkeypatch.setitem(__import__("sys").modules, "dns.resolver", fake_module)
     _FakeResolver.result = None
     _FakeResolver.error = None
+    _FakeResolver.last = None
     return _FakeResolver
 
 
@@ -64,11 +104,38 @@ def test_nslookup_multiple_records(fake_dns):
     assert nslookup("example.com") == ["1.2.3.4", "5.6.7.8"]
 
 
-def test_nslookup_returns_empty_list_on_error(fake_dns):
-    fake_dns.error = Exception("NXDOMAIN")
-    result = nslookup("does-not-exist.invalid")
-    assert result == []
-    assert not result  # falsy, so `if result:` guards correctly
+@pytest.mark.parametrize(
+    "exc",
+    [_NXDOMAIN, _NoAnswer, _NoNameservers, _LifetimeTimeout],
+)
+def test_nslookup_returns_empty_list_on_lookup_failure(fake_dns, exc):
+    """Every genuine 'no result' outcome honours the [] contract."""
+    fake_dns.error = exc("boom")
+    assert nslookup("does-not-exist.invalid") == []
+
+
+def test_nslookup_raises_on_caller_error(fake_dns):
+    """A malformed query is a bug, not a lookup result -- it must not become []."""
+    fake_dns.error = ValueError("unknown rdtype 'nope'")
+    with pytest.raises(ValueError, match="invalid DNS query"):
+        nslookup("example.com", type="nope")
+
+
+def test_nslookup_forwards_timeout_port_and_tcp(fake_dns):
+    fake_dns.result = ["1.2.3.4"]
+    nslookup("example.com", timeout=2.5, port=5353, tcp=True)
+    assert fake_dns.last["tcp"] is True
+    assert fake_dns.last["port"] == 5353
+    # Both must be set: timeout bounds one query, lifetime the whole
+    # resolution. Setting only timeout lets dead servers run long.
+    assert fake_dns.last["timeout"] == 2.5
+    assert fake_dns.last["lifetime"] == 2.5
+
+
+def test_resolve_is_nslookup_with_rdtype_second(fake_dns):
+    fake_dns.result = ["2606:2800::1"]
+    assert netimps.resolve("example.com", "aaaa") == ["2606:2800::1"]
+    assert fake_dns.last["rtype"] == "aaaa"
 
 
 def test_nslookup_custom_nameserver_string(fake_dns):
@@ -133,3 +200,136 @@ def test_active_nic_addresses_only_loopback_is_empty(monkeypatch):
     )
     monkeypatch.setattr(netimps._socket, "gethostname", lambda: "host")
     assert active_nic_addresses() == []
+
+
+# --------------------------------------------------------------------------- #
+# get_ip / is_loopback_or_link_local / get_default_port                        #
+# --------------------------------------------------------------------------- #
+
+def test_get_ip_parses_literals_without_dns(monkeypatch):
+    """A literal must never trigger a lookup."""
+    def explode(_):
+        raise AssertionError("gethostbyname must not be called for a literal")
+
+    monkeypatch.setattr(netimps._socket, "gethostbyname", explode)
+    assert netimps.get_ip("10.0.0.5") == IPv4Address("10.0.0.5")
+
+
+def test_get_ip_falls_back_to_dns(monkeypatch):
+    monkeypatch.setattr(netimps._socket, "gethostbyname", lambda h: "93.184.216.34")
+    assert netimps.get_ip("example.com") == IPv4Address("93.184.216.34")
+
+
+def test_get_ip_returns_none_on_failure(monkeypatch):
+    def fail(_):
+        raise OSError("no such host")
+
+    monkeypatch.setattr(netimps._socket, "gethostbyname", fail)
+    assert netimps.get_ip("nope.invalid") is None
+
+
+@pytest.mark.parametrize(
+    "addr, expected",
+    [
+        ("127.0.0.1", True),
+        ("::1", True),
+        ("169.254.1.1", True),   # IPv4 link-local
+        ("fe80::1", True),       # IPv6 link-local
+        ("8.8.8.8", False),
+        ("10.0.0.5", False),     # private, but routable -- not link-local
+        ("2606:2800::1", False),
+    ],
+)
+def test_is_loopback_or_link_local(addr, expected):
+    assert netimps.is_loopback_or_link_local(netimps.IPAddr(addr)) is expected
+
+
+@pytest.mark.parametrize(
+    "scheme, expected",
+    [("http", 80), ("https", 443), ("HTTPS", 443), ("ftp", 21),
+     ("socks", 1080), ("socks5", 1080)],
+)
+def test_get_default_port_known(scheme, expected):
+    assert netimps.get_default_port(scheme) == expected
+
+
+def test_get_default_port_unknown_is_none():
+    assert netimps.get_default_port("definitely-not-a-scheme") is None
+
+
+# --------------------------------------------------------------------------- #
+# ping options                                                                 #
+# --------------------------------------------------------------------------- #
+
+def _capture_ping(monkeypatch, returncode=0):
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return subprocess.CompletedProcess(cmd, returncode)
+
+    monkeypatch.setattr(netimps, "_run", fake_run)
+    return calls
+
+
+def test_ping_timeout_never_rounds_down_to_zero(monkeypatch):
+    """A sub-second timeout must not become 0 -- some pings read that as forever."""
+    calls = _capture_ping(monkeypatch)
+    netimps.ping("host", timeout=0.2)
+    cmd = calls[0][0]
+    flag = "-w" if netimps._os.name == "nt" else "-W"
+    value = int(cmd[cmd.index(flag) + 1])
+    assert value >= 1
+
+
+def test_ping_stops_at_first_success(monkeypatch):
+    calls = _capture_ping(monkeypatch, returncode=0)
+    assert netimps.ping("host", tries=5) is True
+    assert len(calls) == 1  # succeeded first go, no wasted attempts
+
+
+def test_ping_retries_until_tries_exhausted(monkeypatch):
+    calls = _capture_ping(monkeypatch, returncode=1)
+    assert netimps.ping("host", tries=3) is False
+    assert len(calls) == 3
+
+
+def test_ping_treats_zero_tries_as_one(monkeypatch):
+    calls = _capture_ping(monkeypatch, returncode=1)
+    assert netimps.ping("host", tries=0) is False
+    assert len(calls) == 1
+
+
+def test_ping_family_flags(monkeypatch):
+    calls = _capture_ping(monkeypatch)
+    netimps.ping("host", ipv6=True)
+    assert "-6" in calls[0][0]
+    calls.clear()
+    netimps.ping("host", ipv6=False)
+    assert "-4" in calls[0][0]
+    calls.clear()
+    netimps.ping("host")
+    assert "-6" not in calls[0][0] and "-4" not in calls[0][0]
+
+
+def test_ping_has_wall_clock_timeout(monkeypatch):
+    """-W bounds the reply wait, not a hung resolver -- so cap the subprocess too."""
+    calls = _capture_ping(monkeypatch)
+    netimps.ping("host", timeout=2.0)
+    assert calls[0][1]["timeout"] > 2.0
+
+
+def test_ping_returns_false_when_binary_missing(monkeypatch):
+    def no_binary(cmd, **kwargs):
+        raise FileNotFoundError("ping not installed")
+
+    monkeypatch.setattr(netimps, "_run", no_binary)
+    assert netimps.ping("host") is False
+
+
+def test_ping_returns_false_when_subprocess_hangs(monkeypatch):
+    def hang(cmd, **kwargs):
+        raise subprocess.TimeoutExpired(cmd, 1)
+
+    monkeypatch.setattr(netimps, "_run", hang)
+    assert netimps.ping("host") is False

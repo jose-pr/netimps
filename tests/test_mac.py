@@ -98,3 +98,49 @@ def test_invalid_inputs_raise():
         MACAddress(b"\x00\x01")  # wrong byte length
     with pytest.raises(TypeError):
         MACAddress(1.5)
+
+
+def test_classification_bits():
+    """The U/L and group bits are read from the first octet."""
+    # 0x01 set -> multicast; 0x02 set -> locally administered.
+    assert MACAddress("01:00:5e:00:00:01").is_multicast
+    assert not MACAddress("00:00:5e:00:53:02").is_multicast
+    assert MACAddress("02:00:00:00:00:01").is_local
+    assert MACAddress("02:00:00:00:00:01").is_universal is False
+    assert MACAddress("00:00:5e:00:53:01").is_universal
+    assert not MACAddress("00:00:5e:00:53:01").is_local
+    # Broadcast is both multicast and locally administered.
+    bcast = MACAddress("ff:ff:ff:ff:ff:ff")
+    assert bcast.is_multicast and bcast.is_local
+
+
+def test_oui_is_first_three_bytes():
+    assert MACAddress("00:00:5e:00:53:01").oui == b"\xbc\x54\x2f"
+
+
+def test_ordering_and_sorting():
+    low = MACAddress("00:00:00:00:00:01")
+    high = MACAddress("ff:ff:ff:ff:ff:ff")
+    assert low < high and high > low
+    assert low <= low and high >= high
+    assert sorted([high, low]) == [low, high]
+    # Ordering against a non-MAC is undefined, not a crash-by-coercion.
+    with pytest.raises(TypeError):
+        low < "00:00:00:00:00:02"
+
+
+def test_is_valid_mac_never_raises():
+    from netimps import is_valid_mac
+
+    assert is_valid_mac("aa:bb:cc:dd:ee:ff")
+    assert is_valid_mac(0xAABBCCDDEEFF)
+    assert not is_valid_mac("not a mac")
+    assert not is_valid_mac("")
+    assert not is_valid_mac(None)
+    assert not is_valid_mac(object())
+
+
+def test_packed_roundtrip():
+    mac = MACAddress("aa:bb:cc:dd:ee:ff")
+    assert MACAddress(mac.packed) == mac
+    assert MACAddress(int(mac)) == mac

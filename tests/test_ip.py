@@ -4,9 +4,9 @@ import pytest
 
 import netimps
 from netimps import (
-    IPAddress,
-    IPInterface,
-    IPNetwork,
+    IPAddr,
+    IPIface,
+    IPNet,
     IPv4Address,
     IPv4Interface,
     is_valid_ip,
@@ -16,14 +16,14 @@ from netimps import (
 
 
 def test_ipaddress_forms():
-    assert IPAddress("10.0.0.5") == ipaddress.ip_address("10.0.0.5")
-    assert IPAddress(0x0A000005) == IPv4Address("10.0.0.5")
+    assert IPAddr("10.0.0.5") == ipaddress.ip_address("10.0.0.5")
+    assert IPAddr(0x0A000005) == IPv4Address("10.0.0.5")
     existing = IPv4Address("192.168.1.1")
-    assert IPAddress(existing) == existing
+    assert IPAddr(existing) == existing
 
 
 def test_ipinterface_exploded_surface():
-    iface = IPInterface("10.0.0.5/24")
+    iface = IPIface("10.0.0.5/24")
     assert isinstance(iface, IPv4Interface)
     assert iface.ip.exploded == "10.0.0.5"
     assert iface.netmask.exploded == "255.255.255.0"
@@ -31,19 +31,19 @@ def test_ipinterface_exploded_surface():
 
 
 def test_ipnetwork_membership_and_exploded():
-    net = IPNetwork("192.168.1.0/24")
+    net = IPNet("192.168.1.0/24")
     assert net.network_address.exploded == "192.168.1.0"
     assert net.netmask.exploded == "255.255.255.0"
-    assert IPAddress("192.168.1.42") in net
-    assert IPAddress("10.0.0.1") not in net
+    assert IPAddr("192.168.1.42") in net
+    assert IPAddr("10.0.0.1") not in net
 
 
 def test_ipnetwork_non_strict_by_default():
     # A host address with a prefix must not raise; it normalises to its network.
-    net = IPNetwork("10.0.0.5/24")
+    net = IPNet("10.0.0.5/24")
     assert net.network_address.exploded == "10.0.0.0"
     with pytest.raises(ValueError):
-        IPNetwork("10.0.0.5/24", strict=True)
+        IPNet("10.0.0.5/24", strict=True)
 
 
 def test_parse_ip_empty_and_none_are_falsy():
@@ -84,18 +84,32 @@ def test_is_valid_ip(value, expected):
 
 
 def test_public_api_exports():
-    for name in [
-        "IPAddress",
-        "IPInterface",
-        "IPNetwork",
-        "IPv4Address",
-        "IPv4Interface",
-        "MACAddress",
-        "parse_ip",
-        "parse_network",
-        "is_valid_ip",
-        "nslookup",
-        "ping",
-        "active_nic_addresses",
-    ]:
+    for name in netimps.__all__:
         assert hasattr(netimps, name), name
+
+
+def test_types_are_types_and_factories_are_callable():
+    """The noun names are unions to annotate with; the short names build values."""
+    import typing
+
+    for name in ("IPAddress", "IPInterface", "IPNetwork", "IPAddressLike",
+                 "IPNetworkLike", "MACLike"):
+        alias = getattr(netimps, name)
+        # A Union alias, not a callable factory.
+        assert typing.get_origin(alias) is typing.Union, name
+
+    assert netimps.IPAddr("10.0.0.5") == IPv4Address("10.0.0.5")
+    assert netimps.IPIface("10.0.0.5/24").network == netimps.IPNet("10.0.0.0/24")
+    assert netimps.IPNet("10.0.0.5/24") == ipaddress.ip_network("10.0.0.0/24")
+
+
+def test_unions_usable_as_annotations():
+    """Regression: the aliases must resolve under get_type_hints."""
+    import typing
+
+    def annotated(a: netimps.IPAddress, b: netimps.IPNetwork) -> None:
+        ...
+
+    hints = typing.get_type_hints(annotated)
+    assert hints["a"] == netimps.IPAddress
+    assert hints["b"] == netimps.IPNetwork
