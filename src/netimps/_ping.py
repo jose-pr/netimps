@@ -118,6 +118,55 @@ def _parse_ping_output(text: str, expect):
     return rtt, ttl, src
 
 
+def _tcp_ping(dst, port, timeout, size=None):
+    """Time a TCP handshake. Returns (ok, rtt_ms, error).
+
+    A refused connection still counts as reachable: the RST proves the host
+    answered. Only a timeout or an unroutable address is a failure.
+    """
+    import time as _time
+
+    sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+    start = _time.perf_counter()
+    try:
+        sock.connect((dst, port))
+        return True, (_time.perf_counter() - start) * 1000.0, None
+    except ConnectionRefusedError:
+        # The host is alive and said "no" -- that is a measurement.
+        return True, (_time.perf_counter() - start) * 1000.0, "refused"
+    except (_socket.timeout, OSError):
+        return False, None, "unreachable"
+    finally:
+        sock.close()
+
+
+def _udp_ping(dst, port, timeout, size=0):
+    """Send a UDP datagram and wait for either a reply or ICMP unreachable.
+
+    Two distinct signals prove liveness: an application reply, or an ICMP
+    port-unreachable (surfaced as ``ConnectionResetError``) meaning the host
+    answered but nothing is listening. Silence is ambiguous -- UDP has no
+    handshake, so a filtered port and an absent host look identical.
+    """
+    import time as _time
+
+    sock = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+    sock.settimeout(timeout)
+    start = _time.perf_counter()
+    try:
+        sock.sendto(bytes(max(0, size)), (dst, port))
+        sock.recvfrom(65535)
+        return True, (_time.perf_counter() - start) * 1000.0, None
+    except ConnectionResetError:
+        # ICMP port unreachable -- the host is there.
+        return True, (_time.perf_counter() - start) * 1000.0, "port-unreachable"
+    except (_socket.timeout, OSError):
+        return False, None, "no reply"
+    finally:
+        sock.close()
+
+
 def ping(
     dst: str,
     tries: int = 1,
@@ -127,11 +176,17 @@ def ping(
     size: Optional[int] = None,
     ttl: Optional[int] = None,
     dont_fragment: bool = False,
+    method: str = "icmp",
+    port: "Optional[int]" = None,
 ) -> "PingResult":
     """Ping ``dst``; the result is truthy if it answered.
 
     Returns a :class:`PingResult` rather than a bare bool, so the reply details
     are available without re-running and re-parsing ``ping``::
+
+        ping("8.8.8.8")                          # ICMP echo
+        ping("8.8.8.8", method="tcp", port=53)   # time a TCP handshake
+        ping("10.0.0.5", method="udp", port=53)  # datagram + reply or ICMP
 
         if ping("8.8.8.8"):                  # still reads as a boolean
             ...
@@ -192,6 +247,16 @@ def ping(
         received reply -- so the raw exit code would report success although
         the target was never reached. The reply address is verified instead
         (see below), which is locale-independent.
+    :param method: how to probe -- ``"icmp"`` (default), ``"tcp"`` or
+        ``"udp"``. ICMP is the classic echo; the other two reach a host through
+        firewalls that drop echo but permit ordinary traffic.
+
+        All three answer **"is the host up?"**. A TCP *refusal* therefore counts
+        as success -- the RST proves something answered -- and so does an ICMP
+        port-unreachable for UDP. Use :func:`netimps.tcp_check` when the
+        question is "is the *service* up?", where a refusal is a failure.
+    :param port: destination port for ``tcp``/``udp``. Required for those, and
+        ignored for ICMP.
     :param dont_fragment: set the DF bit (Windows ``-f``, Linux ``-M do``).
         Combined with ``size``, the standard manual MTU probe: the largest
         ``size`` that still succeeds is the path MTU minus 28. Unsupported on
@@ -208,6 +273,30 @@ def ping(
     """
     if not dst:
         return PingResult(False, dst, attempts=0)
+
+    from . import try_parse as _try_parse
+
+    method = (method or "icmp").lower()
+    if method not in ("icmp", "tcp", "udp"):
+        raise ValueError("method must be 'icmp', 'tcp' or 'udp', got %r" % (method,))
+    if method != "icmp":
+        if port is None:
+            raise ValueError("method=%r needs a port" % (method,))
+        prober = _tcp_ping if method == "tcp" else _udp_ping
+        probe_size = size or 0
+        last = None
+        for attempt in range(1, max(1, tries) + 1):
+            ok, rtt, note = prober(dst, port, timeout, probe_size)
+            if ok:
+                return PingResult(
+                    True,
+                    dst,
+                    rtt_ms=rtt,
+                    src=_try_parse(dst),
+                    attempts=attempt,
+                )
+            last = attempt
+        return PingResult(False, dst, attempts=last or 1)
 
     tries = max(1, tries)
     if _os.name == "nt":
@@ -257,8 +346,6 @@ def ping(
     # not mean the target answered. Confirm the reply came from the target
     # itself by matching its address in the output -- an address comparison,
     # never the localised prose around it.
-    from . import try_parse as _try_parse
-
     expect_address = _try_parse(dst)
     if expect_address is None:
         try:
