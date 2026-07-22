@@ -49,9 +49,12 @@ Requires Python 3.9+. Runtime dependency: `dnspython` (used only inside
 
 ```
 src/netimps/
-├── __init__.py   # the public surface: type aliases, parse/try_parse/is_valid
+├── __init__.py   # the public surface: generic parse/try_parse/is_valid
+├── _ip.py        # private: IP type aliases, builder tables, IP helpers
 ├── _mac.py       # private: MACAddress value type
 ├── _scheme.py    # private: scheme <-> port registry
+├── _scan.py      # private: concurrent port/host scanning
+├── _multicast.py # private: group membership and socket setup
 ├── _ifaddrs.py   # private: ctypes getifaddrs/GetAdaptersAddresses bindings
 ├── _sockets.py   # private: source IP, free port, tcp/wait, route, hops, MTU
 ├── _dns.py       # private: resolve() over dnspython
