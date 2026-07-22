@@ -117,13 +117,27 @@ class Interface:
 
     @property
     def is_loopback(self) -> bool:
-        """True when every address is a loopback address.
+        """True when this is the loopback interface.
 
         Derived from the addresses rather than the name: ``lo`` (Linux),
         ``lo0`` (macOS) and ``Loopback Pseudo-Interface 1`` (Windows) share no
         common spelling, but ``127.0.0.0/8`` and ``::1`` do.
+
+        Requires *a* loopback address and **no routable one**. Not "every
+        address is loopback": macOS's ``lo0`` also carries ``fe80::1/64``, so
+        an all-must-match test reports it as non-loopback. Link-local addresses
+        are ignored here for that reason -- they are not routable, so they do
+        not make an interface non-loopback.
         """
-        return bool(self.ips) and all(ip.ip.is_loopback for ip in self.ips)
+        if not self.ips:
+            return False
+        has_loopback = False
+        for entry in self.ips:
+            if entry.ip.is_loopback:
+                has_loopback = True
+            elif not entry.ip.is_link_local:
+                return False  # a routable address: not the loopback interface
+        return has_loopback
 
     def primary_ip(
         self, ipv6: bool = False, loopback_ok: bool = True
