@@ -14,10 +14,10 @@ import netimps
 from netimps import Interface, MACAddress, get_interfaces
 from netimps import _ifaddrs
 
-
 # --------------------------------------------------------------------------- #
 # Pure helpers                                                                 #
 # --------------------------------------------------------------------------- #
+
 
 @pytest.mark.parametrize(
     "mask, expected",
@@ -54,6 +54,7 @@ def test_make_ip_interface_rejects_garbage():
 # --------------------------------------------------------------------------- #
 # Interface value type                                                         #
 # --------------------------------------------------------------------------- #
+
 
 def test_is_loopback_uses_addresses_not_name():
     """The whole point of the property: names differ per OS, addresses do not."""
@@ -98,6 +99,7 @@ def test_interface_repr_and_equality():
 # Live enumeration -- invariants only                                          #
 # --------------------------------------------------------------------------- #
 
+
 def test_get_interfaces_returns_usable_data():
     ifaces = get_interfaces()
     assert ifaces, "every host has at least one interface"
@@ -107,9 +109,7 @@ def test_get_interfaces_returns_usable_data():
         assert iface.mac is None or isinstance(iface.mac, MACAddress)
         for ip in iface.ips:
             # Real ip_interface objects, so .network/.ip behave as the stdlib does.
-            assert isinstance(
-                ip, (ipaddress.IPv4Interface, ipaddress.IPv6Interface)
-            )
+            assert isinstance(ip, (ipaddress.IPv4Interface, ipaddress.IPv6Interface))
             assert ip.network.prefixlen <= ip.max_prefixlen
 
 
@@ -134,6 +134,7 @@ def test_enumeration_is_stable():
 # Fallback path                                                                #
 # --------------------------------------------------------------------------- #
 
+
 def test_fallback_reports_host_routes():
     ifaces = _ifaddrs._fallback_interfaces(False)
     assert len(ifaces) == 1
@@ -148,6 +149,7 @@ def test_fallback_reports_host_routes():
 
 def test_get_interfaces_degrades_instead_of_raising(monkeypatch):
     """A failing native call must not propagate -- callers get the fallback."""
+
     def boom(_raw):
         raise OSError("native enumeration exploded")
 

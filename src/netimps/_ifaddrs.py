@@ -173,9 +173,7 @@ def _prefix_from_netmask(packed: bytes) -> int:
     return bits
 
 
-def _make_ip_interface(
-    addr: str, prefix: int
-) -> "Optional[_IPInterface]":
+def _make_ip_interface(addr: str, prefix: int) -> "Optional[_IPInterface]":
     """Build an ip_interface, returning None for anything unparseable.
 
     A malformed entry from the OS must never abort the whole enumeration, so
@@ -366,7 +364,9 @@ def _posix_interfaces(want_raw: bool) -> "List[Interface]":
                 if sdl.sdl_alen == 6:
                     # The MAC follows the interface name inside sdl_data.
                     raw_data = bytes(
-                        bytearray(_ctypes.string_at(_ctypes.addressof(sdl.sdl_data), 46))
+                        bytearray(
+                            _ctypes.string_at(_ctypes.addressof(sdl.sdl_data), 46)
+                        )
                     )
                     start = sdl.sdl_nlen
                     iface.mac = _mac(raw_data[start : start + 6])
@@ -477,7 +477,9 @@ def _windows_interfaces(want_raw: bool) -> "List[Interface]":
     ]
     get_adapters.restype = c_ulong
 
-    flags = _GAA_FLAG_SKIP_ANYCAST | _GAA_FLAG_SKIP_MULTICAST | _GAA_FLAG_SKIP_DNS_SERVER
+    flags = (
+        _GAA_FLAG_SKIP_ANYCAST | _GAA_FLAG_SKIP_MULTICAST | _GAA_FLAG_SKIP_DNS_SERVER
+    )
     size = c_ulong(15 * 1024)  # MSDN's recommended starting size.
     buf = None
 
@@ -528,7 +530,9 @@ def _windows_interfaces(want_raw: bool) -> "List[Interface]":
 
         raw = None
         if want_raw:
-            guid = node.AdapterName.decode("ascii", "replace") if node.AdapterName else ""
+            guid = (
+                node.AdapterName.decode("ascii", "replace") if node.AdapterName else ""
+            )
             raw = {
                 "guid": guid,
                 "friendly_name": node.FriendlyName,
@@ -593,9 +597,11 @@ def _fallback_interfaces(want_raw: bool) -> "List[Interface]":
             index=0,
             mac=None,
             ips=ips,
-            raw={"degraded": True, "reason": "native enumeration unavailable"}
-            if want_raw
-            else None,
+            raw=(
+                {"degraded": True, "reason": "native enumeration unavailable"}
+                if want_raw
+                else None
+            ),
         )
     ]
 

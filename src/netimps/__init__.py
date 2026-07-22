@@ -133,6 +133,7 @@ _NetworkValue = Union[str, int, "_ipaddress._BaseNetwork", "_ipaddress._BaseAddr
 # IP address / interface / network factories
 # ---------------------------------------------------------------------------
 
+
 def IPAddr(value: _AddressValue) -> IPAddress:
     """Return an :class:`ipaddress.IPv4Address`/:class:`IPv6Address`.
 
@@ -247,6 +248,7 @@ def is_valid_network(value: object) -> bool:
 # MAC address
 # ---------------------------------------------------------------------------
 
+
 class MACAddress:
     """An IEEE 802 MAC address.
 
@@ -266,8 +268,8 @@ class MACAddress:
     _VALID_MAC = _re.compile(
         r"^(?:"
         r"[0-9A-Fa-f]{2}(?:[:-][0-9A-Fa-f]{2}){5}"  # colon/hyphen separated
-        r"|[0-9A-Fa-f]{4}(?:\.[0-9A-Fa-f]{4}){2}"     # dot / Cisco triplets
-        r"|[0-9A-Fa-f]{12}"                            # bare, no separators
+        r"|[0-9A-Fa-f]{4}(?:\.[0-9A-Fa-f]{4}){2}"  # dot / Cisco triplets
+        r"|[0-9A-Fa-f]{12}"  # bare, no separators
         r")$"
     )
 
@@ -409,6 +411,7 @@ def is_valid_mac(value: object) -> bool:
 # Address classification / resolution helpers
 # ---------------------------------------------------------------------------
 
+
 def get_ip(address: str) -> Optional[IPAddress]:
     """Resolve a hostname *or* literal address to an address object, or ``None``.
 
@@ -492,6 +495,7 @@ def get_default_port(scheme: str) -> Optional[int]:
 # ---------------------------------------------------------------------------
 # DNS / reachability
 # ---------------------------------------------------------------------------
+
 
 def resolve(
     query: str,
@@ -578,6 +582,8 @@ def resolve(
         # which turned a typo'd record type into a silent empty result.
         raise ValueError("invalid DNS query %r (%s): %s" % (query, rdtype, exc))
     return [str(record) for record in answer]
+
+
 def ping(
     hostname: str,
     tries: int = 1,
@@ -649,6 +655,7 @@ def ping(
 # ---------------------------------------------------------------------------
 # Local NIC discovery
 # ---------------------------------------------------------------------------
+
 
 def active_nic_addresses() -> List[IPv4Address]:
     """Return the host's active (non-loopback) IPv4 address as a 1-element list.
