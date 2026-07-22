@@ -49,8 +49,9 @@ Requires Python 3.9+. Runtime dependency: `dnspython` (used only inside
 
 ```
 src/netimps/
-├── __init__.py   # the public surface: types, parse/try_parse/is_valid, ports
+├── __init__.py   # the public surface: type aliases, parse/try_parse/is_valid
 ├── _mac.py       # private: MACAddress value type
+├── _scheme.py    # private: scheme <-> port registry
 ├── _ifaddrs.py   # private: ctypes getifaddrs/GetAdaptersAddresses bindings
 ├── _sockets.py   # private: source IP, free port, tcp/wait, route, hops, MTU
 ├── _dns.py       # private: resolve() over dnspython
@@ -86,7 +87,7 @@ map:
 | `resolve` | DNS lookup → list of string records (`[]` on failure) |
 | `ping` | reachability → `bool` |
 | `get_ip`, `is_link_scoped` | address helpers |
-| `get_default_port`, `port_scheme`, `register_port` | scheme ↔ port registry |
+| `get_default_port`, `get_default_scheme`, `register_port` | scheme ↔ port registry |
 | `HOST_DN` | `platform.node()` of the running host, captured at import time |
 
 ## Working here
