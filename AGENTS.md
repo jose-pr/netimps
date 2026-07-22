@@ -49,16 +49,23 @@ Requires Python 3.9+. Runtime dependency: `dnspython` (used only inside
 
 ```
 src/netimps/
-├── __init__.py   # the entire public API (see src/netimps/AGENTS.md for the header)
+├── __init__.py   # the public surface: types, parse/try_parse/is_valid, ports
+├── _mac.py       # private: MACAddress value type
 ├── _ifaddrs.py   # private: ctypes getifaddrs/GetAdaptersAddresses bindings
+├── _sockets.py   # private: source IP, free port, tcp/wait, route, hops, MTU
+├── _dns.py       # private: resolve() over dnspython
+├── _ping.py      # private: ping() over the platform binary
 └── py.typed      # PEP 561 marker — the package ships inline type hints
 ```
 
-The public surface is a single flat module — no subpackages to import from.
-`_ifaddrs` is private; its two public names (`Interface`, `get_interfaces`)
-are re-exported from `__init__`, which imports it **last** because the module
-builds `MACAddress` objects. Everything importable from `netimps` is declared
-in `__all__` at the top of `__init__.py`.
+**The import surface is still flat** — everything is re-exported from
+`netimps`, and the `_`-prefixed modules are implementation detail. Do not
+import them directly from outside the package.
+
+`__init__` imports the submodules **last**, because several of them call back
+into it (`parse`, `try_parse`, `MACAddress`); those back-references are
+function-local imports for the same reason. Everything importable from
+`netimps` is declared in `__all__` at the top of `__init__.py`.
 
 ## Entry points
 
