@@ -1,20 +1,35 @@
 """netimps -- small, self-contained network utilities.
 
 A thin, typed convenience layer over the standard library's :mod:`ipaddress`
-plus a handful of host helpers (DNS lookup, ping, local NIC discovery).
+plus a handful of host helpers (DNS lookup, ping, interface discovery). One
+flat import surface; the only runtime dependency is ``dnspython``, used solely
+inside :func:`nslookup`.
 
-The public surface is intentionally flat::
+::
 
     import netimps
 
-    netimps.IPAddr("10.0.0.5")
+    netimps.IPAddr("10.0.0.5")                          # -> IPv4Address
     netimps.MACAddress("AA:BB:CC:DD:EE:FF").as_str("-")
-    netimps.parse_network("192.168.1.0/24")
-    netimps.nslookup("example.com")
+    netimps.resolve("example.com", "aaaa")
+    for iface in netimps.get_interfaces():
+        print(iface.name, iface.mac, iface.ips)
 
-All IP/network types are the concrete :mod:`ipaddress` classes (or thin
-factories over them), so ``.exploded``, ``.network_address``, ``.netmask`` and
-``addr in network`` membership all behave exactly as the stdlib does.
+Types vs factories
+------------------
+The noun-shaped names are **types** -- the v4/v6 unions you annotate with,
+reading the way :class:`ipaddress.IPv4Address` does::
+
+    def route(dst: netimps.IPAddress, via: netimps.IPNetwork) -> None: ...
+
+The short names are the **factories** that parse and build those values,
+mirroring the stdlib's ``ip_address()`` in being callables rather than types::
+
+    IPAddr(value)   IPIface(value)   IPNet(value)
+
+All IP/network values are the concrete :mod:`ipaddress` classes, so
+``.exploded``, ``.network_address``, ``.netmask`` and ``addr in network``
+membership all behave exactly as the stdlib does.
 """
 
 from __future__ import annotations
@@ -27,7 +42,7 @@ import re as _re
 import socket as _socket
 from subprocess import TimeoutExpired as _SubprocessTimeout
 from subprocess import run as _run
-from typing import List, Optional, Union
+from typing import Callable, List, Optional, TypeVar, Union
 
 # Re-export the concrete stdlib types so consumers can annotate with them.
 from ipaddress import (
@@ -58,10 +73,13 @@ __all__ = [
     "IPAddr",
     "IPIface",
     "IPNet",
+    "try_parse",
+    "is_valid",
+    "is_valid_ip",
+    "is_valid_network",
     "is_valid_mac",
     "parse_ip",
     "parse_network",
-    "is_valid_ip",
     "get_ip",
     "is_loopback_or_link_local",
     "get_default_port",
@@ -162,6 +180,11 @@ def parse_ip(value: Optional[_AddressValue]) -> Optional[IPAddress]:
     straight through, so an empty value maps to a falsy ``None`` rather than
     raising. Any other value is delegated to :func:`IPAddr`, which raises
     :class:`ValueError` on genuinely malformed input.
+
+    Note the difference from :func:`try_parse`: *only* emptiness becomes
+    ``None`` here -- malformed input still raises, so a typo is not silently
+    swallowed. Use ``try_parse(value, IPAddr)`` when you want every failure to
+    yield ``None``.
     """
     if value is None:
         return None
@@ -183,17 +206,78 @@ def parse_network(value: Optional[_NetworkValue]) -> Optional[IPNetwork]:
     return IPNet(value)
 
 
+_T = TypeVar("_T")
+
+
+def try_parse(value: object, parser: Callable[..., _T]) -> Optional[_T]:
+    """Return ``parser(value)``, or ``None`` if it rejects the input. Never raises.
+
+    The generic non-raising parse behind :func:`parse_ip` and
+    :func:`parse_network`, usable with any of this module's factories -- or any
+    callable that signals bad input with ``ValueError``/``TypeError``::
+
+        try_parse("10.0.0.5", IPAddr)        # IPv4Address('10.0.0.5')
+        try_parse("nonsense", IPAddr)        # None
+        try_parse(user_input, MACAddress) or DEFAULT_MAC
+
+    Prefer this to ``is_valid`` followed by a parse: that pattern does the work
+    twice and leaves a window where the two disagree.
+
+    Only ``ValueError`` and ``TypeError`` are swallowed -- the two exceptions
+    that mean "bad input". Anything else (an ``OSError`` from a parser that
+    touches the network, a bug in the parser) propagates, because turning it
+    into ``None`` would disguise a real failure as a rejected value.
+    """
+    try:
+        return parser(value)
+    except (ValueError, TypeError):
+        return None
+
+
+def is_valid(value: object, parser: Callable[..., object]) -> bool:
+    """Return ``True`` if ``parser(value)`` succeeds. Never raises.
+
+    The generic "can this be parsed?" check behind :func:`is_valid_ip` and
+    :func:`is_valid_mac`::
+
+        is_valid("10.0.0.5", IPAddr)         # True
+        is_valid("10.0.0.0/24", IPNet)       # True
+        is_valid("aa:bb:cc:dd:ee:ff", MACAddress)
+        is_valid("nonsense", IPAddr)         # False
+
+    When you want the parsed value too, use :func:`try_parse` instead of
+    calling this first -- one call, no double work. Same exception policy: only
+    ``ValueError``/``TypeError`` count as "invalid".
+
+    .. note::
+       A parser that legitimately returns ``None`` for valid input would be
+       indistinguishable from failure via :func:`try_parse`; this function
+       reports such a case as ``True``, since the parse did succeed.
+    """
+    try:
+        parser(value)
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
 def is_valid_ip(value: object) -> bool:
     """Return ``True`` if ``value`` is a valid IPv4/IPv6 address.
 
     Never raises: any input that :func:`ipaddress.ip_address` rejects (including
-    non-string types and empty strings) yields ``False``.
+    non-string types and empty strings) yields ``False``. Shorthand for
+    ``is_valid(value, IPAddr)``.
     """
-    try:
-        _ipaddress.ip_address(value)  # type: ignore[arg-type]
-        return True
-    except (ValueError, TypeError):
-        return False
+    return is_valid(value, _ipaddress.ip_address)
+
+
+def is_valid_network(value: object) -> bool:
+    """Return ``True`` if ``value`` is a valid IPv4/IPv6 network. Never raises.
+
+    Non-strict, matching :func:`IPNet`: ``"10.0.0.5/24"`` is valid and
+    normalises to ``10.0.0.0/24``.
+    """
+    return is_valid(value, IPNet)
 
 
 # ---------------------------------------------------------------------------
@@ -349,17 +433,13 @@ class MACAddress:
 
 
 def is_valid_mac(value: object) -> bool:
-    """Return True if ``value`` is a valid MAC address. Never raises.
+    """Return ``True`` if ``value`` is a valid MAC address. Never raises.
 
-    The MAC counterpart of :func:`is_valid_ip`: any input that
-    :func:`mac_address` rejects -- including wrong types and empty strings --
-    yields ``False``.
+    The MAC counterpart of :func:`is_valid_ip`: any input :class:`MACAddress`
+    rejects -- including wrong types and empty strings -- yields ``False``.
+    Shorthand for ``is_valid(value, MACAddress)``.
     """
-    try:
-        MACAddress(value)  # type: ignore[arg-type]
-        return True
-    except (ValueError, TypeError):
-        return False
+    return is_valid(value, MACAddress)
 
 
 # ---------------------------------------------------------------------------

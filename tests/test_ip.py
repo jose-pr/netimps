@@ -113,3 +113,99 @@ def test_unions_usable_as_annotations():
     hints = typing.get_type_hints(annotated)
     assert hints["a"] == netimps.IPAddress
     assert hints["b"] == netimps.IPNetwork
+
+
+# --------------------------------------------------------------------------- #
+# generic is_valid                                                             #
+# --------------------------------------------------------------------------- #
+
+def test_is_valid_generic_with_any_factory():
+    from netimps import IPAddr, IPIface, IPNet, MACAddress, is_valid
+
+    assert is_valid("10.0.0.5", IPAddr)
+    assert is_valid("10.0.0.5/24", IPIface)
+    assert is_valid("10.0.0.0/24", IPNet)
+    assert is_valid("aa:bb:cc:dd:ee:ff", MACAddress)
+    assert not is_valid("nonsense", IPAddr)
+    assert not is_valid(None, IPAddr)
+    assert not is_valid(object(), MACAddress)
+
+
+def test_is_valid_only_swallows_bad_input_errors():
+    """An unexpected error is a real failure, not a 'False' validation result."""
+    from netimps import is_valid
+
+    def raises_os_error(_value):
+        raise OSError("network unreachable")
+
+    with pytest.raises(OSError):
+        is_valid("anything", raises_os_error)
+
+
+def test_named_validators_match_generic():
+    from netimps import (
+        IPAddr,
+        IPNet,
+        MACAddress,
+        is_valid,
+        is_valid_ip,
+        is_valid_mac,
+        is_valid_network,
+    )
+
+    for value in ["10.0.0.5", "", "nope", None, "::1"]:
+        assert is_valid_ip(value) == is_valid(value, IPAddr)
+    for value in ["10.0.0.0/24", "10.0.0.5/24", "nope", None]:
+        assert is_valid_network(value) == is_valid(value, IPNet)
+    for value in ["aa:bb:cc:dd:ee:ff", "nope", None, 12]:
+        assert is_valid_mac(value) == is_valid(value, MACAddress)
+
+
+# --------------------------------------------------------------------------- #
+# generic try_parse                                                            #
+# --------------------------------------------------------------------------- #
+
+def test_try_parse_returns_value_or_none():
+    from netimps import IPAddr, IPIface, IPNet, MACAddress, try_parse
+
+    assert try_parse("10.0.0.5", IPAddr) == IPv4Address("10.0.0.5")
+    assert try_parse("10.0.0.5/24", IPIface) == ipaddress.ip_interface("10.0.0.5/24")
+    assert try_parse("10.0.0.0/24", IPNet) == ipaddress.ip_network("10.0.0.0/24")
+    assert str(try_parse("aa:bb:cc:dd:ee:ff", MACAddress)) == "aa:bb:cc:dd:ee:ff"
+
+    assert try_parse("nonsense", IPAddr) is None
+    assert try_parse(None, IPAddr) is None
+    assert try_parse("", IPAddr) is None
+    assert try_parse(object(), MACAddress) is None
+
+
+def test_try_parse_only_swallows_bad_input_errors():
+    from netimps import try_parse
+
+    def raises_os_error(_value):
+        raise OSError("network unreachable")
+
+    with pytest.raises(OSError):
+        try_parse("anything", raises_os_error)
+
+
+def test_try_parse_agrees_with_is_valid():
+    """The two must never disagree about whether a value parses."""
+    from netimps import IPAddr, IPNet, MACAddress, is_valid, try_parse
+
+    for parser in (IPAddr, IPNet, MACAddress):
+        for value in ["10.0.0.5", "10.0.0.0/24", "aa:bb:cc:dd:ee:ff",
+                      "nope", "", None, 5]:
+            assert (try_parse(value, parser) is not None) == is_valid(value, parser)
+
+
+def test_parse_ip_still_raises_on_malformed():
+    """parse_ip maps only emptiness to None -- a typo must not pass silently."""
+    from netimps import parse_ip, try_parse, IPAddr
+
+    assert parse_ip("") is None
+    assert parse_ip(None) is None
+    with pytest.raises(ValueError):
+        parse_ip("not-an-ip")
+    # try_parse is the everything-becomes-None variant.
+    assert try_parse("not-an-ip", IPAddr) is None
