@@ -73,6 +73,39 @@ def test_is_loopback_uses_addresses_not_name():
     assert not Interface(name="lo").is_loopback
 
 
+def test_is_loopback_tolerates_a_link_local_address():
+    """macOS lo0 carries fe80::1 alongside the loopback addresses.
+
+    Regression: an "every address is loopback" test reports lo0 as
+    non-loopback there, which broke interface_for() and bind(interface=) on
+    macOS CI. Link-local addresses are not routable, so they do not make an
+    interface non-loopback.
+    """
+    macos_lo0 = Interface(
+        name="lo0",
+        ips=[
+            ipaddress.ip_interface("127.0.0.1/8"),
+            ipaddress.ip_interface("::1/128"),
+            ipaddress.ip_interface("fe80::1/64"),
+        ],
+    )
+    assert macos_lo0.is_loopback
+
+    # A routable address still disqualifies it.
+    assert not Interface(
+        name="eth0",
+        ips=[
+            ipaddress.ip_interface("10.0.0.5/24"),
+            ipaddress.ip_interface("fe80::1/64"),
+        ],
+    ).is_loopback
+
+    # Link-local only, with no loopback address, is not the loopback interface.
+    assert not Interface(
+        name="eth0", ips=[ipaddress.ip_interface("fe80::1/64")]
+    ).is_loopback
+
+
 def test_ipv4_ipv6_split():
     iface = Interface(
         name="eth0",

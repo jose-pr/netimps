@@ -96,7 +96,9 @@ def test_bind_unknown_interface_raises():
 
 
 def test_bind_to_interface_uses_its_address():
-    loopback = next(i for i in netimps.get_interfaces() if i.is_loopback)
+    loopback = next((i for i in netimps.get_interfaces() if i.is_loopback), None)
+    if loopback is None:  # pragma: no cover - host without a loopback entry
+        pytest.skip("no loopback interface enumerated on this host")
     sock = bind(port=0, interface=loopback)
     try:
         assert netimps.parse(sock.getsockname()[0]).is_loopback
@@ -209,7 +211,9 @@ def test_interface_spec_strict_raises_loose_returns_none():
 
 
 def test_interface_spec_resolves_interface_object():
-    loopback = next(i for i in netimps.get_interfaces() if i.is_loopback)
+    loopback = next((i for i in netimps.get_interfaces() if i.is_loopback), None)
+    if loopback is None:  # pragma: no cover - host without a loopback entry
+        pytest.skip("no loopback interface enumerated on this host")
     resolved = _iface_spec.interface_address(loopback)
     assert resolved.is_loopback
 

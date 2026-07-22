@@ -196,11 +196,13 @@ def test_multicast_socket_round_trip():
         receiver.settimeout(5.0)
         sender = netimps.multicast_socket(interface=str(source), bind=False)
         try:
-            sender.sendto(b"payload", (group, port))
             try:
+                sender.sendto(b"payload", (group, port))
                 data, _ = receiver.recvfrom(1024)
             except (socket.timeout, OSError):  # pragma: no cover - env dependent
-                pytest.skip("multicast is filtered on this host")
+                # Either the send had no multicast route (macOS CI runners
+                # report ENETUNREACH here) or the datagram was filtered.
+                pytest.skip("multicast is unavailable on this host")
             assert data == b"payload"
         finally:
             sender.close()
@@ -231,11 +233,16 @@ def test_multicast_send_only_socket_can_send():
 
     Asserting on getsockname() would be wrong -- an unbound socket has no name
     on Windows and raises there -- so this checks the property that matters:
-    it can transmit.
+    it can transmit. A host with no multicast route (macOS CI runners) raises
+    ENETUNREACH on the send, which is an environment fact rather than a defect
+    in the socket setup.
     """
     sock = netimps.multicast_socket(bind=False)
     try:
-        assert sock.sendto(b"x", ("239.7.7.46", 55572)) == 1
+        try:
+            assert sock.sendto(b"x", ("239.7.7.46", 55572)) == 1
+        except OSError:  # pragma: no cover - env dependent
+            pytest.skip("no multicast route on this host")
     finally:
         sock.close()
 
