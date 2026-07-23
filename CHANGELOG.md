@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-07-23
+
 ### Added
 
 - **`ws`/`wss` in the built-in scheme→port table** (80/443). WebSocket schemes
