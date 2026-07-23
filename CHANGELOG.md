@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`ws`/`wss` in the built-in scheme→port table** (80/443). WebSocket schemes
+  (RFC 6455) ride the HTTP/HTTPS ports but are absent from `/etc/services`, so
+  `get_default_port("wss")` previously returned `None` and every websocket
+  consumer had to `register_port` them. `http`/`https` remain canonical for
+  80/443.
+
 ## [0.0.1] - 2026-07-22
 
 ### Added

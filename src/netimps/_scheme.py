@@ -22,6 +22,11 @@ __all__ = ["get_default_port", "get_default_scheme", "register_port"]
 _DEFAULT_PORTS = {
     "http": 80,
     "https": 443,
+    # WebSocket (RFC 6455) rides HTTP/HTTPS ports and is absent from
+    # /etc/services. Listed after http/https so those stay the canonical name
+    # for 80/443 (get_default_scheme(443) == "https", not "wss").
+    "ws": 80,
+    "wss": 443,
     "ftp": 21,
     "ftps": 990,
     "ssh": 22,

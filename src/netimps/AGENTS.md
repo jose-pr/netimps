@@ -185,15 +185,15 @@ so nothing is lost. Pass an existing enumeration in a loop; it is a syscall.
 ## Scheme ↔ port registry
 
 - **`get_default_port(scheme) -> int | None`** — built-in table (~30 entries,
-  including the socks variants absent from `/etc/services`), then
-  `getservbyname`. Case-insensitive.
+  including the socks variants and the `ws`/`wss` websocket schemes, all absent
+  from `/etc/services`), then `getservbyname`. Case-insensitive.
 - **`get_default_scheme(port) -> str | None`** — the inverse, then
   `getservbyport`.
 - **`register_port(scheme, port, canonical=False)`** — extend or override.
 
-Where several schemes share a port (1080 → socks/socks4/socks5) the **canonical**
-one is returned. Registering an alias does not steal that slot unless
-`canonical=True`.
+Where several schemes share a port the **canonical** one is returned (1080 →
+`socks`, not `socks4`/`socks5`; 80 → `http`, not `ws`; 443 → `https`, not
+`wss`). Registering an alias does not steal that slot unless `canonical=True`.
 
 ## DNS
 

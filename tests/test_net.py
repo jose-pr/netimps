@@ -296,6 +296,8 @@ def test_is_link_scoped(addr, expected):
         ("http", 80),
         ("https", 443),
         ("HTTPS", 443),
+        ("ws", 80),
+        ("wss", 443),
         ("ftp", 21),
         ("socks", 1080),
         ("socks5", 1080),
@@ -303,6 +305,12 @@ def test_is_link_scoped(addr, expected):
 )
 def test_get_default_port_known(scheme, expected):
     assert netimps.get_default_port(scheme) == expected
+
+
+def test_websocket_schemes_do_not_steal_http_canonical():
+    """ws/wss share 80/443 with http/https; http/https stay canonical."""
+    assert netimps.get_default_scheme(80) == "http"
+    assert netimps.get_default_scheme(443) == "https"
 
 
 def test_get_default_port_unknown_is_none():
