@@ -45,15 +45,17 @@ jobs:
             python-version: "3.12"
           - os: ubuntu-latest
             python-version: "3.13"
+          - os: ubuntu-latest
+            python-version: "3.14"
           # Windows/macOS matrix edges (oldest + newest supported)
           - os: windows-latest
             python-version: "3.9"
           - os: windows-latest
-            python-version: "3.13"
+            python-version: "3.14"
           - os: macos-latest
             python-version: "3.9"
           - os: macos-latest
-            python-version: "3.13"
+            python-version: "3.14"
     steps:
       - uses: actions/checkout@v4
         with:
