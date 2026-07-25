@@ -57,7 +57,17 @@ from ctypes import (
     c_ulong,
     c_void_p,
 )
-from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
+from ._mac import MACAddress
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+    Union,
+)
 
 __all__ = ["Interface", "get_interfaces", "iter_addresses"]
 
@@ -103,7 +113,7 @@ class Interface:
         self,
         name: str,
         index: int = 0,
-        mac: "Optional[Any]" = None,
+        mac: "Optional[MACAddress]" = None,
         ips: "Optional[List[_IPInterface]]" = None,
         mtu: "Optional[int]" = None,
         raw: "Optional[Dict[str, Any]]" = None,
@@ -740,7 +750,8 @@ def get_interfaces(raw: bool = False) -> "List[Interface]":
 
 
 def iter_addresses(
-    interfaces=None, family=None
+    interfaces: "Optional[Iterable[Interface]]" = None,
+    family: "Optional[int]" = None,
 ) -> "Iterator[Tuple[Interface, _IPInterface]]":
     """Yield ``(interface, address)`` once per address, not once per adapter.
 

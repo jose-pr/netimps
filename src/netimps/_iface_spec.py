@@ -46,7 +46,7 @@ def interface_address(interface, want_ipv6: bool = False, strict: bool = True):
     silently receives nothing, so failing loudly is right), while ``ping``
     returned ``None`` and reported a falsy result. Both are preserved.
     """
-    from . import IPAddress, MACAddress, is_valid, try_parse
+    from . import IPAddress, MACAddress, interface_for, is_valid, try_parse
     from ._ifaddrs import Interface, get_interfaces
 
     if interface is None:
@@ -63,7 +63,7 @@ def interface_address(interface, want_ipv6: bool = False, strict: bool = True):
         isinstance(interface, str) and is_valid(interface, MACAddress)
     ):
         wanted = MACAddress(interface)
-        match = next((iface for iface in get_interfaces() if iface.mac == wanted), None)
+        match = interface_for(wanted)
         if match is None:
             return _fail("no interface with MAC %s" % (wanted,))
         interface = match

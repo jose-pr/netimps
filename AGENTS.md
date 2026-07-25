@@ -94,7 +94,7 @@ map:
 | Name | Purpose |
 | --- | --- |
 | `IPAddress`, `IPInterface`, `IPNetwork` | v4/v6 **union aliases** for annotations |
-| `IPAddressLike`, `IPNetworkLike`, `MACLike` | accepted-input unions |
+| `IPAddressLike`, `IPInterfaceLike`, `IPNetworkLike`, `MACLike` | accepted-input unions |
 | `IPv4Address`, `IPv4Interface`, `IPv4Network`, `IPv6Address`, `IPv6Interface`, `IPv6Network` | stdlib concrete-type re-exports |
 | `parse`, `try_parse`, `is_valid` | build a type from a value (raising / `None` / `bool`) |
 | `MACAddress` | parse / classify / render MAC addresses |
@@ -105,7 +105,7 @@ map:
 | `get_default_port`, `get_default_scheme`, `register_port` | scheme ↔ port registry |
 | `resolve` | DNS lookup → native records (`[]` on failure) |
 | `ping`, `PingResult` | reachability with RTT and TTL |
-| `bind`, `bind_error_hint`, `interface_for` | socket creation and diagnosis |
+| `bind`, `bind_error_hint`, `interface_for`, `interfaces_for`, `is_local_address` | socket creation and local membership |
 | `get_source_ip`, `get_free_port`, `tcp_check`, `wait_for_port` | socket helpers |
 | `UdpEndpoint`, `Datagram` | UDP receive with arrival interface (`IP_PKTINFO`) |
 | `Host` | hostname-or-address value type |

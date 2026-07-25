@@ -26,7 +26,7 @@ The same names are what you *parse into*, via one entry point::
 
     parse(value, IPNetwork)              # raises on bad input
     try_parse(value, IPNetwork)          # None instead
-    is_valid(value, IPNetwork)           # bool, and narrows the type
+    is_valid(value, IPNetwork)           # bool convertibility check
 
 All IP/network values are the concrete :mod:`ipaddress` classes, so
 ``.exploded``, ``.network_address``, ``.netmask`` and ``addr in network``
@@ -39,8 +39,8 @@ import platform as _platform
 from typing import (
     TYPE_CHECKING,
     Any,
+    Callable,
     Optional,
-    Type,
     TypeVar,
     Union,
     overload,
@@ -48,13 +48,10 @@ from typing import (
 from typing import get_origin as _typing_get_origin
 
 if TYPE_CHECKING:
-    # TypeGuard landed in typing at 3.10 and typing_extensions before that.
-    # Under TYPE_CHECKING only, so 3.9 needs no runtime dependency: type
-    # checkers supply typing_extensions themselves.
-    try:
-        from typing import TypeGuard
-    except ImportError:  # pragma: no cover - 3.9
-        from typing_extensions import TypeGuard
+    # PEP 747's TypeForm preserves the result represented by runtime union
+    # aliases such as IPAddress. Kept out of runtime imports so Python 3.9
+    # gains no typing_extensions dependency.
+    from typing_extensions import TypeForm
 
 # Re-export the concrete stdlib types so consumers can annotate with them.
 from ipaddress import (
@@ -78,6 +75,7 @@ from ._ip import (
     IPAddress,
     IPAddressLike,
     IPInterface,
+    IPInterfaceLike,
     IPNetwork,
     IPNetworkLike,
     collapse,
@@ -100,6 +98,7 @@ __all__ = [
     "IPv6Network",
     "MACAddress",
     "IPAddressLike",
+    "IPInterfaceLike",
     "IPNetworkLike",
     "MACLike",
     # Parsing.
@@ -134,6 +133,8 @@ __all__ = [
     "bind",
     "bind_error_hint",
     "interface_for",
+    "interfaces_for",
+    "is_local_address",
     "UdpEndpoint",
     "Datagram",
     "retry",
@@ -155,7 +156,7 @@ __all__ = [
     "HOST_DN",
 ]
 
-__version__ = "0.0.2"
+__version__ = "0.1.0"
 
 #: Fully-qualified (or short) name of the host running this process.
 HOST_DN = _platform.node()
@@ -167,6 +168,7 @@ HOST_DN = _platform.node()
 # and friends read. They double as the ``type`` argument to ``parse()``.
 
 _T = TypeVar("_T")
+_D = TypeVar("_D")
 
 
 def _check_parser(type) -> None:
@@ -199,22 +201,55 @@ def _check_parser(type) -> None:
 
 
 if TYPE_CHECKING:
-    # The union aliases are not ``type`` objects, so they need their own
-    # signatures; without these a checker infers ``Never`` for every call that
-    # passes one. Runtime keeps the single permissive implementation below.
+    # Runtime keeps one permissive implementation; these signatures preserve
+    # the result represented by union type forms and arbitrary builders.
     @overload
-    def parse(value: object, type: Type[_T], **kwargs: Any) -> _T: ...
+    def parse(value: object, type: TypeForm[_T], **kwargs: Any) -> _T: ...
+
     @overload
-    def parse(value: object, type: Any = ..., **kwargs: Any) -> Any: ...
+    def parse(value: object, type: Callable[..., _T], **kwargs: Any) -> _T: ...
+
+    @overload
+    def parse(value: object, **kwargs: Any) -> IPAddress: ...
 
     @overload
     def try_parse(
-        value: object, type: Type[_T], default: None = ..., **kwargs: Any
+        value: object, type: TypeForm[_T], default: None = ..., **kwargs: Any
     ) -> Optional[_T]: ...
+
     @overload
     def try_parse(
-        value: object, type: Any = ..., default: Any = ..., **kwargs: Any
-    ) -> Any: ...
+        value: object, type: TypeForm[_T], default: _D, **kwargs: Any
+    ) -> Union[_T, _D]: ...
+
+    @overload
+    def try_parse(
+        value: object, type: Callable[..., _T], default: None = ..., **kwargs: Any
+    ) -> Optional[_T]: ...
+
+    @overload
+    def try_parse(
+        value: object, type: Callable[..., _T], default: _D, **kwargs: Any
+    ) -> Union[_T, _D]: ...
+
+    @overload
+    def try_parse(
+        value: object, *, default: None = ..., **kwargs: Any
+    ) -> Optional[IPAddress]: ...
+
+    @overload
+    def try_parse(
+        value: object, *, default: _D, **kwargs: Any
+    ) -> Union[IPAddress, _D]: ...
+
+    @overload
+    def is_valid(value: object, type: TypeForm[_T], **kwargs: Any) -> bool: ...
+
+    @overload
+    def is_valid(value: object, type: Callable[..., _T], **kwargs: Any) -> bool: ...
+
+    @overload
+    def is_valid(value: object, **kwargs: Any) -> bool: ...
 
 
 def parse(value: object, type: "Any" = IPAddress, **kwargs) -> "Any":
@@ -341,13 +376,6 @@ def is_valid(
         is_valid("aa:bb:cc:dd:ee:ff", MACAddress)
         is_valid("nonsense", IPAddress)      # False
 
-    Declared as a :data:`typing.TypeGuard`, so a checker **narrows the value**
-    in the ``True`` branch::
-
-        def handle(raw: object) -> None:
-            if is_valid(raw, IPAddress):
-                raw.is_private        # raw is IPv4Address | IPv6Address here
-
     When you want the parsed value too, use :func:`try_parse` instead of
     calling this first -- one call, no double work. Same exception policy: only
     ``ValueError``/``TypeError`` count as "invalid".
@@ -395,6 +423,8 @@ from ._sockets import (  # noqa: E402
     get_tcp_mss,
     bind_error_hint,
     interface_for,
+    interfaces_for,
+    is_local_address,
     Route,
     get_free_port,
     get_source_ip,

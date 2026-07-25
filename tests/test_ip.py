@@ -102,6 +102,7 @@ def test_types_are_types_and_factories_are_callable():
         "IPInterface",
         "IPNetwork",
         "IPAddressLike",
+        "IPInterfaceLike",
         "IPNetworkLike",
         "MACLike",
     ):
@@ -127,6 +128,20 @@ def test_unions_usable_as_annotations():
     hints = typing.get_type_hints(annotated)
     assert hints["a"] == netimps.IPAddress
     assert hints["b"] == netimps.IPNetwork
+
+
+def test_public_lookup_annotations_resolve_at_runtime():
+    """Public annotations must remain usable outside a type checker."""
+    import typing
+
+    for function in (
+        netimps.interface_for,
+        netimps.interfaces_for,
+        netimps.is_local_address,
+        netimps.Interface.__init__,
+    ):
+        hints = typing.get_type_hints(function)
+        assert "return" in hints
 
 
 # --------------------------------------------------------------------------- #
@@ -300,7 +315,12 @@ def test_input_aliases_are_not_parsers():
     bare callable check lets these through and they fail later with a much
     more confusing error. They must be rejected up front on every version.
     """
-    for alias in (netimps.IPAddressLike, netimps.IPNetworkLike, netimps.MACLike):
+    for alias in (
+        netimps.IPAddressLike,
+        netimps.IPInterfaceLike,
+        netimps.IPNetworkLike,
+        netimps.MACLike,
+    ):
         assert alias not in netimps._BUILDERS
         with pytest.raises(TypeError, match="typing construct"):
             netimps.try_parse("10.0.0.5", alias)
@@ -336,6 +356,27 @@ def test_concrete_types_round_trip_existing_objects():
     net = ipaddress.ip_network("10.0.0.0/24")
     assert netimps.try_parse(iface, netimps.IPv4Interface) == iface
     assert netimps.try_parse(net, netimps.IPv4Network) == net
+
+
+def test_like_aliases_cover_packed_and_interface_tuple_inputs():
+    import typing
+
+    assert bytes in typing.get_args(netimps.IPAddressLike)
+    assert bytes in typing.get_args(netimps.IPInterfaceLike)
+    assert bytes in typing.get_args(netimps.IPNetworkLike)
+    assert netimps.parse(b"\x0a\x00\x00\x05", IPAddress) == IPv4Address("10.0.0.5")
+    assert netimps.parse(("10.0.0.5", 24), IPInterface) == ipaddress.ip_interface(
+        "10.0.0.5/24"
+    )
+    assert netimps.parse(b"\x0a\x00\x00\x05", IPNetwork) == ipaddress.ip_network(
+        "10.0.0.5/32"
+    )
+    assert netimps.parse(("10.0.0.5", 24), IPNetwork) == ipaddress.ip_network(
+        "10.0.0.0/24"
+    )
+    assert netimps.parse(
+        ipaddress.ip_interface("10.0.0.5/24"), IPNetwork
+    ) == ipaddress.ip_network("10.0.0.0/24")
 
 
 def test_try_parse_default():

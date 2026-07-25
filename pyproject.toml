@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "netimps"
-version = "0.0.2"
+version = "0.1.0"
 authors = [{ name = "Jose A." }]
 description = "Small, self-contained network utilities: IP/MAC types, DNS lookup, ping, NIC discovery"
 readme = "README.md"
@@ -28,7 +28,7 @@ dependencies = ["dnspython"]
 [project.optional-dependencies]
 # The CLI is optional: importing netimps must never require duho.
 cli = ['duho>=0.3.3']
-dev = ['build', 'twine', 'hatchling', 'pytest', 'black', 'duho>=0.3.3']
+dev = ['build', 'twine', 'hatchling', 'pytest', 'black', 'mypy<2', 'duho>=0.3.3']
 docs = ['mkdocs', 'mkdocs-material', 'mkdocstrings[python]']
 
 [project.scripts]
@@ -56,6 +56,10 @@ exclude = ["/.*"]
 [tool.black]
 # 3.9 is the floor, so don't let black emit syntax newer than that.
 target-version = ["py39"]
+
+[tool.mypy]
+python_version = "3.9"
+enable_incomplete_feature = ["TypeForm"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

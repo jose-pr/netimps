@@ -26,12 +26,25 @@ import sys as _sys
 import time as _time
 
 from ._iface_spec import interface_address as _interface_address
-from typing import Any, Optional, Tuple
+from ._ifaddrs import Interface
+from ._ip import IPAddress, IPAddressLike, IPInterface, IPNetwork
+from ._mac import MACAddress
+from typing import Any, Iterator, Optional, Tuple, Union
+
+_InterfaceQuery = Union[
+    Interface,
+    IPAddressLike,
+    IPInterface,
+    IPNetwork,
+    MACAddress,
+]
 
 __all__ = [
     "bind",
     "bind_error_hint",
     "interface_for",
+    "interfaces_for",
+    "is_local_address",
     "get_source_ip",
     "get_free_port",
     "tcp_check",
@@ -173,42 +186,133 @@ def bind_error_hint(
     return None
 
 
-def interface_for(address, strict: bool = True) -> "Optional[Any]":
-    """Return the :class:`Interface` holding ``address``, or ``None``.
+def _classify_interface_query(query: _InterfaceQuery) -> "Tuple[str, Any]":
+    """Return the lookup kind and normalised value, or ``("invalid", None)``."""
+    import ipaddress as _ipaddress
+
+    from . import IPAddress, IPNetwork, MACAddress, try_parse
+    from ._ifaddrs import Interface
+
+    if isinstance(query, Interface):
+        return "interface", query
+    if isinstance(query, MACAddress):
+        return "mac", query
+    if isinstance(query, (_ipaddress.IPv4Interface, _ipaddress.IPv6Interface)):
+        return "address", query.ip
+    if isinstance(query, (_ipaddress.IPv4Network, _ipaddress.IPv6Network)):
+        return "network", query
+
+    address = try_parse(query, IPAddress)
+    if address is not None:
+        return "address", address
+
+    if isinstance(query, str) and "/" in query:
+        network = try_parse(query, IPNetwork)
+        if network is not None:
+            return "network", network
+
+    # MAC text cannot collide with a valid IP literal, and packed MAC bytes
+    # have length 6 while packed IP addresses have length 4 or 16. Integers
+    # are genuinely ambiguous, so those remain IP addresses unless callers
+    # wrap them in MACAddress explicitly.
+    if isinstance(query, (str, bytes)):
+        mac = try_parse(query, MACAddress)
+        if mac is not None:
+            return "mac", mac
+    return "invalid", None
+
+
+def _interfaces_for_query(kind: str, wanted: Any) -> "Iterator[Interface]":
+    from ._ifaddrs import get_interfaces
+
+    if kind == "interface":
+        yield wanted
+        return
+    if kind == "invalid":
+        return
+
+    for iface in get_interfaces():
+        if kind == "mac":
+            matches = iface.mac == wanted
+        elif kind == "address":
+            matches = any(entry.ip == wanted for entry in iface.ips)
+        else:
+            matches = any(
+                entry.version == wanted.version and entry.ip in wanted
+                for entry in iface.ips
+            )
+        if matches:
+            yield iface
+
+
+def interfaces_for(query: _InterfaceQuery) -> "Iterator[Interface]":
+    """Yield every local interface matching ``query``, in OS order.
+
+    ``query`` may be an :class:`Interface` (yielded directly), an address, an
+    ``IPInterface`` (matched by its exact ``.ip``), an ``IPNetwork`` (matched
+    when it contains any assigned address), or a :class:`MACAddress`. Address-
+    like strings, integers and packed bytes are accepted too; a slash-bearing
+    string is interpreted as a network when it is not an address.
+
+    MAC text and 6-byte packed values are recognised after IP parsing.
+    Integer MACs must be wrapped in ``MACAddress`` because an integer is also
+    a valid IP-address representation. Invalid queries and misses yield
+    nothing. Each matching interface is yielded once even if several of its
+    assigned addresses fall within a requested network.
+    """
+    kind, wanted = _classify_interface_query(query)
+    yield from _interfaces_for_query(kind, wanted)
+
+
+def interface_for(query: _InterfaceQuery, strict: bool = True) -> "Optional[Interface]":
+    """Return the first local interface matching ``query``, or ``None``.
 
     The reverse of interface enumeration -- "a socket is bound here, which
     adapter is that?"::
 
         interface_for(sock.getsockname()[0])
 
-    :param strict: when True (the default), an address held by no local
-        interface returns ``None``. When False, a synthetic single-address
-        ``Interface`` is returned instead, so a caller that only needs
-        *something* to attribute traffic to does not have to special-case it.
+    Accepts the same query forms as :func:`interfaces_for`; singular lookup is
+    exactly the first plural result. Since addresses can appear on more than
+    one adapter (especially unscoped IPv6 link-local addresses), use the plural
+    form when every match matters.
+
+    :param strict: when True (the default), a miss returns ``None``. When
+        False, an address or ``IPInterface`` miss produces a synthetic
+        single-address ``Interface`` so legacy callers can still attribute
+        traffic. Network and MAC misses cannot be synthesized honestly and
+        remain ``None``.
 
     The synthetic interface is named ``"<unknown>"`` and carries a host route
     (``/32`` or ``/128``), matching how degraded enumeration reports itself.
     """
-    from . import try_parse
-    from ._ifaddrs import Interface, get_interfaces
+    from ._ifaddrs import Interface
 
-    wanted = try_parse(address)
-    if wanted is None:
-        return None
-
-    for iface in get_interfaces():
-        for entry in iface.ips:
-            if entry.ip == wanted:
-                return iface
-
-    if strict:
-        return None
+    kind, wanted = _classify_interface_query(query)
+    match = next(_interfaces_for_query(kind, wanted), None)
+    if match is not None or strict or kind != "address":
+        return match
 
     built = _make_host_route(wanted)
     return Interface(name="<unknown>", ips=[built] if built else [])
 
 
-def _make_host_route(address):
+def is_local_address(address: "IPAddressLike") -> bool:
+    """Return whether ``address`` is loopback or assigned on this host.
+
+    This is deliberately narrower than private, link-local, on-link, routable
+    or reachable: those properties do not mean an address belongs to this
+    machine. Malformed input raises exactly as :func:`parse` does.
+    """
+    from . import IPAddress, parse
+
+    wanted = parse(address, IPAddress)
+    if wanted.is_loopback:
+        return True
+    return next(interfaces_for(wanted), None) is not None
+
+
+def _make_host_route(address: "IPAddress") -> "Optional[IPInterface]":
     import ipaddress as _ipaddress
 
     try:

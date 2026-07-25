@@ -16,7 +16,7 @@ is self-contained: it references nothing outside the installed distribution.
 testing, releasing) is not shipped; it lives with the source at
 <https://github.com/jose-pr/netimps>.
 
-`netimps.__version__` — the package version string (currently `"0.0.2"`).
+`netimps.__version__` — the package version string (currently `"0.1.0"`).
 
 ## Argument naming
 
@@ -27,7 +27,7 @@ The package is consistent about what the first argument means:
 | `dst` | where traffic is **sent** | `ping`, `tcp_check`, `wait_for_port`, `get_route`, `hop_count`, `discover_mtu` |
 | `src` | where traffic is **sent from** | `ping(src=)`, `get_free_port(src=)`, `discover_mtu(src=)` |
 | `host` / `network` | the thing being **examined** | `scan_ports(host)`, `scan_hosts(network)` |
-| `address` / `ip` | an address being **classified** (no DNS) | `get_ip`, `interface_for`, `is_multicast`, `is_link_scoped` |
+| `address` / `ip` | an address being **classified** (no DNS) | `get_ip`, `interface_for`, `interfaces_for`, `is_local_address`, `is_multicast`, `is_link_scoped` |
 
 `dst`/`src` are abbreviated symmetrically, matching packet-header convention.
 A `dst` accepts a hostname; an `address` does not.
@@ -55,6 +55,7 @@ The union aliases are **not callable** — `IPAddress("10.0.0.5")` is a
 | `IPInterface` | `IPv4Interface \| IPv6Interface` (address + prefix) |
 | `IPNetwork` | `IPv4Network \| IPv6Network` |
 | `IPAddressLike` | anything accepted *as input* for an address |
+| `IPInterfaceLike` | anything accepted *as input* for an address + prefix |
 | `IPNetworkLike` | anything accepted *as input* for a network |
 | `MACLike` | `str \| int \| bytes \| MACAddress` |
 
@@ -80,6 +81,9 @@ keyword. Key behaviours:
 - **Every type accepts the full stdlib input range** — `str`, `int`, packed
   `bytes`, or an existing object — because the builders are `ipaddress.ip_*`,
   not the concrete constructors.
+- **`IPInterface` and non-strict `IPNetwork` accept the stdlib two-tuple
+  form**, such as `("10.0.0.5", 24)`. `IPNetwork` also accepts an existing
+  `IPInterface` and normalises its host bits. `IPAddress` accepts neither.
 - **Unions accept either family; concrete types are strict.**
   `parse("::1", IPAddress)` works; `parse("::1", IPv4Address)` raises, because
   asking for v4 and receiving v6 would defeat the request.
@@ -91,6 +95,11 @@ keyword. Key behaviours:
   than being disguised as a rejected value.
 - An unusable `type` raises `TypeError` **even from `try_parse`** — a caller
   bug is not a rejected value.
+- Static type checkers preserve the selected result type, including the
+  `IPAddress`/`IPInterface`/`IPNetwork` unions, concrete classes, callable
+  builders, and the union with an explicit `try_parse(default=...)`.
+- **`is_valid` returns a plain `bool`; it does not narrow the original input.**
+  It proves convertibility, and parsing can create a different object.
 
 > **Gotcha:** `is_valid` uses an internal sentinel rather than testing
 > `try_parse(...) is not None`, so a builder that legitimately returns `None`
@@ -257,9 +266,26 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
   for a bind failure, recognising POSIX errnos *and* Windows `10013`/`10048`.
   Returns `None` for anything unrecognised, so the caller keeps the original
   error. **Does not raise** — what to do with a failure is the caller's call.
-- **`interface_for(address, strict=True) -> Interface | None`** — reverse
-  lookup. `strict=False` synthesizes a host-route interface named
-  `"<unknown>"` instead of returning `None`.
+- **`interface_for(query, strict=True) -> Interface | None`** — first matching
+  adapter in OS enumeration order. `query` accepts an `Interface`, exact
+  `IPAddress`, exact `.ip` from an `IPInterface`, an `IPNetwork` containing at
+  least one assigned address, or an exact `MACAddress`. Address-like strings,
+  integers and packed bytes remain accepted; a slash-bearing string is a
+  network. MAC text and 6-byte packed values are recognised after IP parsing.
+  Integer MACs must be wrapped in `MACAddress` because integers are also valid
+  IP-address inputs. Invalid input and misses return `None`. With
+  `strict=False`, only an address or `IPInterface` miss synthesizes a host-route
+  interface named `"<unknown>"`; networks and MACs have no honest synthetic
+  result.
+- **`interfaces_for(query) -> Iterator[Interface]`** — every match for the same
+  query forms, in OS order and with each adapter yielded once even if several
+  assigned addresses match. An `Interface` yields itself without enumeration.
+  Addresses need not be unique across adapters (unscoped IPv6 link-local is a
+  common example), so use this plural form when every owner matters.
+- **`is_local_address(address) -> bool`** — true only for loopback or an
+  address assigned to a local adapter. Private, link-local, on-link, routable
+  or reachable alone do not count. Malformed input raises like `parse`;
+  loopback answers before interface discovery.
 - **`get_source_ip(dst="8.8.8.8", port=80)`** — which local address the kernel
   would use to reach `dst`. **Sends no packets.** The answer depends on
   `dst`: with a VPN up, a public probe returns the tunnel address and a LAN

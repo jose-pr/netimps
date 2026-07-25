@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-07-25
+
+### Added
+
+- **Complete local-interface membership lookups.** `interfaces_for()` yields
+  every adapter matching an interface, exact address/`IPInterface`, network,
+  or `MACAddress`, while `interface_for()` keeps the first-match scalar
+  contract. `is_local_address()` distinguishes an assigned or loopback address
+  from one that is merely private, link-local, on-link or reachable.
+- **Static parser contracts.** `TypeForm` overloads preserve union and concrete
+  result types, callable builders, and explicit `try_parse(default=...)`
+  fallbacks. `IPInterfaceLike` now complements the existing input aliases.
+
+### Changed
+
+- `interface_for()` accepts networks and MAC addresses, including MAC text and
+  6-byte packed values. Integer MACs remain explicit `MACAddress` values. Its legacy
+  `strict=False` synthetic fallback remains address-only because a missing
+  network or MAC has no honest single-interface representation.
+- The IP input aliases now include packed bytes plus the exact stdlib
+  two-tuple and existing-interface forms accepted by the interface/network
+  factories. `is_valid()` is documented as a boolean convertibility check
+  rather than an unsound type guard for the original object.
+
 ## [0.0.2] - 2026-07-23
 
 ### Added
@@ -87,6 +111,8 @@ below is simply what the package contains.
 - **`Host`**, **`retry()`/`backoff_delays()`**, and the named networks `APIPA`,
   `LOOPBACK_V4`, `LOOPBACK_V6`, `LINK_LOCAL_V6`.
 
-[Unreleased]: https://github.com/jose-pr/netimps/compare/v0.0.1...HEAD
+[Unreleased]: https://github.com/jose-pr/netimps/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/jose-pr/netimps/compare/v0.0.2...v0.1.0
+[0.0.2]: https://github.com/jose-pr/netimps/releases/tag/v0.0.2
 [0.0.1]: https://github.com/jose-pr/netimps/releases/tag/v0.0.1
 [0.0.0]: https://github.com/jose-pr/netimps/releases/tag/v0.0.0

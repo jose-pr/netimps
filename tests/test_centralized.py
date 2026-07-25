@@ -5,12 +5,24 @@ shared interface-spec resolution they all lean on. Loopback only.
 """
 
 import errno
+import ipaddress
 import socket
 
 import pytest
 
 import netimps
-from netimps import Host, UdpEndpoint, backoff_delays, bind, interface_for, retry
+from netimps import (
+    Host,
+    Interface,
+    MACAddress,
+    UdpEndpoint,
+    backoff_delays,
+    bind,
+    interface_for,
+    interfaces_for,
+    is_local_address,
+    retry,
+)
 from netimps import _iface_spec, _udp
 
 # --------------------------------------------------------------------------- #
@@ -155,26 +167,177 @@ def test_hint_without_a_port():
 # --------------------------------------------------------------------------- #
 
 
-def test_interface_for_loopback():
-    iface = interface_for("127.0.0.1")
-    assert iface is not None and iface.is_loopback
+def _lookup_fixtures():
+    shared_mac = MACAddress("02:00:00:00:00:01")
+    first = Interface(
+        "first",
+        mac=shared_mac,
+        ips=[
+            ipaddress.ip_interface("10.0.0.1/24"),
+            ipaddress.ip_interface("10.0.0.10/24"),
+            ipaddress.ip_interface("2001:db8:1::1/64"),
+            ipaddress.ip_interface("fe80::1/64"),
+        ],
+    )
+    second = Interface(
+        "second",
+        mac=shared_mac,
+        ips=[
+            ipaddress.ip_interface("10.0.0.2/24"),
+            ipaddress.ip_interface("2001:db8:2::1/64"),
+        ],
+    )
+    duplicate_address = Interface(
+        "duplicate-address",
+        mac=MACAddress("02:00:00:00:00:03"),
+        ips=[ipaddress.ip_interface("10.0.0.1/32")],
+    )
+    return first, second, duplicate_address
 
 
-def test_interface_for_unknown_is_none_when_strict():
+def _mock_lookup_interfaces(monkeypatch):
+    interfaces = list(_lookup_fixtures())
+    calls = []
+
+    def enumerate_interfaces():
+        calls.append(True)
+        return interfaces
+
+    monkeypatch.setattr(netimps._ifaddrs, "get_interfaces", enumerate_interfaces)
+    return interfaces, calls
+
+
+def test_interfaces_for_interface_does_not_enumerate(monkeypatch):
+    iface = Interface("already-resolved")
+
+    def fail_enumeration():
+        raise AssertionError("Interface lookup must not enumerate")
+
+    monkeypatch.setattr(netimps._ifaddrs, "get_interfaces", fail_enumeration)
+    assert list(interfaces_for(iface)) == [iface]
+    assert interface_for(iface) is iface
+
+
+def test_interfaces_for_exact_address_and_duplicate_order(monkeypatch):
+    interfaces, calls = _mock_lookup_interfaces(monkeypatch)
+    first, _, duplicate = interfaces
+
+    assert list(interfaces_for("10.0.0.1")) == [first, duplicate]
+    assert calls == [True]
+    calls.clear()
+    assert interface_for(ipaddress.ip_address("10.0.0.1")) is first
+    assert calls == [True]
+
+
+def test_interfaces_for_ip_interface_matches_exact_ip_not_subnet(monkeypatch):
+    interfaces, _ = _mock_lookup_interfaces(monkeypatch)
+    assert list(interfaces_for(ipaddress.ip_interface("10.0.0.2/8"))) == [interfaces[1]]
+    assert list(interfaces_for(ipaddress.ip_interface("10.0.0.99/24"))) == []
+
+
+def test_interfaces_for_ipv4_network_deduplicates_and_preserves_order(monkeypatch):
+    interfaces, calls = _mock_lookup_interfaces(monkeypatch)
+    assert list(interfaces_for(ipaddress.ip_network("10.0.0.0/24"))) == interfaces
+    assert calls == [True]
+
+    calls.clear()
+    assert list(interfaces_for("10.0.0.0/24")) == interfaces
+    assert calls == [True]
+
+
+def test_interfaces_for_ipv6_networks(monkeypatch):
+    interfaces, _ = _mock_lookup_interfaces(monkeypatch)
+    assert list(interfaces_for(ipaddress.ip_network("2001:db8:1::/64"))) == [
+        interfaces[0]
+    ]
+    assert list(interfaces_for("2001:db8::/32")) == interfaces[:2]
+
+
+def test_interfaces_for_mac_forms_and_duplicates(monkeypatch):
+    interfaces, _ = _mock_lookup_interfaces(monkeypatch)
+    shared = MACAddress("02:00:00:00:00:01")
+    assert list(interfaces_for(shared)) == interfaces[:2]
+    assert list(interfaces_for(str(shared))) == interfaces[:2]
+    assert list(interfaces_for(shared.packed)) == interfaces[:2]
+
+
+def test_interfaces_for_integer_remains_an_ip_query(monkeypatch):
+    _, calls = _mock_lookup_interfaces(monkeypatch)
+    shared = MACAddress("02:00:00:00:00:01")
+    assert list(interfaces_for(int(shared))) == []
+    assert calls == [True]
+
+
+def test_interfaces_for_invalid_and_no_match(monkeypatch):
+    _, calls = _mock_lookup_interfaces(monkeypatch)
+    assert list(interfaces_for("not-an-address")) == []
+    assert list(interfaces_for(None)) == []
+    assert list(interfaces_for(ipaddress.ip_network("192.0.2.0/24"))) == []
+    assert calls == [True]
+
+
+def test_interface_for_unknown_is_none_when_strict(monkeypatch):
+    _mock_lookup_interfaces(monkeypatch)
     assert interface_for("192.0.2.99") is None
 
 
-def test_interface_for_unknown_synthesizes_when_not_strict():
+def test_interface_for_unknown_synthesizes_address_and_interface(monkeypatch):
+    _mock_lookup_interfaces(monkeypatch)
     iface = interface_for("192.0.2.99", strict=False)
     assert iface is not None
     assert iface.name == "<unknown>"
     # A host route, matching how degraded enumeration reports itself.
     assert iface.ips[0].network.prefixlen == iface.ips[0].max_prefixlen
+    assert iface.ips[0].ip == ipaddress.ip_address("192.0.2.99")
+
+    from_interface = interface_for(
+        ipaddress.ip_interface("192.0.2.100/24"), strict=False
+    )
+    assert from_interface is not None
+    assert from_interface.ips[0].ip == ipaddress.ip_address("192.0.2.100")
 
 
-def test_interface_for_garbage_is_none():
+def test_interface_for_does_not_synthesize_network_or_mac(monkeypatch):
+    _mock_lookup_interfaces(monkeypatch)
+    assert interface_for(ipaddress.ip_network("192.0.2.0/24"), strict=False) is None
+    assert interface_for(MACAddress("02:00:00:00:00:99"), strict=False) is None
+
+
+def test_interface_for_garbage_is_none(monkeypatch):
+    _mock_lookup_interfaces(monkeypatch)
     assert interface_for("not-an-address") is None
     assert interface_for(None) is None
+
+
+# --------------------------------------------------------------------------- #
+# is_local_address                                                             #
+# --------------------------------------------------------------------------- #
+
+
+def test_is_local_address_loopback_does_not_enumerate(monkeypatch):
+    def fail_enumeration():
+        raise AssertionError("loopback must be answered before discovery")
+
+    monkeypatch.setattr(netimps._ifaddrs, "get_interfaces", fail_enumeration)
+    assert is_local_address("127.0.0.1")
+    assert is_local_address("::1")
+
+
+def test_is_local_address_requires_assignment_not_scope(monkeypatch):
+    _mock_lookup_interfaces(monkeypatch)
+    assert is_local_address("10.0.0.1")
+    assert not is_local_address("10.0.1.1")  # private alone is insufficient
+    assert is_local_address("fe80::1")
+    assert not is_local_address("fe80::2")  # link-local alone is insufficient
+    assert not is_local_address("2001:db8:ffff::1")
+
+
+def test_is_local_address_malformed_input_raises(monkeypatch):
+    _mock_lookup_interfaces(monkeypatch)
+    with pytest.raises(ValueError):
+        is_local_address("not-an-address")
+    with pytest.raises(ValueError):
+        is_local_address(None)
 
 
 # --------------------------------------------------------------------------- #

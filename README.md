@@ -21,13 +21,16 @@ and no wheel to miss for your platform.
   names, MACs, MTU and **real prefix lengths** on Linux, macOS/BSD and Windows,
   via `getifaddrs(3)` / `GetAdaptersAddresses`. No `ifaddr` required.
 - **One parsing entry point** — `parse(value, type)` with non-raising
-  `try_parse` and boolean `is_valid` siblings, all typed so a checker narrows
-  the result.
+  `try_parse` and boolean `is_valid` siblings. Type-form overloads preserve the
+  parsed result, including v4/v6 union aliases and caller-supplied defaults.
 - **`MACAddress`** — colon/hyphen/dot/bare plus `int`/`bytes`, hashable and
   ordered, with `.oui`, `.is_multicast`, `.is_local` and case-selectable
   rendering.
 - **The socket helpers everyone rewrites** — `get_source_ip`, `get_free_port`,
   `tcp_check`, `wait_for_port`.
+- **Local membership lookups** — `interface_for()` gives the first adapter for
+  an address, interface, network or MAC; `interfaces_for()` yields every match,
+  and `is_local_address()` distinguishes assignment from mere address scope.
 - **Routing and MTU** — `get_route` (first hop, unprivileged), `hop_count`
   (raw sockets *or* traceroute fallback), `discover_mtu` / `get_pmtu`, `Interface.mtu`.
 - **CIDR set maths** — `collapse` and `subtract`, the latter missing from
@@ -91,6 +94,11 @@ netimps.is_valid("::1", IPAddress)       # True
 netimps.get_source_ip("8.8.8.8")         # IPv4Address('192.0.2.10')
 netimps.get_route("8.8.8.8").gateway     # IPv4Address('192.0.2.1')
 
+# Exact assignment, subnet membership, or MAC ownership
+netimps.interface_for("192.0.2.10")      # first matching Interface, or None
+list(netimps.interfaces_for(parse("192.0.2.0/24", IPNetwork)))
+netimps.is_local_address("127.0.0.1")    # True without interface discovery
+
 # Honest reachability, and waiting for a service
 netimps.tcp_check("example.com", 443)              # True
 netimps.wait_for_port("localhost", 5432, timeout=60)
@@ -139,7 +147,7 @@ netimps.retry(lambda: netimps.tcp_check("example.com", 443), attempts=3)
 | Name | Purpose |
 | --- | --- |
 | `IPAddress`, `IPInterface`, `IPNetwork` | v4/v6 **union aliases** for annotations |
-| `IPAddressLike`, `IPNetworkLike`, `MACLike` | accepted-input unions |
+| `IPAddressLike`, `IPInterfaceLike`, `IPNetworkLike`, `MACLike` | accepted-input unions |
 | `IPv4Address`, `IPv4Interface`, ... | stdlib concrete-type re-exports |
 | `parse`, `try_parse`, `is_valid` | build a type from a value (raising / `None` / `bool`) |
 | `MACAddress` | parse / classify / render MAC addresses |
@@ -150,7 +158,7 @@ netimps.retry(lambda: netimps.tcp_check("example.com", 443), attempts=3)
 | `get_default_port`, `get_default_scheme`, `register_port` | scheme ↔ port registry |
 | `resolve` | DNS lookup → native records (`[]` on failure) |
 | `ping`, `PingResult` | reachability with RTT and TTL |
-| `bind`, `bind_error_hint`, `interface_for` | socket creation and diagnosis |
+| `bind`, `bind_error_hint`, `interface_for`, `interfaces_for`, `is_local_address` | socket creation and local membership |
 | `get_source_ip`, `get_free_port`, `tcp_check`, `wait_for_port` | socket helpers |
 | `UdpEndpoint`, `Datagram` | UDP receive with arrival interface (`IP_PKTINFO`) |
 | `Host` | hostname-or-address value type |
@@ -175,6 +183,9 @@ A few behaviours are deliberate and worth knowing:
   `parse("::1", IPv4Address)` raises rather than quietly returning v6.
 - **Networks parse non-strict by default**, so `10.0.0.5/24` normalises instead
   of raising. Pass `strict=True` for stdlib behaviour.
+- **Addresses can belong to more than one interface.** `interface_for()` keeps
+  the historical first-match result; use `interfaces_for()` when duplicates
+  such as unscoped IPv6 link-local assignments matter.
 - **`resolve` raises on a malformed query** rather than returning `[]` — a
   typo'd record type should not look like "no such record".
 - **`ping(ttl=...)` behaves the same on every OS.** Windows `ping` exits `0`

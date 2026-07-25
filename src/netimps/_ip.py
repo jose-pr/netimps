@@ -32,6 +32,7 @@ __all__ = [
     "IPInterface",
     "IPNetwork",
     "IPAddressLike",
+    "IPInterfaceLike",
     "IPNetworkLike",
     "IPv4Address",
     "IPv4Interface",
@@ -56,16 +57,53 @@ IPInterface = Union[IPv4Interface, IPv6Interface]
 IPNetwork = Union[IPv4Network, IPv6Network]
 
 #: Anything ``parse(..., IPAddress)`` accepts.
-IPAddressLike = Union[str, int, IPv4Address, IPv6Address]
+IPAddressLike = Union[str, int, bytes, IPv4Address, IPv6Address]
+
+#: Anything ``parse(..., IPInterface)`` accepts.
+IPInterfaceLike = Union[
+    str,
+    int,
+    bytes,
+    IPv4Address,
+    IPv6Address,
+    IPv4Interface,
+    IPv6Interface,
+    IPv4Network,
+    IPv6Network,
+    Tuple[
+        Union[str, int, bytes, IPv4Address, IPv6Address],
+        Union[str, int],
+    ],
+]
 
 #: Anything ``parse(..., IPNetwork)`` accepts.
-IPNetworkLike = Union[str, int, IPv4Network, IPv6Network, IPv4Address, IPv6Address]
+IPNetworkLike = Union[
+    str,
+    int,
+    bytes,
+    IPv4Network,
+    IPv6Network,
+    IPv4Address,
+    IPv6Address,
+    IPv4Interface,
+    IPv6Interface,
+    Tuple[
+        Union[str, int, bytes, IPv4Address, IPv6Address],
+        Union[str, int],
+    ],
+]
 
 
 # Internal aliases kept as runtime objects (not just annotations) so they read
 # well in tracebacks; the public spellings above are what callers should use.
-_AddressValue = Union[str, int, "_ipaddress._BaseAddress"]
-_NetworkValue = Union[str, int, "_ipaddress._BaseNetwork", "_ipaddress._BaseAddress"]
+_AddressValue = Union[str, int, bytes, "_ipaddress._BaseAddress"]
+_NetworkValue = Union[
+    str,
+    int,
+    bytes,
+    "_ipaddress._BaseNetwork",
+    "_ipaddress._BaseAddress",
+]
 
 
 # ---------------------------------------------------------------------------
