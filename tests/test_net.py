@@ -329,7 +329,11 @@ def _capture_ping(monkeypatch, returncode=0):
         calls.append((cmd, kwargs))
         return subprocess.CompletedProcess(cmd, returncode, stdout=b"")
 
+    def no_dns(host):
+        raise OSError("DNS disabled in tests")
+
     monkeypatch.setattr(netimps._ping, "_run", fake_run)
+    monkeypatch.setattr(netimps._ping._socket, "gethostbyname", no_dns)
     return calls
 
 
