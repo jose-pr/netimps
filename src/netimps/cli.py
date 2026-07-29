@@ -22,6 +22,7 @@ import typing as _ty
 
 from duho import AUTO, Arg, Args, Choice, Cmd, LoggingArgs, main
 
+from ._dns import ResolutionError
 from . import (
     IPNetwork,
     MACAddress,
@@ -231,7 +232,11 @@ class Resolve(_Base):
                 timeout=self.timeout,
                 tcp=self.tcp,
             )
-        except ValueError as exc:
+        except (ValueError, ResolutionError) as exc:
+            # ValueError: caller error (bad query/rdtype). ResolutionError:
+            # every applicable backend failed to even attempt the query
+            # (e.g. a non-address rdtype with dnspython not installed) --
+            # neither is a DNS answer, so both are reported the same way.
             print("error: %s" % exc)
             return 2
         _emit([str(r) for r in records], self.json_out)

@@ -23,12 +23,16 @@ classifiers = [
     "Topic :: System :: Networking",
     "Typing :: Typed",
 ]
-dependencies = ["dnspython"]
+dependencies = []
 
 [project.optional-dependencies]
+# dnspython backs resolve_dnspython() only -- resolve_system()/resolve_nslookup()
+# (and resolve()'s fallback chain through them) work without it, so it is not a
+# hard dependency. Importing netimps must never require it.
+dns = ['dnspython']
 # The CLI is optional: importing netimps must never require duho.
 cli = ['duho>=0.3.3']
-dev = ['build', 'twine', 'hatchling', 'pytest', 'black', 'mypy<2', 'duho>=0.3.3']
+dev = ['build', 'twine', 'hatchling', 'pytest', 'black', 'mypy<2', 'duho>=0.3.3', 'dnspython']
 docs = ['mkdocs', 'mkdocs-material', 'mkdocstrings[python]']
 
 [project.scripts]

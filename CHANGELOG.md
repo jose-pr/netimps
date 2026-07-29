@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Three independently callable DNS backends**, plus `resolve()` chaining
+  them: `resolve_dnspython()` (the original `dnspython`-backed
+  implementation, every record type), `resolve_system()`
+  (`socket.getaddrinfo()` -- hosts file, NSS, OS resolver cache, address
+  records only), and `resolve_nslookup()` (shells out to `nslookup`, parses
+  both BIND-style and Windows-style output, address records only). `resolve()`
+  now tries `["dnspython", "system", "nslookup"]` in order by default and
+  returns the first definitive answer, skipping/falling through backends that
+  can't serve the request (non-address `rdtype`, missing binary, `dnspython`
+  not installed). A custom order/subset is available via
+  `resolve(..., backends=[...])` (or a single name as a plain string).
+- `resolve()` (and all three backends) gain a `search` parameter for the
+  system resolver's search list (`resolv.conf`'s `search`/`domain`
+  directive, or the Windows per-adapter DNS suffix list). It defaults to
+  `True`, so an unqualified name like `resolve("db1")` is expanded the way
+  `ping db1` would be; `search=False` looks the name up literally (as a
+  fully-qualified name, so the OS resolver's own search-list logic doesn't
+  kick in either), and a list of domain names tries exactly those suffixes
+  instead of the system list.
+- `dnspython` is now an **optional** dependency (`pip install netimps[dns]`),
+  since `resolve()` can fall back to `resolve_system()`/`resolve_nslookup()`
+  without it. The CLI's `resolve` subcommand now reports a missing-backend
+  failure as a clean CLI error rather than an uncaught exception.
+
+### Changed
+
+- **`resolve()`'s default behavior for unqualified names.** Previously an
+  unqualified `query` was only ever looked up as-is; it now also tries the
+  system resolver's search list first (see `search` above). Pass
+  `search=False` to keep the old literal-only behavior. `ns=None` already
+  used the system resolver's nameservers; an invalid `ns=` now raises before
+  any query is attempted rather than silently falling back to the system
+  default.
+- **`resolve()` is no longer purely `dnspython`-backed.** Behavior should be
+  unchanged for existing callers when `dnspython` is installed (it's still
+  tried first), but a lookup that previously raised or returned `[]` because
+  `dnspython` failed for a reason unrelated to the DNS answer itself (e.g. a
+  malformed system resolver config) may now succeed via the `system` or
+  `nslookup` fallback instead.
+
 ## [0.1.0] - 2026-07-25
 
 ### Added

@@ -206,21 +206,97 @@ Where several schemes share a port the **canonical** one is returned (1080 →
 
 ## DNS
 
-**`resolve(query, rdtype="a", ns=None, timeout=5.0, port=53, tcp=False)`**
+Three independently callable backends, plus `resolve()`, which chains them.
+All four share one contract: a `list`, **empty on any genuine lookup
+failure** (NXDOMAIN, NODATA, timeout) — never `None` — with **native
+types**: `A`/`AAAA` records are `ipaddress` objects, everything else is
+`str` (trailing root dot stripped, TXT strings unquoted).
 
-Returns a `list`, **empty on any genuine lookup failure** (NXDOMAIN, no answer,
-all nameservers failed, timeout) — never `None`, so `if result:` and
-`result[0]` are safe.
+**`resolve(query, rdtype="a", ns=None, timeout=5.0, port=53, tcp=False, search=True, backends=None)`**
 
-**Records are native types**: `A`/`AAAA` are `ipaddress` objects, everything
-else is `str` with the trailing root dot stripped and TXT strings unquoted.
+Tries each backend in `backends` (default `["dnspython", "system",
+"nslookup"]`) until one gives a **definitive** answer — records, or a real
+empty result (NXDOMAIN/NODATA) — and returns that. A backend that could not
+even *attempt* the query (missing binary, `dnspython` not installed, a
+`rdtype`/`ns` it structurally can't serve) is skipped or falls through,
+never mistaken for "no records". If every applicable backend fails that way,
+the last such error is raised. `backends` also accepts a single name as a
+plain string (`backends="system"`), or a custom order/subset
+(`backends=["nslookup", "dnspython"]`).
 
-- **A malformed query or unknown record type raises `ValueError`** — a caller
-  bug, not a DNS result. A broad `except` here would make a typo'd record type
-  indistinguishable from "no such record".
+- **`system`** is skipped automatically for a non-address `rdtype` or an
+  explicit `ns=`/`port=` — it has no per-call nameserver override, so running
+  it anyway would silently ignore the caller's choice.
+- A malformed query or unknown record type raises `ValueError` immediately,
+  without trying every backend — that's a caller bug, not a resolution
+  outcome.
+
+**`resolve_dnspython(query, rdtype="a", ns=None, timeout=5.0, port=53, tcp=False, search=True)`**
+
+The original backend: `dnspython`, structured records, every `rdtype`.
+
+- **`ns=None` (default) uses the system resolver configuration** —
+  `/etc/resolv.conf` on POSIX, the registry on Windows. Pass `ns=` (a string
+  or list) to query specific nameservers instead; a malformed `ns=` raises
+  immediately, before any query is attempted.
+- **`search=True` (default) tries the resolver's search list** (the
+  `search`/`domain` directive in `resolv.conf`, or the Windows per-adapter DNS
+  suffix list) for an unqualified `query` — e.g. `resolve_dnspython("db1")`
+  trying `db1.internal.example.com`, the same as `ping db1` would.
+  `search=False` looks up `query` literally. A **list of domain names**
+  (`search=["eng.example.com", "example.com"]`) tries exactly those suffixes
+  instead of the system list, regardless of `ns`. Ignored for an
+  already-qualified (trailing-dot) `query`.
 - `timeout` bounds the **whole resolution including retries**, so a list of
   dead nameservers cannot run past it.
-- Requires `dnspython` — the package's only runtime dependency.
+- Requires `dnspython` — the package's only runtime dependency. Raises
+  `ResolutionError` (not `ValueError`) if it isn't installed, so `resolve()`'s
+  chain falls through to the next backend instead of erroring outright.
+
+**`resolve_system(query, rdtype="a", timeout=5.0, search=True)`**
+
+The OS resolver, via `socket.getaddrinfo()` — **hosts file, NSS
+(`nsswitch.conf`) and DNS, in the order the OS applies them**, including any
+OS-level resolver cache. This is what `resolve_dnspython` cannot see (its own
+DNS query bypasses all of that).
+
+- **Address records only**: `rdtype` must be `"a"` or `"aaaa"`; anything else
+  raises `ResolutionError` immediately, no query attempted.
+- **No `ns=` override** — `getaddrinfo` always asks whatever resolver the OS
+  is configured with; there's no per-call nameserver parameter at that layer
+  (not even via `ctypes` — reaching a specific nameserver without shelling
+  out means speaking DNS wire protocol yourself, which is what `dnspython`
+  already does).
+- **`search`**: `getaddrinfo` itself takes no search-list parameter either, so
+  `search=True` (default) just leaves `query` as given and the OS resolver's
+  own configured search list (glibc `ndots`/`search`, Windows per-adapter DNS
+  suffix) applies as it normally would. `search=False` appends a trailing
+  `.`, which every resolver reads as "already fully qualified" — the same
+  trick `host`/`getent` scripts use. A **list of domain names** tries `query`
+  qualified with each, in order, one `getaddrinfo` call per candidate,
+  independent of (and untouched by) the OS's own search list.
+
+**`resolve_nslookup(query, rdtype="a", ns=None, timeout=5.0, search=True)`**
+
+Shells out to the `nslookup` binary — a fallback for when neither Python-level
+path is usable. Address records only: `rdtype` must be `"a"`, `"aaaa"` or
+`"ptr"`.
+
+- Parses **both BIND-style** (`Address: 1.2.3.4`, one line per address) **and
+  Windows-style** (`Addresses:` with continuation lines, and NODATA as a bare
+  `Name:` line with no address and no error text) output. Windows also prints
+  its NXDOMAIN message on **stderr**, not stdout — both streams are checked.
+- `ns=` is passed as `nslookup`'s trailing `server` argument (a single
+  nameserver, not a list).
+- **`search`** has the same three-way contract as the other backends, but
+  `nslookup` has no built-in search-list handling — this issues one
+  `nslookup` call per candidate name, in order, stopping at the first with
+  actual records. `search=True` (default) draws the candidate list from the
+  system resolver's search config (reusing `dnspython`'s `resolv.conf`/
+  registry parsing if it's installed; `[]` — literal name only — if not).
+- Raises `ResolutionError` (not `ValueError`) for a missing binary, a
+  timeout, or an unparseable output shape — a genuine "no such name" is
+  still `[]`.
 
 ## Reachability
 

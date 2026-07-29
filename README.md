@@ -10,10 +10,13 @@
 "which is my IP", reachability checks, CIDR maths, host:port parsing, DNS,
 ping, scanning and multicast — as one typed, flat-import library.
 
-Built on the standard library: the only runtime dependency is `dnspython`, and
-only `resolve()` uses it. Interface enumeration, routing and multicast are
-`ctypes` bindings to the platform's own APIs, so there is nothing to compile
-and no wheel to miss for your platform.
+Built on the standard library, with **no hard runtime dependencies**.
+`resolve()` tries `dnspython`, the OS resolver and `nslookup`, in that order,
+using whichever is available (`pip install netimps[dns]` for `dnspython`
+itself, the fullest of the three: structured records, every record type,
+explicit nameserver/search-list control). Interface enumeration, routing and
+multicast are `ctypes` bindings to the platform's own APIs, so there is
+nothing to compile and no wheel to miss for your platform.
 
 ## Features
 
@@ -42,18 +45,20 @@ and no wheel to miss for your platform.
   `retry()` for the backoff loop everyone writes without jitter.
 - **Multicast** — `multicast_socket` handling the join dance whose failure
   modes are otherwise silent.
-- **DNS and ping** — `resolve()` returning native types; `ping()` returning
-  round-trip time and TTL, not just a boolean.
+- **DNS and ping** — `resolve()` chaining `dnspython`/OS resolver/`nslookup`
+  backends and returning native types; `ping()` returning round-trip time and
+  TTL, not just a boolean.
 
 ## Installation
 
 ```bash
-pip install netimps          # the library
+pip install netimps          # the library -- no hard dependencies
+pip install netimps[dns]     # plus dnspython, for resolve()'s fullest backend
 pip install netimps[cli]     # plus the `netimps` command
 ```
 
-Requires Python 3.9+. The CLI extra adds `duho`; importing the library never
-requires it.
+Requires Python 3.9+. Both extras are additive and independent; importing the
+library never requires either.
 
 ## Command line
 

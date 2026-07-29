@@ -2,9 +2,10 @@
 
 A **small, self-contained network-utilities library** — a thin, typed layer over
 the standard library's `ipaddress`, native cross-platform interface discovery,
-and a handful of host helpers (DNS lookup, ping). One flat import surface, one
-runtime dependency (`dnspython`, used only by `resolve`), and behaviour that
-stays faithful to the stdlib.
+and a handful of host helpers (DNS lookup, ping). One flat import surface, no
+hard runtime dependencies (`resolve()` chains `dnspython`/OS-resolver/
+`nslookup` backends, using whichever is available -- `dnspython` is optional,
+via the `dns` extra), and behaviour that stays faithful to the stdlib.
 
 ```python
 import netimps
@@ -46,11 +47,11 @@ netimps.ping("8.8.8.8").rtt_ms             # 9.0
 ## Install
 
 ```bash
-pip install netimps
+pip install netimps          # no hard dependencies
+pip install netimps[dns]     # plus dnspython, for resolve()'s fullest backend
 ```
 
-Requires Python 3.9+. Runtime dependency: `dnspython` (used only inside
-`resolve`).
+Requires Python 3.9+. No hard runtime dependencies.
 
 > **This file is development documentation** — layout, testing, CI, release.
 > It is deliberately **not shipped** in the wheel. The library-usage reference
@@ -71,7 +72,7 @@ src/netimps/
 ├── _multicast.py # private: group membership and socket setup
 ├── _ifaddrs.py   # private: ctypes getifaddrs/GetAdaptersAddresses bindings
 ├── _sockets.py   # private: source IP, free port, tcp/wait, route, hops, MTU
-├── _dns.py       # private: resolve() over dnspython
+├── _dns.py       # private: resolve() chaining dnspython/system/nslookup backends
 ├── _ping.py      # private: ping() over the platform binary
 └── py.typed      # PEP 561 marker — the package ships inline type hints
 ```

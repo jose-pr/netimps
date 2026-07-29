@@ -2,8 +2,10 @@
 
 A thin, typed convenience layer over the standard library's :mod:`ipaddress`
 plus a handful of host helpers (DNS lookup, ping, interface discovery). One
-flat import surface; the only runtime dependency is ``dnspython``, used solely
-inside :func:`resolve`.
+flat import surface; no hard runtime dependencies. :func:`resolve` chains
+``dnspython``/OS-resolver/``nslookup`` backends, using whichever is available
+-- ``dnspython`` (install with the ``dns`` extra) is optional but gives the
+fullest one.
 
 ::
 
@@ -119,6 +121,9 @@ __all__ = [
     "get_default_scheme",
     "register_port",
     "resolve",
+    "resolve_dnspython",
+    "resolve_system",
+    "resolve_nslookup",
     "ping",
     "PingResult",
     "Interface",
@@ -405,7 +410,12 @@ from ._scheme import (  # noqa: E402
     register_port,
 )
 from ._ifaddrs import Interface, get_interfaces, iter_addresses  # noqa: E402
-from ._dns import resolve  # noqa: E402
+from ._dns import (  # noqa: E402
+    resolve,
+    resolve_dnspython,
+    resolve_system,
+    resolve_nslookup,
+)
 from ._ping import PingResult, ping  # noqa: E402
 from ._scan import PORT_RANGES, scan_hosts, scan_ports  # noqa: E402
 from ._multicast import (  # noqa: E402
