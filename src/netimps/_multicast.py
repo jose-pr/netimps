@@ -27,12 +27,13 @@ import socket as _socket
 import struct as _struct
 from typing import List, Optional, Union
 
-from ._iface_spec import interface_address as _interface_address
+from ._iface_spec import InterfaceSpec, interface_address as _interface_address
+from ._ip import AddressLike
 
 __all__ = ["multicast_socket", "join_group", "leave_group", "is_multicast"]
 
 
-def is_multicast(address) -> bool:
+def is_multicast(address: "AddressLike") -> bool:
     """True if ``address`` is a multicast group (``224.0.0.0/4`` or ``ff00::/8``).
 
     ::
@@ -64,7 +65,9 @@ def _membership_request(group: str, interface_address: "Optional[str]", ipv6: bo
     return _struct.pack("4s4s", _socket.inet_aton(group), _socket.inet_aton(local))
 
 
-def join_group(sock, group: str, interface=None) -> None:
+def join_group(
+    sock: "_socket.socket", group: str, interface: "InterfaceSpec" = None
+) -> None:
     """Join ``group`` on ``sock``, optionally via a specific ``interface``.
 
     ``interface`` accepts an :class:`Interface`, a MAC, an adapter name or a
@@ -89,7 +92,9 @@ def join_group(sock, group: str, interface=None) -> None:
         sock.setsockopt(_socket.IPPROTO_IP, _socket.IP_ADD_MEMBERSHIP, request)
 
 
-def leave_group(sock, group: str, interface=None) -> None:
+def leave_group(
+    sock: "_socket.socket", group: str, interface: "InterfaceSpec" = None
+) -> None:
     """Leave ``group`` on ``sock``. The inverse of :func:`join_group`.
 
     Closing the socket drops membership too, so this is only needed to leave a
@@ -112,7 +117,7 @@ def leave_group(sock, group: str, interface=None) -> None:
 def multicast_socket(
     group: "Union[str, List[str], None]" = None,
     port: int = 0,
-    interface=None,
+    interface: "InterfaceSpec" = None,
     ttl: int = 1,
     loop: bool = True,
     bind: bool = True,

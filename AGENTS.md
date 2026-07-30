@@ -62,19 +62,22 @@ Requires Python 3.9+. No hard runtime dependencies.
 
 ```
 src/netimps/
-├── __init__.py   # the public surface: generic parse/try_parse/is_valid
-├── _ip.py        # private: IP type aliases, builder tables, IP helpers
-├── _mac.py       # private: MACAddress value type
-├── _scheme.py    # private: scheme <-> port registry
-├── cli.py        # public: duho-backed CLI (needs the `cli` extra)
-├── __main__.py   # `python -m netimps`
-├── _scan.py      # private: concurrent port/host scanning
-├── _multicast.py # private: group membership and socket setup
-├── _ifaddrs.py   # private: ctypes getifaddrs/GetAdaptersAddresses bindings
-├── _sockets.py   # private: source IP, free port, tcp/wait, route, hops, MTU
-├── _dns.py       # private: resolve() chaining dnspython/system/nslookup backends
-├── _ping.py      # private: ping() over the platform binary
-└── py.typed      # PEP 561 marker — the package ships inline type hints
+├── __init__.py    # the public surface: generic parse/try_parse/is_valid
+├── _ip.py         # private: IP type aliases, builder tables, IP helpers
+├── _mac.py        # private: MACAddress value type
+├── _scheme.py     # private: scheme <-> port registry
+├── cli.py         # public: duho-backed CLI (needs the `cli` extra)
+├── __main__.py    # `python -m netimps`
+├── _scan.py       # private: concurrent port/host scanning
+├── _multicast.py  # private: group membership and socket setup
+├── _ifaddrs.py    # private: ctypes getifaddrs/GetAdaptersAddresses bindings
+├── _sockets.py    # private: source IP, free port, tcp/wait, route, hops, MTU
+├── _dns.py        # private: resolve() chaining dnspython/system/nslookup backends
+├── _ping.py       # private: ping() over the platform binary
+├── _retry.py      # private: bounded retry with exponential backoff
+├── _udp.py        # private: UDP receive with arrival interface (IP_PKTINFO)
+├── _iface_spec.py # private: shared InterfaceSpec coercion (MAC/name/Interface -> address)
+└── py.typed       # PEP 561 marker — the package ships inline type hints
 ```
 
 **The import surface is still flat** — everything is re-exported from
@@ -96,6 +99,7 @@ map:
 | --- | --- |
 | `IPAddress`, `IPInterface`, `IPNetwork` | v4/v6 **union aliases** for annotations |
 | `IPAddressLike`, `IPInterfaceLike`, `IPNetworkLike`, `MACLike` | accepted-input unions |
+| `AddressLike` | accepted-input union for a single destination (hostname, address, or interface object) |
 | `IPv4Address`, `IPv4Interface`, `IPv4Network`, `IPv6Address`, `IPv6Interface`, `IPv6Network` | stdlib concrete-type re-exports |
 | `parse`, `try_parse`, `is_valid` | build a type from a value (raising / `None` / `bool`) |
 | `MACAddress` | parse / classify / render MAC addresses |
@@ -104,7 +108,7 @@ map:
 | `collapse`, `subtract` | CIDR set maths |
 | `normalize_host` | `host:port` splitting, IPv6-aware |
 | `get_default_port`, `get_default_scheme`, `register_port` | scheme ↔ port registry |
-| `resolve` | DNS lookup → native records (`[]` on failure) |
+| `resolve`, `resolve_dnspython`, `resolve_system`, `resolve_nslookup` | DNS lookup → native records (`[]` on failure); `resolve` chains the three backends, each independently callable |
 | `ping`, `PingResult` | reachability with RTT and TTL |
 | `bind`, `bind_error_hint`, `interface_for`, `interfaces_for`, `is_local_address` | socket creation and local membership |
 | `get_source_ip`, `get_free_port`, `tcp_check`, `wait_for_port` | socket helpers |

@@ -46,8 +46,9 @@ nothing to compile and no wheel to miss for your platform.
 - **Multicast** — `multicast_socket` handling the join dance whose failure
   modes are otherwise silent.
 - **DNS and ping** — `resolve()` chaining `dnspython`/OS resolver/`nslookup`
-  backends and returning native types; `ping()` returning round-trip time and
-  TTL, not just a boolean.
+  backends and returning native types, accepting an IP/interface object
+  directly and auto-selecting a reverse lookup for an address query; `ping()`
+  returning round-trip time and TTL, not just a boolean.
 
 ## Installation
 
@@ -66,6 +67,7 @@ library never requires either.
 netimps interfaces                       # names, MACs, MTU, addresses
 netimps ping 8.8.8.8 -m tcp -p 443       # icmp | tcp | udp
 netimps resolve example.com aaaa
+netimps resolve 8.8.8.8                  # no rdtype -> auto ptr -> dns.google
 netimps check example.com https          # port number or scheme name
 netimps mtu 8.8.8.8                      # measured, not guessed
 netimps scan 192.0.2.0/29 -p common
@@ -153,6 +155,7 @@ netimps.retry(lambda: netimps.tcp_check("example.com", 443), attempts=3)
 | --- | --- |
 | `IPAddress`, `IPInterface`, `IPNetwork` | v4/v6 **union aliases** for annotations |
 | `IPAddressLike`, `IPInterfaceLike`, `IPNetworkLike`, `MACLike` | accepted-input unions |
+| `AddressLike` | accepted-input union for a single destination (hostname, address, or `IPv4Interface`/`IPv6Interface` — its `.ip` is used) |
 | `IPv4Address`, `IPv4Interface`, ... | stdlib concrete-type re-exports |
 | `parse`, `try_parse`, `is_valid` | build a type from a value (raising / `None` / `bool`) |
 | `MACAddress` | parse / classify / render MAC addresses |

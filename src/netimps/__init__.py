@@ -74,6 +74,7 @@ from ._ip import (
     _BUILDERS,
     _BUILDER_DEFAULTS,
     _CONCRETE,
+    AddressLike,
     IPAddress,
     IPAddressLike,
     IPInterface,
@@ -102,6 +103,7 @@ __all__ = [
     "IPAddressLike",
     "IPInterfaceLike",
     "IPNetworkLike",
+    "AddressLike",
     "MACLike",
     # Parsing.
     "parse",

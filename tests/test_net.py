@@ -10,6 +10,7 @@ from netimps import _dns, _ip, _ping
 from netimps import ping, resolve
 from netimps import resolve_dnspython, resolve_nslookup, resolve_system
 from netimps import IPv4Address, IPv6Address
+from netimps import IPv4Interface, IPv6Interface, IPv4Network, IPv6Network
 
 # --------------------------------------------------------------------------- #
 # resolve                                                                     #
@@ -86,6 +87,12 @@ class _FakeResolver:
         if type(self).error is not None:
             raise type(self).error
         return _FakeAnswer(type(self).result)
+
+    def resolve_address(self, ipaddr, tcp=False, search=None):
+        # Real dnspython builds the reverse (in-addr.arpa/ip6.arpa) name from
+        # ipaddr itself and dispatches to resolve(rdtype="ptr") -- the fake
+        # just records that it was called this way, with the raw address.
+        return self.resolve(ipaddr, "ptr", tcp=tcp, search=search)
 
 
 @pytest.fixture
@@ -763,6 +770,80 @@ def test_resolve_raises_when_no_backend_can_serve_request(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
+# resolve -- rdtype=None auto-selects a/ptr                                   #
+# --------------------------------------------------------------------------- #
+
+
+def test_resolve_auto_rdtype_hostname_is_a(fake_dns):
+    fake_dns.result = ["1.2.3.4"]
+    resolve("example.com")
+    assert fake_dns.last["rtype"] == "a"
+
+
+def test_resolve_auto_rdtype_address_is_ptr(fake_dns):
+    fake_dns.result = ["dns.google."]
+    result = resolve("8.8.8.8")
+    assert fake_dns.last["rtype"] == "ptr"
+    assert fake_dns.last["query"] == "8.8.8.8"
+    assert result == ["dns.google"]
+
+
+def test_resolve_auto_rdtype_ipv6_address_is_ptr(fake_dns):
+    fake_dns.result = ["example.com."]
+    resolve("2001:db8::1")
+    assert fake_dns.last["rtype"] == "ptr"
+
+
+def test_resolve_explicit_rdtype_a_on_address_is_not_overridden(fake_dns):
+    """An explicit rdtype="a" on a literal address is still attempted literally."""
+    fake_dns.result = []
+    resolve("8.8.8.8", "a")
+    assert fake_dns.last["rtype"] == "a"
+
+
+def test_resolve_dnspython_auto_rdtype_matches_resolve(fake_dns):
+    fake_dns.result = ["dns.google."]
+    assert resolve_dnspython("8.8.8.8") == ["dns.google"]
+    assert fake_dns.last["rtype"] == "ptr"
+
+
+def test_resolve_accepts_address_object_as_query(fake_dns):
+    fake_dns.result = ["dns.google."]
+    resolve(IPv4Address("8.8.8.8"))
+    assert fake_dns.last["query"] == "8.8.8.8"
+    assert fake_dns.last["rtype"] == "ptr"
+
+
+def test_resolve_accepts_interface_object_as_query(fake_dns):
+    """The .ip is queried, not the interface stringified with its /prefix."""
+    fake_dns.result = ["dns.google."]
+    resolve(IPv4Interface("8.8.8.8/32"))
+    assert fake_dns.last["query"] == "8.8.8.8"
+    assert fake_dns.last["rtype"] == "ptr"
+
+
+def test_resolve_system_auto_rdtype_ptr(monkeypatch):
+    def fake_gethostbyaddr(query):
+        return ("dns.google", [], ["8.8.8.8"])
+
+    monkeypatch.setattr(_dns._socket, "gethostbyaddr", fake_gethostbyaddr)
+    assert resolve_system("8.8.8.8") == ["dns.google"]
+
+
+def test_resolve_system_ptr_no_data_is_empty(monkeypatch):
+    def fake_gethostbyaddr(query):
+        raise _dns._socket.herror("unknown host")
+
+    monkeypatch.setattr(_dns._socket, "gethostbyaddr", fake_gethostbyaddr)
+    assert resolve_system("203.0.113.1", "ptr") == []
+
+
+def test_resolve_nslookup_auto_rdtype_ptr(monkeypatch):
+    monkeypatch.setattr(_dns, "_run", _fake_run(stdout=_NSLOOKUP_PTR))
+    assert resolve_nslookup("8.8.8.8") == ["dns.google"]
+
+
+# --------------------------------------------------------------------------- #
 # ping                                                                         #
 # --------------------------------------------------------------------------- #
 
@@ -772,6 +853,62 @@ def test_ping_empty_hostname_is_false():
 
 
 _REPLY = b"Reply from 127.0.0.1: bytes=32 time=1ms TTL=128\n"
+
+
+def test_ping_accepts_interface_object(monkeypatch):
+    """An IPv4Interface's .ip is pinged -- not the address stringified with /prefix."""
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout=_REPLY)
+
+    monkeypatch.setattr(netimps._ping, "_run", fake_run)
+    result = ping(IPv4Interface("127.0.0.1/8"))
+    assert bool(result) is True
+    assert "127.0.0.1" in calls[0]
+    assert "127.0.0.1/8" not in calls[0]
+
+
+def test_ping_accepts_address_object(monkeypatch):
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout=_REPLY)
+
+    monkeypatch.setattr(netimps._ping, "_run", fake_run)
+    assert bool(ping(IPv4Address("127.0.0.1"))) is True
+    assert "127.0.0.1" in calls[0]
+
+
+def test_ping_rejects_network():
+    with pytest.raises(TypeError, match="not a network"):
+        ping(IPv4Network("10.0.0.0/24"))
+    with pytest.raises(TypeError, match="not a network"):
+        ping(IPv6Network("2001:db8::/64"))
+
+
+def test_ping_accepts_ipv6_interface_object(monkeypatch):
+    calls = []
+    ipv6_reply = b"Reply from ::1: bytes=32 time=1ms TTL=128\n"
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout=ipv6_reply)
+
+    monkeypatch.setattr(netimps._ping, "_run", fake_run)
+    assert bool(ping(IPv6Interface("::1/128"))) is True
+    assert "::1" in calls[0]
+    assert "::1/128" not in calls[0]
+
+
+def test_ping_unusable_src_is_falsy_not_a_crash(monkeypatch):
+    """A src with no usable address must yield a falsy result, not NameError."""
+    monkeypatch.setattr(netimps._ping, "_interface_address", lambda *a, **k: None)
+    result = ping("8.8.8.8", src="nonexistent-adapter")
+    assert bool(result) is False
+    assert result.host == "8.8.8.8"
 
 
 def test_ping_success(monkeypatch):

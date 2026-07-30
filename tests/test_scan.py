@@ -8,7 +8,7 @@ import socket
 import pytest
 
 import netimps
-from netimps import PORT_RANGES, is_multicast, scan_hosts, scan_ports
+from netimps import PORT_RANGES, IPv4Interface, is_multicast, scan_hosts, scan_ports
 
 
 @pytest.fixture
@@ -31,6 +31,11 @@ def test_scan_ports_finds_a_listener(listener):
     result = scan_ports("127.0.0.1", [listener, closed], timeout=1.0)
     assert listener in result
     assert closed not in result
+
+
+def test_scan_ports_accepts_interface_object(listener):
+    result = scan_ports(IPv4Interface("127.0.0.1/8"), [listener], timeout=1.0)
+    assert listener in result
 
 
 def test_scan_ports_returns_sorted(listener):

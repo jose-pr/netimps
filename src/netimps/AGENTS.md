@@ -24,13 +24,21 @@ The package is consistent about what the first argument means:
 
 | Name | Meaning | Examples |
 | --- | --- | --- |
-| `dst` | where traffic is **sent** | `ping`, `tcp_check`, `wait_for_port`, `get_route`, `hop_count`, `discover_mtu` |
+| `dst` | where traffic is **sent** | `ping`, `tcp_check`, `wait_for_port`, `get_route`, `hop_count`, `discover_mtu`, `get_tcp_mss`, `get_pmtu`, `scan_ports(host)` |
 | `src` | where traffic is **sent from** | `ping(src=)`, `get_free_port(src=)`, `discover_mtu(src=)` |
 | `host` / `network` | the thing being **examined** | `scan_ports(host)`, `scan_hosts(network)` |
 | `address` / `ip` | an address being **classified** (no DNS) | `get_ip`, `interface_for`, `interfaces_for`, `is_local_address`, `is_multicast`, `is_link_scoped` |
 
 `dst`/`src` are abbreviated symmetrically, matching packet-header convention.
 A `dst` accepts a hostname; an `address` does not.
+
+**Every `dst`-typed parameter accepts `AddressLike`** — a hostname string, an
+address string, an existing `IPv4Address`/`IPv6Address`, or an
+`IPv4Interface`/`IPv6Interface` (its `.ip` is used, dropping the `/prefix`,
+which every consumer of a destination -- a subprocess argument, a socket
+call, a DNS query -- would otherwise read as garbage). A network
+(`IPv4Network`/`IPv6Network`) raises `TypeError`, since it has no single
+address to send to. `get_ip` and `resolve`'s `query` accept the same forms.
 
 ## Types vs parsing — read this first
 
@@ -57,6 +65,7 @@ The union aliases are **not callable** — `IPAddress("10.0.0.5")` is a
 | `IPAddressLike` | anything accepted *as input* for an address |
 | `IPInterfaceLike` | anything accepted *as input* for an address + prefix |
 | `IPNetworkLike` | anything accepted *as input* for a network |
+| `AddressLike` | `str \| IPv4Address \| IPv6Address \| IPv4Interface \| IPv6Interface` -- any `dst`-typed parameter |
 | `MACLike` | `str \| int \| bytes \| MACAddress` |
 
 Plus the stdlib concretes re-exported so callers need not import `ipaddress`:
@@ -212,7 +221,22 @@ failure** (NXDOMAIN, NODATA, timeout) — never `None` — with **native
 types**: `A`/`AAAA` records are `ipaddress` objects, everything else is
 `str` (trailing root dot stripped, TXT strings unquoted).
 
-**`resolve(query, rdtype="a", ns=None, timeout=5.0, port=53, tcp=False, search=True, backends=None)`**
+**`resolve(query, rdtype=None, ns=None, timeout=5.0, port=53, tcp=False, search=True, backends=None)`**
+
+`query` accepts `AddressLike` (a hostname string, an address string, an
+`IPv4Address`/`IPv6Address`, or an `IPv4Interface`/`IPv6Interface` -- its
+`.ip` is used), not just a plain string.
+
+`rdtype=None` (default) **auto-selects**: `"ptr"` when `query` is an address
+literal (an `"a"`/`"aaaa"` lookup *of* an address makes no sense), `"a"`
+otherwise -- the same default as before this was configurable::
+
+    resolve("example.com")   # rdtype auto -> "a"  -> ['93.184.216.34']
+    resolve("8.8.8.8")       # rdtype auto -> "ptr" -> ['dns.google']
+
+Pass an explicit `rdtype` to opt out -- `rdtype="a"` on an address still
+attempts a literal (and empty) A lookup rather than being silently
+overridden.
 
 Tries each backend in `backends` (default `["dnspython", "system",
 "nslookup"]`) until one gives a **definitive** answer — records, or a real
@@ -224,16 +248,21 @@ the last such error is raised. `backends` also accepts a single name as a
 plain string (`backends="system"`), or a custom order/subset
 (`backends=["nslookup", "dnspython"]`).
 
-- **`system`** is skipped automatically for a non-address `rdtype` or an
-  explicit `ns=`/`port=` — it has no per-call nameserver override, so running
-  it anyway would silently ignore the caller's choice.
+- **`system`** is skipped automatically for a `rdtype` outside
+  `"a"`/`"aaaa"`/`"ptr"`, or an explicit `ns=`/`port=` — it has no per-call
+  nameserver override, so running it anyway would silently ignore the
+  caller's choice.
 - A malformed query or unknown record type raises `ValueError` immediately,
   without trying every backend — that's a caller bug, not a resolution
   outcome.
 
-**`resolve_dnspython(query, rdtype="a", ns=None, timeout=5.0, port=53, tcp=False, search=True)`**
+**`resolve_dnspython(query, rdtype=None, ns=None, timeout=5.0, port=53, tcp=False, search=True)`**
 
-The original backend: `dnspython`, structured records, every `rdtype`.
+The original backend: `dnspython`, structured records, every `rdtype`. Same
+`AddressLike` `query` and auto-`rdtype` behavior as `resolve()`. A `"ptr"`
+lookup (explicit or auto-selected) uses dnspython's `resolve_address()`,
+which builds the reverse (`in-addr.arpa`/`ip6.arpa`) name from the literal
+address itself -- the caller never constructs that name by hand.
 
 - **`ns=None` (default) uses the system resolver configuration** —
   `/etc/resolv.conf` on POSIX, the registry on Windows. Pass `ns=` (a string
@@ -249,25 +278,30 @@ The original backend: `dnspython`, structured records, every `rdtype`.
   already-qualified (trailing-dot) `query`.
 - `timeout` bounds the **whole resolution including retries**, so a list of
   dead nameservers cannot run past it.
-- Requires `dnspython` — the package's only runtime dependency. Raises
-  `ResolutionError` (not `ValueError`) if it isn't installed, so `resolve()`'s
-  chain falls through to the next backend instead of erroring outright.
+- `dnspython` is an **optional** dependency (`pip install netimps[dns]`).
+  Raises `ResolutionError` (not `ValueError`) if it isn't installed, so
+  `resolve()`'s chain falls through to the next backend instead of erroring
+  outright.
 
-**`resolve_system(query, rdtype="a", timeout=5.0, search=True)`**
+**`resolve_system(query, rdtype=None, timeout=5.0, search=True)`**
 
-The OS resolver, via `socket.getaddrinfo()` — **hosts file, NSS
-(`nsswitch.conf`) and DNS, in the order the OS applies them**, including any
-OS-level resolver cache. This is what `resolve_dnspython` cannot see (its own
-DNS query bypasses all of that).
+The OS resolver, via `socket.getaddrinfo()`/`socket.gethostbyaddr()` — **hosts
+file, NSS (`nsswitch.conf`) and DNS, in the order the OS applies them**,
+including any OS-level resolver cache. This is what `resolve_dnspython`
+cannot see (its own DNS query bypasses all of that). Same `AddressLike`
+`query` and auto-`rdtype` behavior as `resolve()`.
 
-- **Address records only**: `rdtype` must be `"a"` or `"aaaa"`; anything else
-  raises `ResolutionError` immediately, no query attempted.
-- **No `ns=` override** — `getaddrinfo` always asks whatever resolver the OS
-  is configured with; there's no per-call nameserver parameter at that layer
-  (not even via `ctypes` — reaching a specific nameserver without shelling
-  out means speaking DNS wire protocol yourself, which is what `dnspython`
-  already does).
-- **`search`**: `getaddrinfo` itself takes no search-list parameter either, so
+- **Address and reverse records only**: `rdtype` must be `"a"`, `"aaaa"` or
+  `"ptr"`; anything else raises `ResolutionError` immediately, no query
+  attempted. `"ptr"` goes through `gethostbyaddr()` rather than
+  `getaddrinfo()` and returns `[hostname]`.
+- **No `ns=` override** — the OS resolver functions always ask whatever
+  nameserver the OS is configured with; there's no per-call parameter at that
+  layer (not even via `ctypes` — reaching a specific nameserver without
+  shelling out means speaking DNS wire protocol yourself, which is what
+  `dnspython` already does).
+- **`search`** (ignored for `"ptr"`, which has no suffix to expand):
+  `getaddrinfo` itself takes no search-list parameter either, so
   `search=True` (default) just leaves `query` as given and the OS resolver's
   own configured search list (glibc `ndots`/`search`, Windows per-adapter DNS
   suffix) applies as it normally would. `search=False` appends a trailing
@@ -276,11 +310,11 @@ DNS query bypasses all of that).
   qualified with each, in order, one `getaddrinfo` call per candidate,
   independent of (and untouched by) the OS's own search list.
 
-**`resolve_nslookup(query, rdtype="a", ns=None, timeout=5.0, search=True)`**
+**`resolve_nslookup(query, rdtype=None, ns=None, timeout=5.0, search=True)`**
 
 Shells out to the `nslookup` binary — a fallback for when neither Python-level
 path is usable. Address records only: `rdtype` must be `"a"`, `"aaaa"` or
-`"ptr"`.
+`"ptr"`. Same `AddressLike` `query` and auto-`rdtype` behavior as `resolve()`.
 
 - Parses **both BIND-style** (`Address: 1.2.3.4`, one line per address) **and
   Windows-style** (`Addresses:` with continuation lines, and NODATA as a bare
@@ -288,12 +322,13 @@ path is usable. Address records only: `rdtype` must be `"a"`, `"aaaa"` or
   its NXDOMAIN message on **stderr**, not stdout — both streams are checked.
 - `ns=` is passed as `nslookup`'s trailing `server` argument (a single
   nameserver, not a list).
-- **`search`** has the same three-way contract as the other backends, but
-  `nslookup` has no built-in search-list handling — this issues one
-  `nslookup` call per candidate name, in order, stopping at the first with
-  actual records. `search=True` (default) draws the candidate list from the
-  system resolver's search config (reusing `dnspython`'s `resolv.conf`/
-  registry parsing if it's installed; `[]` — literal name only — if not).
+- **`search`** has the same three-way contract as the other backends
+  (ignored for `"ptr"`), but `nslookup` has no built-in search-list
+  handling — this issues one `nslookup` call per candidate name, in order,
+  stopping at the first with actual records. `search=True` (default) draws
+  the candidate list from the system resolver's search config (reusing
+  `dnspython`'s `resolv.conf`/registry parsing if it's installed; `[]` —
+  literal name only — if not).
 - Raises `ResolutionError` (not `ValueError`) for a missing binary, a
   timeout, or an unparseable output shape — a genuine "no such name" is
   still `[]`.
@@ -308,6 +343,7 @@ path is usable. Address records only: `rdtype` must be `"a"`, `"aaaa"` or
 
 | Argument | Notes |
 | --- | --- |
+| `dst` | `AddressLike` (hostname, address string, address object, or `IPv4Interface`/`IPv6Interface` -- its `.ip` is pinged). `ping(get_interfaces()[0].ipv4[0])` works directly. |
 | `src` | `Interface`, address, **MAC**, adapter name or string. A MAC is resolved to the adapter holding it. |
 | `size` | ICMP payload bytes. The wire packet is **28 bytes larger** (20 IP + 8 ICMP). |
 | `ttl` | initial hop limit — `-i` on Windows, `-t` on POSIX (the letters are **swapped**). |
@@ -363,9 +399,11 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
   or reachable alone do not count. Malformed input raises like `parse`;
   loopback answers before interface discovery.
 - **`get_source_ip(dst="8.8.8.8", port=80)`** — which local address the kernel
-  would use to reach `dst`. **Sends no packets.** The answer depends on
-  `dst`: with a VPN up, a public probe returns the tunnel address and a LAN
-  probe the physical one. Correct where hostname resolution picks a VM adapter.
+  would use to reach `dst`. `dst` accepts `AddressLike` (an address object or
+  `IPv4Interface`/`IPv6Interface`, not just a string). **Sends no packets.**
+  The answer depends on `dst`: with a VPN up, a public probe returns the
+  tunnel address and a LAN probe the physical one. Correct where hostname
+  resolution picks a VM adapter.
 - **`get_free_port(src="127.0.0.1", family=AF_INET) -> int`** — bind port 0 and
   read it back. **Inherently racy** — the port frees the instant it returns; if
   you can, bind port 0 in the server itself instead. `SO_REUSEADDR` is
@@ -473,7 +511,9 @@ network a request came from.
 
 `recv(bufsize, resolve_interface=True) -> Datagram`, with `.data`, `.sender`,
 `.local_address`, `.interface_index` and `.interface`.
-`send(data, address, port, source=None)` pins the outgoing interface.
+`send(data, address, port, src=None)` pins the outgoing interface. `address`
+accepts `AddressLike`; `src` the usual loose interface spec (`Interface`,
+MAC, adapter name or address).
 
 - **Degrades rather than failing.** `recvmsg` does not exist on Windows and
   `IP_PKTINFO` is not universal; there the interface fields are simply empty.
@@ -526,6 +566,7 @@ dependency on the CLI half.
 netimps interfaces                       # names, MACs, MTU, addresses
 netimps ping 8.8.8.8 -m tcp -p 443       # icmp | tcp | udp
 netimps resolve example.com aaaa
+netimps resolve 8.8.8.8                  # no rdtype -> auto ptr -> dns.google
 netimps check example.com https          # port or scheme name
 netimps route 8.8.8.8 --hops
 netimps mtu 8.8.8.8 -m udp -p 9999

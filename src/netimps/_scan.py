@@ -18,9 +18,15 @@ Use it on hosts you are responsible for.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor as _ThreadPool
-from typing import List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
+
+from ._ip import AddressLike, IPAddress, IPNetworkLike
 
 __all__ = ["scan_ports", "scan_hosts", "PORT_RANGES"]
+
+#: A :data:`PORT_RANGES` name, a scheme name (:func:`get_default_port`), a
+#: port number, a numeric string, or any iterable mixing those.
+PortsLike = Union[str, int, Iterable[Union[str, int]]]
 
 #: Handy port sets for the common cases, so callers need not spell them out.
 PORT_RANGES = {
@@ -128,8 +134,8 @@ def _port_number(value, get_default_port) -> "Optional[int]":
 
 
 def scan_ports(
-    host: str,
-    ports="common",
+    host: "AddressLike",
+    ports: "PortsLike" = "common",
     timeout: float = 1.0,
     workers: int = _DEFAULT_WORKERS,
 ) -> "List[int]":
@@ -143,6 +149,9 @@ def scan_ports(
         scan_ports("10.0.0.5", [22, 80, 443])
         scan_ports("10.0.0.5", "https")              # scheme name -> 443
         scan_ports("10.0.0.5", ["ssh", "https"])     # -> 22, 443
+
+    ``host`` also accepts an address object or an :class:`IPv4Interface`/
+    :class:`IPv6Interface` (its ``.ip`` is used), same as :func:`tcp_check`.
 
     :param ports: a :data:`PORT_RANGES` name (``"common"``, ``"well-known"``,
         ``"all"``), a scheme name resolved via :func:`get_default_port`, a port
@@ -173,12 +182,12 @@ def scan_ports(
 
 
 def scan_hosts(
-    network,
-    port: "Optional[int]" = None,
-    ports=None,
+    network: "IPNetworkLike",
+    port: "Optional[Union[int, str]]" = None,
+    ports: "Optional[PortsLike]" = None,
     timeout: float = 1.0,
     workers: int = _DEFAULT_WORKERS,
-) -> "List[Tuple[object, List[int]]]":
+) -> "List[Tuple[IPAddress, List[int]]]":
     """Find responsive hosts on ``network``, with the ports each answers on.
 
     ::
@@ -232,7 +241,7 @@ def scan_hosts(
     addresses = list(net.hosts()) or [net.network_address]
     work = [(address, probe) for address in addresses for probe in targets]
 
-    found = {}
+    found: "Dict[IPAddress, List[int]]" = {}
     with _ThreadPool(max_workers=min(workers, len(work))) as pool:
         results = pool.map(
             lambda item: (item[0], item[1], tcp_check(str(item[0]), item[1], timeout)),

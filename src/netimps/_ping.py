@@ -16,9 +16,10 @@ import socket as _socket
 import sys as _sys
 from subprocess import TimeoutExpired as _SubprocessTimeout
 from subprocess import run as _run
-from typing import Optional
+from typing import Optional, Tuple
 
-from ._iface_spec import interface_address as _interface_address
+from ._iface_spec import InterfaceSpec, interface_address as _interface_address
+from ._ip import AddressLike, IPAddress, _dst_argument
 
 __all__ = ["ping", "PingResult"]
 
@@ -44,7 +45,15 @@ class PingResult:
 
     __slots__ = ("ok", "host", "rtt_ms", "ttl", "src", "attempts")
 
-    def __init__(self, ok, host, rtt_ms=None, ttl=None, src=None, attempts=1):
+    def __init__(
+        self,
+        ok: bool,
+        host: "AddressLike",
+        rtt_ms: Optional[float] = None,
+        ttl: Optional[int] = None,
+        src: "Optional[IPAddress]" = None,
+        attempts: int = 1,
+    ) -> None:
         self.ok = ok
         self.host = host
         self.rtt_ms = rtt_ms
@@ -87,7 +96,9 @@ _PING_RTT = _re.compile(r"time[=<]\s*([0-9]+(?:\.[0-9]+)?)\s*ms", _re.IGNORECASE
 _PING_TTL = _re.compile(r"ttl[=\s]\s*([0-9]+)", _re.IGNORECASE)
 
 
-def _parse_ping_output(text: str, expect):
+def _parse_ping_output(
+    text: str, expect: "Optional[IPAddress]"
+) -> "Tuple[Optional[float], Optional[int], Optional[IPAddress]]":
     """Pull (rtt_ms, ttl, src) out of ping's stdout.
 
     Reads only numeric tokens that are stable across platforms and locales;
@@ -168,11 +179,11 @@ def _udp_ping(dst, port, timeout, size=0):
 
 
 def ping(
-    dst: str,
+    dst: "AddressLike",
     tries: int = 1,
     timeout: float = 1.0,
     ipv6: Optional[bool] = None,
-    src=None,
+    src: "InterfaceSpec" = None,
     size: Optional[int] = None,
     ttl: Optional[int] = None,
     dont_fragment: bool = False,
@@ -201,7 +212,14 @@ def ping(
         ping("10.0.0.1")                      # one attempt, 1s timeout
         ping("example.com", tries=3, timeout=2.5)
         ping("2001:db8::1", ipv6=True)        # force ping6 semantics
+        ping(get_interfaces()[0].ipv4[0])     # an IPv4Interface -- pings its .ip
+        ping(IPv4Address("10.0.0.1"))         # an address object directly
 
+    :param dst: hostname, address string, :class:`IPv4Address`/
+        :class:`IPv6Address`, or :class:`IPv4Interface`/:class:`IPv6Interface`
+        (its ``.ip`` is pinged, not the ``/prefix``). A network
+        (:class:`IPv4Network`/:class:`IPv6Network`) raises :class:`TypeError`
+        -- it has no single address to ping.
     :param tries: attempts before giving up. Values below 1 are treated as 1.
     :param timeout: seconds to wait per attempt. POSIX ``ping`` only accepts a
         whole number of seconds, so sub-second values are rounded **up** to 1 --
@@ -273,6 +291,7 @@ def ping(
     """
     if not dst:
         return PingResult(False, dst, attempts=0)
+    dst = _dst_argument(dst)
 
     from . import try_parse as _try_parse
 
@@ -316,7 +335,7 @@ def ping(
         resolved_source = _interface_address(src, want_ipv6=bool(ipv6), strict=False)
         if resolved_source is None:
             # An interface with no usable address cannot be a src.
-            return PingResult(False, hostname, attempts=0)
+            return PingResult(False, dst, attempts=0)
         # Windows spells it -S <addr>; POSIX uses -I <addr-or-ifname>.
         options.extend(["-S" if _os.name == "nt" else "-I", str(resolved_source)])
 
@@ -387,13 +406,13 @@ def ping(
             if not answered:
                 continue
 
-        rtt, reply_ttl, src = _parse_ping_output(text, expect_address)
+        rtt, reply_ttl, reply_src = _parse_ping_output(text, expect_address)
         return PingResult(
             True,
             dst,
             rtt_ms=rtt,
             ttl=reply_ttl,
-            src=src if src is not None else expect_address,
+            src=reply_src if reply_src is not None else expect_address,
             attempts=attempt,
         )
     return PingResult(False, dst, attempts=tries)

@@ -18,10 +18,25 @@ Re-exported from nothing -- this is used internally by ``_ping``,
 
 from __future__ import annotations
 
+from typing import Optional, Union
+
+from ._ifaddrs import Interface
+from ._ip import IPAddress
+from ._mac import MACAddress
+
 __all__ = ["interface_address"]
 
+#: The loose "which interface?" spec every ``src=``/``interface=`` parameter
+#: in the package accepts: an :class:`Interface`, a :class:`MACAddress` (or
+#: MAC string), an adapter name, an address, or ``None`` for "no preference".
+#: Kept private -- this documents an established, repeated parameter shape
+#: rather than something a caller constructs or imports directly.
+InterfaceSpec = Optional[Union[Interface, MACAddress, IPAddress, str]]
 
-def interface_address(interface, want_ipv6: bool = False, strict: bool = True):
+
+def interface_address(
+    interface: "InterfaceSpec", want_ipv6: bool = False, strict: bool = True
+) -> "Optional[IPAddress]":
     """Reduce an interface spec to a local address.
 
     Returns an ``IPv4Address``/``IPv6Address``, never a string -- every netimps

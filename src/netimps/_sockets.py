@@ -25,11 +25,18 @@ from subprocess import run as _subprocess_run
 import sys as _sys
 import time as _time
 
-from ._iface_spec import interface_address as _interface_address
+from ._iface_spec import InterfaceSpec, interface_address as _interface_address
 from ._ifaddrs import Interface
-from ._ip import IPAddress, IPAddressLike, IPInterface, IPNetwork
+from ._ip import (
+    AddressLike,
+    IPAddress,
+    IPAddressLike,
+    IPInterface,
+    IPNetwork,
+    _dst_argument,
+)
 from ._mac import MACAddress
-from typing import Any, Iterator, Optional, Tuple, Union
+from typing import Any, Iterable, Iterator, Optional, Tuple, Union
 
 _InterfaceQuery = Union[
     Interface,
@@ -74,8 +81,8 @@ def bind(
     reuse_address: bool = True,
     reuse_port: bool = False,
     broadcast: bool = False,
-    interface=None,
-    options=(),
+    interface: "InterfaceSpec" = None,
+    options: "Iterable[Tuple[int, int, Any]]" = (),
     listen: "Optional[int]" = None,
 ) -> "_socket.socket":
     """Create, configure and bind a socket in one call.
@@ -321,7 +328,9 @@ def _make_host_route(address: "IPAddress") -> "Optional[IPInterface]":
         return None
 
 
-def get_source_ip(dst: str = _DEFAULT_PROBE, port: int = 80) -> "Optional[Any]":
+def get_source_ip(
+    dst: "AddressLike" = _DEFAULT_PROBE, port: int = 80
+) -> "Optional[Any]":
     """Return the local address the kernel would use to reach ``dst``.
 
     Answers "which of my addresses is the *real* one for this destination?" --
@@ -344,6 +353,7 @@ def get_source_ip(dst: str = _DEFAULT_PROBE, port: int = 80) -> "Optional[Any]":
     """
     from . import parse
 
+    dst = _dst_argument(dst)
     try:
         family = _socket.AF_INET6 if ":" in dst else _socket.AF_INET
         sock = _socket.socket(family, _socket.SOCK_DGRAM)
@@ -387,7 +397,7 @@ def get_free_port(src: str = "127.0.0.1", family: int = _socket.AF_INET) -> int:
         sock.close()
 
 
-def tcp_check(dst: str, port: int, timeout: float = 3.0) -> bool:
+def tcp_check(dst: "AddressLike", port: int, timeout: float = 3.0) -> bool:
     """Return True if a TCP connection to ``dst``:``port`` is accepted.
 
     The honest reachability test, and what you almost always want instead of
@@ -397,9 +407,15 @@ def tcp_check(dst: str, port: int, timeout: float = 3.0) -> bool:
         tcp_check("example.com", 443)
         tcp_check("db.internal", 5432, timeout=1.0)
 
-    Never raises: refused, timed out, unresolvable and unreachable all yield
-    ``False``. Only TCP handshake completion is checked -- not that the service
-    behind the port is healthy.
+    ``dst`` also accepts an address object or an :class:`IPv4Interface`/
+    :class:`IPv6Interface` (its ``.ip`` is used).
+
+    Never raises for a reachability outcome: refused, timed out, unresolvable
+    and unreachable all yield ``False``. Only TCP handshake completion is
+    checked -- not that the service behind the port is healthy. A network
+    (:class:`IPv4Network`/:class:`IPv6Network`) passed as ``dst`` still raises
+    :class:`TypeError` -- that is a caller bug in the argument itself, not a
+    reachability result.
 
     .. note::
        **Not the same question as** ``ping(dst, method="tcp", port=...)``. This
@@ -409,6 +425,7 @@ def tcp_check(dst: str, port: int, timeout: float = 3.0) -> bool:
        ICMP echo. :func:`wait_for_port` and the scanners build on this one,
        because they care about the service.
     """
+    dst = _dst_argument(dst)
     try:
         sock = _socket.create_connection((dst, port), timeout=timeout)
     except (OSError, ValueError, OverflowError):
@@ -418,7 +435,7 @@ def tcp_check(dst: str, port: int, timeout: float = 3.0) -> bool:
 
 
 def wait_for_port(
-    dst: str,
+    dst: "AddressLike",
     port: int,
     timeout: float = 30.0,
     interval: float = 0.1,
@@ -431,6 +448,9 @@ def wait_for_port(
 
         if not wait_for_port("localhost", 5432, timeout=60):
             raise RuntimeError("database never started")
+
+    ``dst`` accepts the same forms as :func:`tcp_check` (address objects,
+    ``IPv4Interface``/``IPv6Interface``).
 
     :param interval: delay between attempts. Backs off up to 1s so a long wait
         does not spin.
@@ -472,7 +492,13 @@ class Route:
 
     __slots__ = ("dst", "src", "gateway", "interface_index")
 
-    def __init__(self, dst, src=None, gateway=None, interface_index=0):
+    def __init__(
+        self,
+        dst: "Union[str, IPAddress]",
+        src: "Optional[IPAddress]" = None,
+        gateway: "Optional[IPAddress]" = None,
+        interface_index: int = 0,
+    ) -> None:
         self.dst = dst
         self.src = src
         self.gateway = gateway
@@ -597,7 +623,7 @@ def _if_index(name: str) -> int:
         return 0
 
 
-def get_route(dst: str = _DEFAULT_PROBE) -> Route:
+def get_route(dst: "AddressLike" = _DEFAULT_PROBE) -> Route:
     """Return how traffic to ``dst`` leaves this host.
 
     Reports the src address and the **first hop** -- the gateway a packet is
@@ -610,17 +636,22 @@ def get_route(dst: str = _DEFAULT_PROBE) -> Route:
 
         get_route("127.0.0.1").on_link      # True -- no router involved
 
+    ``dst`` also accepts an address object or an :class:`IPv4Interface`/
+    :class:`IPv6Interface` (its ``.ip`` is used).
+
     First hop only, deliberately: it is available **unprivileged** on every
     supported platform, whereas the full path requires raw sockets. See
     :func:`hop_count` for distance, which does not.
 
-    Never raises: unknown pieces come back as ``None``/``0`` rather than an
-    error. The gateway is only resolvable on Windows and Linux; elsewhere it
-    stays ``None``, so use ``.gateway is None`` to mean "on-link" only when
-    ``.src`` is also set.
+    Never raises for an unknown route: unknown pieces come back as
+    ``None``/``0`` rather than an error. The gateway is only resolvable on
+    Windows and Linux; elsewhere it stays ``None``, so use
+    ``.gateway is None`` to mean "on-link" only when ``.src`` is also set. A
+    network passed as ``dst`` still raises :class:`TypeError`.
     """
     from . import parse, try_parse
 
+    dst = _dst_argument(dst)
     src = get_source_ip(dst)
     resolved = dst
     if try_parse(dst) is None:
@@ -722,7 +753,7 @@ def _hop_count_traceroute(
 
 
 def hop_count(
-    dst: str,
+    dst: "AddressLike",
     max_hops: int = 30,
     timeout: float = 1.0,
     allow_traceroute: bool = True,
@@ -733,6 +764,9 @@ def hop_count(
     technique ``traceroute`` uses::
 
         hop_count("8.8.8.8")     # 12
+
+    ``dst`` also accepts an address object or an :class:`IPv4Interface`/
+    :class:`IPv6Interface` (its ``.ip`` is used).
 
     Uses raw-socket probes when available (root/Administrator), and otherwise
     falls back to driving the system ``traceroute``/``tracert``, so this works
@@ -750,6 +784,7 @@ def hop_count(
     process, so ``None`` here means "no answer", never "unreachable". Treat it
     as unknown rather than as a negative result.
     """
+    dst = _dst_argument(dst)
     try:
         target = _socket.gethostbyname(dst)
     except OSError:
@@ -822,13 +857,16 @@ def hop_count(
         icmp.close()
 
 
-def get_pmtu(dst: str, port: int = 80) -> "Optional[int]":
+def get_pmtu(dst: "AddressLike", port: int = 80) -> "Optional[int]":
     """Return the path MTU the kernel has **already learned**, or ``None``.
 
     A lookup, not a measurement -- it reads ``IP_MTU`` on a connected socket
     and sends nothing::
 
         get_pmtu("example.com")      # 1420, or None if nothing is cached
+
+    ``dst`` also accepts an address object or an :class:`IPv4Interface`/
+    :class:`IPv6Interface` (its ``.ip`` is used).
 
     Instant and silent, but it answers a weaker question than
     :func:`discover_mtu`:
@@ -853,6 +891,7 @@ def get_pmtu(dst: str, port: int = 80) -> "Optional[int]":
     if ip_mtu is None:
         return None
 
+    dst = _dst_argument(dst)
     try:
         sock = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
     except OSError:
@@ -876,11 +915,11 @@ def get_pmtu(dst: str, port: int = 80) -> "Optional[int]":
 
 
 def discover_mtu(
-    dst: str,
+    dst: "AddressLike",
     low: int = 576,
     high: int = 9000,
     timeout: float = 1.0,
-    src=None,
+    src: "InterfaceSpec" = None,
     port: int = 80,
     probe: bool = True,
     method: str = "icmp",
@@ -942,6 +981,7 @@ def discover_mtu(
        is the useful case: the bottleneck is somewhere along the path, not on
        this host.
     """
+    dst = _dst_argument(dst)
     if not probe:
         # Explicitly asked for the kernel's cached answer only.
         return get_pmtu(dst, port)
@@ -1052,13 +1092,16 @@ def _discover_mtu_udp(dst, port, low, high, timeout):
     return low
 
 
-def get_tcp_mss(dst: str, port: int, timeout: float = 3.0) -> "Optional[int]":
+def get_tcp_mss(dst: "AddressLike", port: int, timeout: float = 3.0) -> "Optional[int]":
     """Return the TCP maximum segment size negotiated with ``dst``, or ``None``.
 
     The TCP counterpart to an MTU: the largest payload a single segment may
     carry, agreed during the handshake::
 
         get_tcp_mss("example.com", 443)     # 1460 on a 1500-MTU path
+
+    ``dst`` also accepts an address object or an :class:`IPv4Interface`/
+    :class:`IPv6Interface` (its ``.ip`` is used).
 
     This **opens a real connection** to read the value, then closes it.
 
@@ -1072,6 +1115,7 @@ def get_tcp_mss(dst: str, port: int, timeout: float = 3.0) -> "Optional[int]":
     middlebox further along will actually pass -- for that, measure with
     :func:`discover_mtu`.
     """
+    dst = _dst_argument(dst)
     option = getattr(_socket, "TCP_MAXSEG", None)
     if option is None:
         return None

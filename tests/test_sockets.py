@@ -11,6 +11,9 @@ import pytest
 
 import netimps
 from netimps import (
+    IPv4Address,
+    IPv4Interface,
+    IPv4Network,
     Route,
     get_free_port,
     get_route,
@@ -147,12 +150,46 @@ def test_wait_for_port_respects_deadline_with_slow_connects(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
+# AddressLike: dst accepts address objects and interfaces, rejects networks   #
+# --------------------------------------------------------------------------- #
+
+
+def test_tcp_check_accepts_interface_and_address_objects(listening_port):
+    assert tcp_check(IPv4Interface("127.0.0.1/8"), listening_port, timeout=2.0) is True
+    assert tcp_check(IPv4Address("127.0.0.1"), listening_port, timeout=2.0) is True
+
+
+def test_tcp_check_rejects_network():
+    """A caller bug in the argument itself still raises -- not a reachability result."""
+    with pytest.raises(TypeError, match="not a network"):
+        tcp_check(IPv4Network("127.0.0.0/8"), 80)
+
+
+def test_wait_for_port_accepts_interface_object(listening_port):
+    assert (
+        wait_for_port(IPv4Interface("127.0.0.1/8"), listening_port, timeout=5.0) is True
+    )
+
+
+def test_get_source_ip_accepts_interface_object():
+    source = get_source_ip(IPv4Interface("127.0.0.1/8"))
+    assert source is not None
+    assert source.is_loopback
+
+
+# --------------------------------------------------------------------------- #
 # get_route / Route                                                            #
 # --------------------------------------------------------------------------- #
 
 
 def test_route_to_loopback_is_on_link():
     route = get_route("127.0.0.1")
+    assert route.on_link
+    assert route.gateway is None
+
+
+def test_get_route_accepts_interface_object():
+    route = get_route(IPv4Interface("127.0.0.1/8"))
     assert route.on_link
     assert route.gateway is None
 
@@ -224,6 +261,28 @@ def test_hop_count_unresolvable_is_none(monkeypatch):
 
     monkeypatch.setattr(_sockets._socket, "gethostbyname", fail)
     assert netimps.hop_count("nope.invalid") is None
+
+
+def test_hop_count_accepts_interface_object(monkeypatch):
+    """The .ip must reach gethostbyname, not "127.0.0.1/8" as a whole string."""
+    seen = []
+
+    def fake_gethostbyname(name):
+        seen.append(name)
+        return name
+
+    def no_raw(family, kind, proto=0, *a, **k):
+        if kind == socket.SOCK_RAW:
+            raise PermissionError("not permitted")
+        return socket.socket(family, kind, proto)
+
+    monkeypatch.setattr(_sockets._socket, "gethostbyname", fake_gethostbyname)
+    monkeypatch.setattr(_sockets._socket, "socket", no_raw)
+    monkeypatch.setattr(
+        _sockets, "_hop_count_traceroute", lambda target, hops, timeout: 1
+    )
+    netimps.hop_count(IPv4Interface("127.0.0.1/8"), allow_traceroute=True)
+    assert seen == ["127.0.0.1"]
 
 
 def test_traceroute_parser_reads_hop_number(monkeypatch):
@@ -310,6 +369,12 @@ def test_get_pmtu_shape():
     assert result is None or (isinstance(result, int) and result > 0)
 
 
+def test_get_pmtu_accepts_interface_object():
+    """Must not raise -- IPv4Interface used to stringify with its /prefix intact."""
+    result = netimps.get_pmtu(IPv4Interface("127.0.0.1/8"))
+    assert result is None or (isinstance(result, int) and result > 0)
+
+
 def test_get_pmtu_sends_nothing(monkeypatch):
     """It is a lookup, not a measurement -- no packets leave."""
     calls = []
@@ -370,6 +435,20 @@ def test_discover_mtu_finds_the_boundary(monkeypatch):
     monkeypatch.setattr(netimps._sockets, "ping", _fake_ping(1500), raising=False)
     monkeypatch.setattr(netimps, "ping", _fake_ping(1500))
     assert netimps.discover_mtu("10.0.0.1") == 1500
+
+
+def test_discover_mtu_accepts_interface_object(monkeypatch):
+    """The .ip is what gets pinged -- not "10.0.0.1/24" as a whole string."""
+    seen = []
+
+    def fake_ping(dst, size=None, dont_fragment=False, timeout=None, src=None):
+        seen.append(dst)
+        return netimps.PingResult((size or 0) + 28 <= 1500, dst)
+
+    monkeypatch.setattr(netimps._sockets, "ping", fake_ping, raising=False)
+    monkeypatch.setattr(netimps, "ping", fake_ping)
+    assert netimps.discover_mtu(IPv4Interface("10.0.0.1/24")) == 1500
+    assert all(d == "10.0.0.1" for d in seen)
 
 
 @pytest.mark.parametrize("limit", [576, 1280, 1420, 1500, 9000])
@@ -474,6 +553,18 @@ def test_get_tcp_mss_unreachable_is_none():
     assert (
         netimps.get_tcp_mss("127.0.0.1", netimps.get_free_port(), timeout=1.0) is None
     )
+
+
+def test_get_tcp_mss_accepts_interface_object():
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    try:
+        port = server.getsockname()[1]
+        mss = netimps.get_tcp_mss(IPv4Interface("127.0.0.1/8"), port, timeout=2.0)
+        assert mss is None or (isinstance(mss, int) and mss > 0)
+    finally:
+        server.close()
 
 
 def test_ping_rejects_unknown_method():

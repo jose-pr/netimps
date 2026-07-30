@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`AddressLike`**, a new type alias (`str | IPv4Address | IPv6Address |
+  IPv4Interface | IPv6Interface`) accepted by every `dst`-typed parameter:
+  `ping`, `tcp_check`, `wait_for_port`, `get_route`, `hop_count`, `get_pmtu`,
+  `discover_mtu`, `get_tcp_mss`, `scan_ports(host)`, `get_ip`,
+  `UdpEndpoint.send`, and `resolve`'s (and its backends') `query`. An
+  `IPv4Interface`/`IPv6Interface` unwraps to its `.ip` -- previously passing
+  one stringified with its `/prefix` intact, which every consumer
+  (subprocess argument, socket call, DNS query) read as garbage. A network
+  (`IPv4Network`/`IPv6Network`) raises `TypeError`, since it has no single
+  address to use.
+- **`resolve()` (and all three backends) auto-select `rdtype`.** It now
+  defaults to `None`, which picks `"ptr"` when `query` is an address literal
+  and `"a"` otherwise -- `resolve("8.8.8.8")` now returns `['dns.google']`
+  instead of attempting a nonsensical A lookup on a literal address. Pass an
+  explicit `rdtype` to opt out. `resolve_system()` gains `"ptr"` support (via
+  `socket.gethostbyaddr()`) to make this work across every backend.
+
+### Fixed
+
+- **`ping(src=...)` crashed with `NameError` instead of returning a falsy
+  result** when `src` named an interface with no usable address (e.g. an
+  unknown adapter name, or a MAC not currently present) -- a leftover
+  reference to an undefined `hostname` variable instead of `dst`. Found via
+  a `mypy` pass while auditing type annotations; a regression test now
+  covers the path.
+
+### Changed
+
+- Public functions across the package now carry complete parameter and
+  return type annotations (previously missing on, among others, `collapse`,
+  `subtract`, `get_ip`, `PingResult`, `Route`, `scan_hosts`, `is_multicast`,
+  `join_group`/`leave_group`, `multicast_socket`, `UdpEndpoint`, and `bind`).
+  The recurring "loose interface spec" parameter (`ping(src=)`,
+  `bind(interface=)`, `discover_mtu(src=)`, `multicast_socket(interface=)`,
+  etc.) now shares one internal type alias instead of being unannotated at
+  each call site.
+
 ## [0.2.0] - 2026-07-29
 
 ### Added

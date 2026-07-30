@@ -26,6 +26,9 @@ import socket as _socket
 import struct as _struct
 from typing import Any, NamedTuple, Optional
 
+from ._iface_spec import InterfaceSpec
+from ._ip import AddressLike, _dst_argument
+
 __all__ = ["UdpEndpoint", "Datagram"]
 
 #: The option, where it exists. Probed rather than assumed.
@@ -80,7 +83,7 @@ class UdpEndpoint:
 
     __slots__ = ("socket", "supports_pktinfo", "_cmsg_size")
 
-    def __init__(self, sock, pktinfo: bool = True) -> None:
+    def __init__(self, sock: "_socket.socket", pktinfo: bool = True) -> None:
         self.socket = sock
         self.supports_pktinfo = False
         self._cmsg_size = 0
@@ -141,7 +144,13 @@ class UdpEndpoint:
             interface=interface,
         )
 
-    def send(self, data, address, port: int, src=None) -> int:
+    def send(
+        self,
+        data: bytes,
+        address: "AddressLike",
+        port: int,
+        src: "InterfaceSpec" = None,
+    ) -> int:
         """Send a datagram, optionally forcing the *src* interface.
 
         ``src`` accepts the usual union (an :class:`Interface`, a MAC, an
@@ -153,7 +162,7 @@ class UdpEndpoint:
         Falls back to plain ``sendto`` when unsupported, so the call works
         everywhere; the src is then whatever the kernel chooses.
         """
-        target = (str(address), int(port))
+        target = (_dst_argument(address), int(port))
 
         if src is None or not self.supports_pktinfo:
             return self.socket.sendto(data, target)

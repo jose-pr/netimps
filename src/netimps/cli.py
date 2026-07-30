@@ -207,8 +207,8 @@ class Resolve(_Base):
     "Name to look up"
     ("query",)
 
-    rdtype: str = "a"
-    "Record type (a, aaaa, mx, txt, ns, ...)"
+    rdtype: _ty.Optional[str] = None
+    "Record type (a, aaaa, mx, txt, ns, ptr, ...); auto-detects ptr for an address query"
     ("rdtype",)
 
     nameserver: _ty.Optional[str] = None

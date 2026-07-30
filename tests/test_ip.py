@@ -9,10 +9,15 @@ from netimps import (
     IPNetwork,
     IPv4Address,
     IPv4Interface,
+    IPv4Network,
+    IPv6Address,
+    IPv6Interface,
+    IPv6Network,
     MACAddress,
     parse,
     try_parse,
 )
+from netimps._ip import _dst_argument
 
 
 def test_ipaddress_forms():
@@ -407,3 +412,64 @@ def test_is_valid_distinguishes_none_result_from_rejection():
     # exists inside is_valid.
     assert netimps.try_parse("ok", returns_none_for_valid) is None
     assert netimps.try_parse("bad", returns_none_for_valid) is None
+
+
+# --------------------------------------------------------------------------- #
+# _dst_argument / AddressLike                                                #
+# --------------------------------------------------------------------------- #
+
+
+def test_dst_argument_passes_through_plain_string():
+    assert _dst_argument("example.com") == "example.com"
+    assert _dst_argument("10.0.0.5") == "10.0.0.5"
+
+
+def test_dst_argument_passes_through_address_objects():
+    assert _dst_argument(IPv4Address("10.0.0.5")) == "10.0.0.5"
+    assert _dst_argument(IPv6Address("::1")) == "::1"
+
+
+def test_dst_argument_unwraps_interface_to_its_ip():
+    """The /prefix means nothing to a socket call or subprocess argument."""
+    assert _dst_argument(IPv4Interface("10.0.0.5/24")) == "10.0.0.5"
+    assert _dst_argument(IPv6Interface("2001:db8::1/64")) == "2001:db8::1"
+
+
+def test_dst_argument_rejects_network():
+    """A network has no single address -- silently picking one would surprise."""
+    with pytest.raises(TypeError, match="not a network"):
+        _dst_argument(IPv4Network("10.0.0.0/24"))
+    with pytest.raises(TypeError, match="not a network"):
+        _dst_argument(IPv6Network("2001:db8::/64"))
+
+
+def test_dst_argument_stringifies_host_object():
+    """Host.__str__ returns the original text, not a parsed/resolved form."""
+    host = netimps.Host("db.internal")
+    assert _dst_argument(host) == "db.internal"
+
+
+# --------------------------------------------------------------------------- #
+# get_ip accepts AddressLike                                                 #
+# --------------------------------------------------------------------------- #
+
+
+def test_get_ip_accepts_interface_object(monkeypatch):
+    def explode(_):
+        raise AssertionError("gethostbyname must not be called for a literal")
+
+    monkeypatch.setattr(netimps._ip._socket, "gethostbyname", explode)
+    assert netimps.get_ip(IPv4Interface("10.0.0.5/24")) == IPv4Address("10.0.0.5")
+
+
+def test_get_ip_accepts_address_object(monkeypatch):
+    def explode(_):
+        raise AssertionError("gethostbyname must not be called for a literal")
+
+    monkeypatch.setattr(netimps._ip._socket, "gethostbyname", explode)
+    assert netimps.get_ip(IPv4Address("10.0.0.5")) == IPv4Address("10.0.0.5")
+
+
+def test_get_ip_rejects_network():
+    with pytest.raises(TypeError, match="not a network"):
+        netimps.get_ip(IPv4Network("10.0.0.0/24"))

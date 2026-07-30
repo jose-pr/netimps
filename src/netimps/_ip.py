@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import ipaddress as _ipaddress
 import socket as _socket
-from typing import List, Optional, Tuple, Union
+from typing import Iterable, List, Optional, Tuple, Union
 
 from ipaddress import (
     IPv4Address,
@@ -34,6 +34,7 @@ __all__ = [
     "IPAddressLike",
     "IPInterfaceLike",
     "IPNetworkLike",
+    "AddressLike",
     "IPv4Address",
     "IPv4Interface",
     "IPv4Network",
@@ -142,7 +143,49 @@ _BUILDER_DEFAULTS = {
 }
 
 
-def get_ip(address: str) -> Optional[IPAddress]:
+#: Anything accepted where a single destination (hostname or address) is
+#: expected -- ``ping``, ``tcp_check``, ``resolve``'s ``query`` and the like.
+#: Not a ``parse()`` target: this is argument coercion, not type-building.
+AddressLike = Union[
+    str,
+    IPv4Address,
+    IPv6Address,
+    IPv4Interface,
+    IPv6Interface,
+]
+
+
+def _dst_argument(value) -> str:
+    """Coerce a destination-like value to the plain string a socket or
+    subprocess call expects.
+
+    An :class:`IPv4Interface`/:class:`IPv6Interface` unwraps to its
+    ``.ip`` -- the ``/prefix`` means nothing to ``ping``/``getaddrinfo``, and
+    stringifying the interface directly would pass ``"10.0.0.5/24"`` as the
+    destination, which every consumer of this (a subprocess argument, a
+    socket call, a DNS query) reads as garbage rather than an address.
+
+    An :class:`IPv4Network`/:class:`IPv6Network` has no single address, so it
+    raises :class:`TypeError` rather than silently picking one (the network
+    address? the first host address?) -- a caller who meant a specific
+    address should say so.
+
+    Anything else (a plain string, an :class:`IPv4Address`/
+    :class:`IPv6Address`, a :class:`Host`, an int) is handled by ``str()``,
+    which already does the right thing for all of those -- ``Host.__str__``
+    in particular returns the original text, not a parsed/resolved form.
+    """
+    if isinstance(value, (IPv4Network, IPv6Network)):
+        raise TypeError(
+            "expected a single destination, not a network (%r) -- "
+            "pass an address from it instead" % (value,)
+        )
+    if isinstance(value, (IPv4Interface, IPv6Interface)):
+        return str(value.ip)
+    return str(value)
+
+
+def get_ip(address: "AddressLike") -> Optional[IPAddress]:
     """Resolve a hostname *or* literal address to an address object, or ``None``.
 
     Tries to parse ``address`` as a literal first and falls back to a DNS
@@ -152,12 +195,17 @@ def get_ip(address: str) -> Optional[IPAddress]:
         get_ip("example.com")     # IPv4Address('93.184.216.34')
         get_ip("nonexistent.")    # None
 
+    Also accepts an :class:`IPv4Interface`/:class:`IPv6Interface` (its ``.ip``
+    is used) or an existing :class:`IPv4Address`/:class:`IPv6Address`
+    (returned as-is, no DNS touched) -- not just a bare hostname string.
+
     .. note::
        The difference from ``try_parse(address)`` matters: that never
        touches the network, while this **may block on DNS**. Use ``try_parse``
        to validate user input; use ``get_ip`` when you genuinely want a name
        resolved.
     """
+    address = _dst_argument(address)
     try:
         try:
             return _ipaddress.ip_address(address)
@@ -167,7 +215,7 @@ def get_ip(address: str) -> Optional[IPAddress]:
         return None
 
 
-def collapse(networks) -> "List[IPNetwork]":
+def collapse(networks: "Iterable[IPNetworkLike]") -> "List[IPNetwork]":
     """Merge an iterable of networks into the smallest equivalent list.
 
     Adjacent and overlapping networks are combined; the result is sorted and
@@ -182,18 +230,25 @@ def collapse(networks) -> "List[IPNetwork]":
     """
     from . import parse as _parse
 
-    v4, v6 = [], []
+    v4: "List[IPv4Network]" = []
+    v6: "List[IPv6Network]" = []
     for item in networks:
         net = _parse(item, IPNetwork)
-        (v4 if net.version == 4 else v6).append(net)
-    out = []
-    for group in (v4, v6):
-        if group:
-            out.extend(_ipaddress.collapse_addresses(group))
+        if isinstance(net, IPv4Network):
+            v4.append(net)
+        else:
+            v6.append(net)
+    out: "List[IPNetwork]" = []
+    if v4:
+        out.extend(_ipaddress.collapse_addresses(v4))
+    if v6:
+        out.extend(_ipaddress.collapse_addresses(v6))
     return out
 
 
-def subtract(networks, remove) -> "List[IPNetwork]":
+def subtract(
+    networks: "Iterable[IPNetworkLike]", remove: "Iterable[IPNetworkLike]"
+) -> "List[IPNetwork]":
     """Return ``networks`` minus every address in ``remove``.
 
     The set difference :mod:`ipaddress` leaves out -- it ships
@@ -214,21 +269,26 @@ def subtract(networks, remove) -> "List[IPNetwork]":
     remaining = collapse(networks)
     for item in remove:
         excluded = _parse(item, IPNetwork)
-        next_round = []
+        next_round: "List[IPNetwork]" = []
         for net in remaining:
             if net.version != excluded.version:
                 next_round.append(net)  # different family: untouched
                 continue
+            # mypy cannot see that the `.version` check above guarantees `net`
+            # and `excluded` share a concrete type -- ipaddress's own stubs
+            # type subnet_of/address_exclude as same-family-only, stricter
+            # than the runtime, which accepts the IPv4Network|IPv6Network
+            # union fine once the families actually match.
             if not (
-                net.subnet_of(excluded)
-                or excluded.subnet_of(net)
+                net.subnet_of(excluded)  # type: ignore[arg-type]
+                or excluded.subnet_of(net)  # type: ignore[arg-type]
                 or net.overlaps(excluded)
             ):
                 next_round.append(net)
                 continue
-            if net.subnet_of(excluded):
+            if net.subnet_of(excluded):  # type: ignore[arg-type]
                 continue  # fully removed
-            next_round.extend(net.address_exclude(excluded))
+            next_round.extend(net.address_exclude(excluded))  # type: ignore[arg-type]
         remaining = next_round
     return collapse(remaining)
 
@@ -364,7 +424,11 @@ class Host:
 
     __slots__ = ("value", "_resolved", "_attempted")
 
-    def __init__(self, value) -> None:
+    value: str
+    _resolved: "Optional[IPAddress]"
+    _attempted: bool
+
+    def __init__(self, value: "Optional[Union[str, Host]]") -> None:
         if isinstance(value, Host):
             value = value.value
         self.value = "" if value is None else str(value).strip()
@@ -378,7 +442,7 @@ class Host:
 
         return is_valid(self.value, IPAddress)
 
-    def ip(self, refresh: bool = False):
+    def ip(self, refresh: bool = False) -> "Optional[IPAddress]":
         """Resolve to an address, or ``None``.
 
         A literal is parsed directly; a hostname goes to DNS. **The result is

@@ -6,12 +6,18 @@ tries them in order and returns the first that produces a definitive answer:
 
 - :func:`resolve_dnspython` -- ``dnspython``, structured records, every
   ``rdtype``, explicit ``ns=``/``port=``/``search=`` control.
-- :func:`resolve_system` -- :func:`socket.getaddrinfo`, the OS resolver
-  (hosts file, NSS, DNS). Address records (``a``/``aaaa``) only, no ``ns=``
+- :func:`resolve_system` -- :func:`socket.getaddrinfo`/
+  :func:`socket.gethostbyaddr`, the OS resolver (hosts file, NSS, DNS).
+  Address and reverse records (``a``/``aaaa``/``ptr``) only, no ``ns=``
   control -- it always asks the OS resolver, whatever that is configured to
   use.
 - :func:`resolve_nslookup` -- shells out to the ``nslookup`` binary. Address
-  records (``a``/``aaaa``/``ptr``) only, parsed from text output.
+  and reverse records (``a``/``aaaa``/``ptr``) only, parsed from text output.
+
+``query`` accepts :data:`AddressLike` everywhere (a hostname string, an
+address string, an address object, or an interface object -- its ``.ip`` is
+used). ``rdtype=None`` (the default on all four) auto-selects ``"ptr"`` for
+an address-literal ``query`` and ``"a"`` otherwise.
 
 Re-exported from :mod:`netimps`.
 """
@@ -22,6 +28,8 @@ import socket as _socket
 from subprocess import TimeoutExpired as _SubprocessTimeout
 from subprocess import run as _run
 from typing import Any, List, Optional, Union
+
+from ._ip import AddressLike, _dst_argument
 
 __all__ = [
     "resolve",
@@ -65,9 +73,25 @@ def _native_record(record):
     return text
 
 
+def _auto_rdtype(query: str) -> str:
+    """The record type ``rdtype=None`` implies for ``query``.
+
+    An address literal (v4 or v6) means the caller wants the reverse name --
+    an ``"a"``/``"aaaa"`` lookup *of* an address is nonsensical, so ``"ptr"``
+    is the only reading that makes the request meaningful. Anything else is
+    treated as a hostname, defaulting to ``"a"`` exactly as before this was
+    configurable. Only consulted when ``rdtype`` is not given explicitly --
+    an explicit ``rdtype="a"`` on an address still attempts a literal (and
+    empty) A lookup rather than being silently overridden.
+    """
+    from . import try_parse
+
+    return "ptr" if try_parse(query) is not None else "a"
+
+
 def resolve_dnspython(
-    query: str,
-    rdtype: str = "a",
+    query: "AddressLike",
+    rdtype: Optional[str] = None,
     ns: Optional[Union[str, List[str]]] = None,
     timeout: Optional[float] = 5.0,
     port: int = 53,
@@ -84,6 +108,7 @@ def resolve_dnspython(
         resolve_dnspython("host")                           # tries the resolv.conf search list
         resolve_dnspython("host", search=["eng.example.com", "example.com"])
         resolve_dnspython("host", search=False)             # look up "host" literally
+        resolve_dnspython("8.8.8.8")                        # rdtype=None -> ptr -> ['dns.google']
 
     Contract: always a ``list``, **empty** when the name does not resolve --
     never ``None``. Callers can therefore write ``if result:`` and index
@@ -99,9 +124,15 @@ def resolve_dnspython(
     Names lose their trailing root dot and TXT strings lose their surrounding
     quotes, since neither is wanted in practice.
 
-    :param query: the name (or address, for reverse types) to look up.
+    :param query: the name (or address, for a ``"ptr"`` lookup) to look up.
+        Also accepts an address object or an :class:`IPv4Interface`/
+        :class:`IPv6Interface` (its ``.ip`` is used), not just a string.
     :param rdtype: DNS record type (``"a"``, ``"aaaa"``, ``"mx"`` ...). Second
-        because it is the argument callers actually vary.
+        because it is the argument callers actually vary. ``None`` (default)
+        auto-selects: ``"ptr"`` when ``query`` is an address literal (an
+        ``"a"``/``"aaaa"`` lookup *of* an address makes no sense), ``"a"``
+        otherwise -- the same default as before this was configurable. Pass
+        an explicit ``rdtype`` to opt out of the auto-selection.
     :param ns: optional nameserver, or list of nameservers, to query instead of
         the system resolver. When omitted, the system resolver configuration
         (``/etc/resolv.conf``, or the Windows equivalent) supplies both the
@@ -127,6 +158,11 @@ def resolve_dnspython(
 
     Requires the ``dnspython`` package (installed with ``netimps``).
     """
+    query = _dst_argument(query)
+    if not rdtype:
+        rdtype = _auto_rdtype(query)
+    rdtype = rdtype.lower()
+
     try:
         from dns import name as _name
         from dns import resolver as _resolver
@@ -177,7 +213,14 @@ def resolve_dnspython(
     )
 
     try:
-        answer = r.resolve(query, rdtype, tcp=tcp, search=search)
+        if rdtype == "ptr":
+            # resolve_address builds the reverse (in-addr.arpa/ip6.arpa) name
+            # from a plain address itself -- r.resolve(query, "ptr") would
+            # require the caller to already have that name, which defeats
+            # the point of accepting a literal address as `query`.
+            answer = r.resolve_address(query, tcp=tcp, search=search)
+        else:
+            answer = r.resolve(query, rdtype, tcp=tcp, search=search)
     except _lookup_failures:
         # A genuine "no result" -- the documented [] contract.
         return []
@@ -226,12 +269,13 @@ def _resolve_system_once(
 
 
 def resolve_system(
-    query: str,
-    rdtype: str = "a",
+    query: "AddressLike",
+    rdtype: Optional[str] = None,
     timeout: Optional[float] = 5.0,
     search: Union[bool, List[str]] = True,
 ) -> "List[Any]":
-    """Resolve ``query`` via the OS resolver (:func:`socket.getaddrinfo`).
+    """Resolve ``query`` via the OS resolver (:func:`socket.getaddrinfo`/
+    :func:`socket.gethostbyaddr`).
 
     ::
 
@@ -240,33 +284,41 @@ def resolve_system(
         resolve_system("localhost")              # /etc/hosts, no DNS query
         resolve_system("host", search=False)     # "host" only, no suffix expansion
         resolve_system("host", search=["eng.example.com", "example.com"])
+        resolve_system("8.8.8.8")                # rdtype=None -> ptr -> ['dns.google']
 
     Goes through **hosts file, NSS (`nsswitch.conf`) and DNS, in the order
-    the OS resolver applies them** -- the same path ``getaddrinfo(3)``-based
-    tools use. Unlike :func:`resolve_dnspython`, this sees ``/etc/hosts``
-    entries, ``nsswitch.conf`` sources (mDNS, LDAP, whatever NSS is
-    configured with) and any OS-level resolver cache.
+    the OS resolver applies them** -- the same path ``getaddrinfo(3)``/
+    ``gethostbyaddr(3)``-based tools use. Unlike :func:`resolve_dnspython`,
+    this sees ``/etc/hosts`` entries, ``nsswitch.conf`` sources (mDNS, LDAP,
+    whatever NSS is configured with) and any OS-level resolver cache.
 
-    The trade-off: **address records only** (``rdtype`` must be ``"a"`` or
-    ``"aaaa"``; anything else raises :class:`ResolutionError` immediately, no
-    query attempted), no ``ns=`` (it always asks whatever resolver the OS is
-    configured with -- there is no per-call override), and no priority/TTL/
-    other record metadata, since :func:`socket.getaddrinfo` does not expose
-    any of that.
+    The trade-off: **address and reverse records only** (``rdtype`` must be
+    ``"a"``, ``"aaaa"`` or ``"ptr"``; anything else raises
+    :class:`ResolutionError` immediately, no query attempted), no ``ns=`` (it
+    always asks whatever resolver the OS is configured with -- there is no
+    per-call override), and no priority/TTL/other record metadata, since
+    neither :func:`socket.getaddrinfo` nor :func:`socket.gethostbyaddr`
+    exposes any of that.
 
-    :param query: the hostname to look up.
-    :param rdtype: ``"a"`` (default) or ``"aaaa"``. Anything else raises.
+    :param query: the hostname (or address, for ``"ptr"``) to look up. Also
+        accepts an address object or an :class:`IPv4Interface`/
+        :class:`IPv6Interface` (its ``.ip`` is used), not just a string.
+    :param rdtype: ``"a"``, ``"aaaa"`` or ``"ptr"``. ``None`` (default)
+        auto-selects: ``"ptr"`` when ``query`` is an address literal, ``"a"``
+        otherwise. Anything else raises.
     :param timeout: seconds to wait *per candidate name tried* (see
         ``search``). There is no native per-call timeout for
-        ``getaddrinfo``, so each attempt runs in a helper thread and is
-        abandoned (without cancelling the underlying blocking call) past the
-        deadline. ``None`` waits indefinitely.
-    :param search: how to expand an unqualified ``query``. There is no
-        per-call search-list override on :func:`socket.getaddrinfo` itself --
-        unlike ``dnspython``/``nslookup``, the OS resolver takes no such
-        parameter -- so ``search=True`` (default) simply leaves ``query`` as
-        given and lets the OS resolver apply its own configured search list
-        (glibc's ``ndots``/``search``, the Windows per-adapter DNS suffix).
+        ``getaddrinfo``/``gethostbyaddr``, so each attempt runs in a helper
+        thread and is abandoned (without cancelling the underlying blocking
+        call) past the deadline. ``None`` waits indefinitely.
+    :param search: how to expand an unqualified ``query``. Ignored for
+        ``rdtype="ptr"`` -- an address has no search-list suffix to try.
+        There is no per-call search-list override on
+        :func:`socket.getaddrinfo` itself -- unlike ``dnspython``/
+        ``nslookup``, the OS resolver takes no such parameter -- so
+        ``search=True`` (default) simply leaves ``query`` as given and lets
+        the OS resolver apply its own configured search list (glibc's
+        ``ndots``/``search``, the Windows per-adapter DNS suffix).
         ``search=False`` appends a trailing ``.``, which every resolver reads
         as "already fully qualified" and skips search-list expansion for --
         the same trick a shell's own ``host``/``getent`` scripts use. A list
@@ -281,11 +333,26 @@ def resolve_system(
     :class:`ResolutionError`, since that is this backend's fixed limitation,
     not a DNS outcome to report as "no records".
     """
-    rdtype = (rdtype or "a").lower()
+    query = _dst_argument(query)
+    if not rdtype:
+        rdtype = _auto_rdtype(query)
+    rdtype = rdtype.lower()
+
+    if rdtype == "ptr":
+        try:
+            hostname, _aliases, _addrs = _socket.gethostbyaddr(query)
+        except (_socket.herror, _socket.gaierror):
+            # herror: no PTR data for a literal address. gaierror: `query`
+            # was treated as a hostname (gethostbyaddr's own behaviour for a
+            # non-literal argument) and that hostname itself did not
+            # resolve. Both are genuine "no answer", not a transport failure.
+            return []
+        return [hostname]
+
     if rdtype not in _ADDRESS_RDTYPES:
         raise ResolutionError(
             "resolve_system only supports rdtype in %r, got %r"
-            % (_ADDRESS_RDTYPES, rdtype)
+            % (_ADDRESS_RDTYPES + ("ptr",), rdtype)
         )
 
     family = _socket.AF_INET6 if rdtype == "aaaa" else _socket.AF_INET
@@ -361,7 +428,7 @@ def _parse_nslookup_output(text: str, rdtype: str) -> "tuple":
 
     saw_answer = any(line.strip().lower().startswith("name:") for line in lines)
 
-    results = []
+    results: "List[Any]" = []
     if rdtype == "ptr":
         for line in lines:
             if "name =" in line.lower():
@@ -466,8 +533,8 @@ def _resolve_nslookup_once(
 
 
 def resolve_nslookup(
-    query: str,
-    rdtype: str = "a",
+    query: "AddressLike",
+    rdtype: Optional[str] = None,
     ns: Optional[str] = None,
     timeout: Optional[float] = 5.0,
     search: Union[bool, List[str]] = True,
@@ -481,15 +548,20 @@ def resolve_nslookup(
         resolve_nslookup("example.com", ns="1.1.1.1")
         resolve_nslookup("host")                       # tries the system search list
         resolve_nslookup("host", search=["eng.example.com", "example.com"])
+        resolve_nslookup("8.8.8.8")                    # rdtype=None -> ptr -> ['dns.google']
 
     A fallback for when neither ``dnspython`` nor :func:`resolve_system` is
     usable: goes through whatever resolver ``nslookup`` itself is configured
     to use (the OS resolver's nameservers, unless ``ns=`` overrides it).
 
-    :param query: the name (or address, for ``ptr``) to look up.
-    :param rdtype: ``"a"`` (default), ``"aaaa"`` or ``"ptr"``. Anything else
-        raises :class:`ResolutionError` immediately, no subprocess spawned --
-        ``nslookup``'s plain-text output is only parsed reliably for these.
+    :param query: the name (or address, for ``ptr``) to look up. Also accepts
+        an address object or an :class:`IPv4Interface`/:class:`IPv6Interface`
+        (its ``.ip`` is used), not just a string.
+    :param rdtype: ``"a"``, ``"aaaa"`` or ``"ptr"``. ``None`` (default)
+        auto-selects: ``"ptr"`` when ``query`` is an address literal, ``"a"``
+        otherwise. Anything else raises :class:`ResolutionError` immediately,
+        no subprocess spawned -- ``nslookup``'s plain-text output is only
+        parsed reliably for these three.
     :param ns: nameserver to query, passed as ``nslookup``'s trailing
         ``server`` argument. ``None`` uses ``nslookup``'s own default.
     :param timeout: seconds to allow *each* subprocess attempt to run --
@@ -512,7 +584,10 @@ def resolve_nslookup(
     unsupported ``rdtype`` raises :class:`ResolutionError` -- there was no
     definitive DNS answer to report.
     """
-    rdtype = (rdtype or "a").lower()
+    query = _dst_argument(query)
+    if not rdtype:
+        rdtype = _auto_rdtype(query)
+    rdtype = rdtype.lower()
     if rdtype not in ("a", "aaaa", "ptr"):
         raise ResolutionError(
             "resolve_nslookup only supports rdtype in ('a', 'aaaa', 'ptr'), got %r"
@@ -554,8 +629,8 @@ def resolve_nslookup(
 
 
 def resolve(
-    query: str,
-    rdtype: str = "a",
+    query: "AddressLike",
+    rdtype: Optional[str] = None,
     ns: Optional[Union[str, List[str]]] = None,
     timeout: Optional[float] = 5.0,
     port: int = 53,
@@ -573,18 +648,20 @@ def resolve(
         resolve("example.com", "mx", ns="1.1.1.1")
         resolve("host", backends="system")        # OS resolver only
         resolve("host", backends=["nslookup", "dnspython"])  # custom order
+        resolve("8.8.8.8")                        # rdtype=None -> ptr -> ['dns.google']
 
     Default order is ``["dnspython", "system", "nslookup"]``: dnspython first
     (structured records, full ``rdtype`` support, explicit ``ns=``/``search=``
-    control), then the OS resolver (hosts file, NSS, OS cache -- but address
-    records only, and no ``ns=`` override), then ``nslookup`` as a last resort
-    if neither Python-level path is usable.
+    control), then the OS resolver (hosts file, NSS, OS cache -- address and
+    reverse records, but no ``ns=`` override), then ``nslookup`` as a last
+    resort if neither Python-level path is usable.
 
     A backend is **skipped**, not tried and failed, when it structurally
-    cannot serve the request: :func:`resolve_system` for a non-address
-    ``rdtype``, or for an explicit ``ns=``/``port=`` (it has no per-call
-    nameserver override, so running it would silently ignore the caller's
-    choice); :func:`resolve_dnspython` if ``dnspython`` is not installed.
+    cannot serve the request: :func:`resolve_system` for a ``rdtype`` outside
+    ``"a"``/``"aaaa"``/``"ptr"``, or for an explicit ``ns=``/``port=`` (it has
+    no per-call nameserver override, so running it would silently ignore the
+    caller's choice); :func:`resolve_dnspython` if ``dnspython`` is not
+    installed.
 
     A backend that reaches a resolver and gets a **definitive DNS answer**
     (records, or a genuine NXDOMAIN/empty) stops the chain there -- including
@@ -593,10 +670,15 @@ def resolve(
     next one. If every applicable backend fails that way, the last such error
     is raised.
 
-    :param query: the name (or address, for reverse types) to look up.
-    :param rdtype: DNS record type. ``"a"``/``"aaaa"`` reach every backend;
-        other types are dnspython-only (see :func:`resolve_dnspython`) except
-        ``"ptr"``, which nslookup also understands.
+    :param query: the name (or address, for reverse types) to look up. Also
+        accepts an address object or an :class:`IPv4Interface`/
+        :class:`IPv6Interface` (its ``.ip`` is used), not just a string.
+    :param rdtype: DNS record type. ``None`` (default) auto-selects: ``"ptr"``
+        when ``query`` is an address literal (an ``"a"``/``"aaaa"`` lookup
+        *of* an address makes no sense), ``"a"`` otherwise -- the same
+        default as before this was configurable. Pass an explicit ``rdtype``
+        to opt out. ``"a"``/``"aaaa"``/``"ptr"`` reach every backend; other
+        types are ``dnspython``-only (see :func:`resolve_dnspython`).
     :param ns: nameserver(s) to query instead of the system resolver. Honoured
         by ``dnspython`` and ``nslookup`` (a single nameserver for the
         latter); excludes ``system`` from the chain, since it cannot honour a
@@ -618,7 +700,10 @@ def resolve(
     :class:`ValueError` immediately, without trying every backend, since that
     is a caller bug rather than a resolution outcome.
     """
-    rdtype = (rdtype or "a").lower()
+    query = _dst_argument(query)
+    if not rdtype:
+        rdtype = _auto_rdtype(query)
+    rdtype = rdtype.lower()
     if isinstance(backends, str):
         backends = [backends]
     chain = list(backends) if backends is not None else list(_BACKENDS)
@@ -633,7 +718,7 @@ def resolve(
     attempted = False
     for name in chain:
         if name == "system":
-            if rdtype not in _ADDRESS_RDTYPES or ns:
+            if rdtype not in ("a", "aaaa", "ptr") or ns:
                 continue  # cannot honour a non-address rdtype or a custom ns
             attempted = True
             try:
@@ -659,7 +744,10 @@ def resolve(
         elif name == "nslookup":
             if rdtype not in ("a", "aaaa", "ptr"):
                 continue
-            single_ns = ns[0] if isinstance(ns, (list, tuple)) and ns else ns
+            if isinstance(ns, (list, tuple)):
+                single_ns = ns[0] if ns else None
+            else:
+                single_ns = ns
             attempted = True
             try:
                 return resolve_nslookup(
