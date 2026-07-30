@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-30
+
 ### Added
 
 - **`AddressLike`**, a new type alias (`str | IPv4Address | IPv6Address |
