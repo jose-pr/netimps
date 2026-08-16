@@ -1124,11 +1124,13 @@ def _capture_ping(monkeypatch, returncode=0):
         calls.append((cmd, kwargs))
         return subprocess.CompletedProcess(cmd, returncode, stdout=b"")
 
-    def no_dns(host):
+    def no_dns(*args, **kwargs):
         raise OSError("DNS disabled in tests")
 
     monkeypatch.setattr(netimps._ping, "_run", fake_run)
-    monkeypatch.setattr(netimps._ping._socket, "gethostbyname", no_dns)
+    # The reply-address expectation is resolved with getaddrinfo (gethostbyname
+    # is IPv4-only); blocking it keeps these option tests off the network.
+    monkeypatch.setattr(netimps._ping._socket, "getaddrinfo", no_dns)
     return calls
 
 
@@ -1177,6 +1179,118 @@ def test_ping_has_wall_clock_timeout(monkeypatch):
     calls = _capture_ping(monkeypatch)
     netimps.ping("host", timeout=2.0)
     assert calls[0][1]["timeout"] > 2.0
+
+
+def _fake_ping_getaddrinfo(records):
+    """A getaddrinfo standing in for the reply-address expectation lookup.
+
+    ``records`` is a list of ``(family, address)``. The fake honours the
+    ``family`` argument the way the real one does, so a test can assert that
+    ``ipv6=`` reached the resolver rather than being dropped.
+    """
+    calls = []
+
+    def _impl(host, port, family=0, type=0, proto=0, flags=0):
+        calls.append(family)
+        wanted = [
+            (fam, addr)
+            for fam, addr in records
+            if family in (netimps._ping._socket.AF_UNSPEC, fam)
+        ]
+        if not wanted:
+            raise OSError("no records for family %r" % (family,))
+        return [
+            (
+                fam,
+                type,
+                0,
+                "",
+                (addr, 0) if fam == netimps._ping._socket.AF_INET else (addr, 0, 0, 0),
+            )
+            for fam, addr in wanted
+        ]
+
+    return _impl, calls
+
+
+def test_ping_ipv6_hostname_verifies_against_the_v6_reply(monkeypatch):
+    """`ping(hostname, ipv6=True)` must not check a v6 reply against a v4 address.
+
+    The regression: the expectation came from `gethostbyname`, which is
+    IPv4-only. `ping -6 host` prints only the v6 address, so the v4 needle
+    never matched, `answered` stayed False, and a healthy ping was reported
+    falsy on every platform.
+    """
+    v6 = netimps._ping._socket.AF_INET6
+    v4 = netimps._ping._socket.AF_INET
+    resolver, _calls = _fake_ping_getaddrinfo(
+        [(v4, "93.184.216.34"), (v6, "2606:2800::1")]
+    )
+    monkeypatch.setattr(netimps._ping._socket, "getaddrinfo", resolver)
+
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(
+            cmd,
+            0,
+            stdout=b"64 bytes from 2606:2800::1: icmp_seq=1 ttl=54 time=8.1 ms\n",
+        )
+
+    monkeypatch.setattr(netimps._ping, "_run", fake_run)
+    result = ping("example.com", ipv6=True)
+    assert bool(result) is True
+    assert result.src == IPv6Address("2606:2800::1")
+    assert result.rtt_ms == 8.1
+    assert result.ttl == 54
+
+
+def test_ping_expectation_family_follows_the_ipv6_flag(monkeypatch):
+    """AF_INET6 / AF_INET / AF_UNSPEC, matching ipv6=True / False / None."""
+    v4 = netimps._ping._socket.AF_INET
+    resolver, calls = _fake_ping_getaddrinfo([(v4, "93.184.216.34")])
+    monkeypatch.setattr(netimps._ping._socket, "getaddrinfo", resolver)
+    monkeypatch.setattr(
+        netimps._ping, "_run", lambda cmd, **k: subprocess.CompletedProcess(cmd, 1)
+    )
+    for flag, expected_family in (
+        (True, netimps._ping._socket.AF_INET6),
+        (False, v4),
+        (None, netimps._ping._socket.AF_UNSPEC),
+    ):
+        calls.clear()
+        ping("example.com", ipv6=flag)
+        assert calls == [expected_family], "ipv6=%r resolved with %r" % (flag, calls)
+
+
+def test_ping_hostname_with_several_addresses_accepts_any_of_them(monkeypatch):
+    """A round-robin name answers from whichever address the binary picked."""
+    v4 = netimps._ping._socket.AF_INET
+    resolver, _calls = _fake_ping_getaddrinfo([(v4, "1.2.3.4"), (v4, "5.6.7.8")])
+    monkeypatch.setattr(netimps._ping._socket, "getaddrinfo", resolver)
+    monkeypatch.setattr(
+        netimps._ping,
+        "_run",
+        lambda cmd, **k: subprocess.CompletedProcess(
+            cmd, 0, stdout=b"Reply from 5.6.7.8: bytes=32 time=1ms TTL=128\n"
+        ),
+    )
+    result = ping("example.com")
+    assert bool(result) is True
+    assert result.src == IPv4Address("5.6.7.8")
+
+
+def test_ping_unresolvable_hostname_still_falls_back_to_the_exit_code(monkeypatch):
+    """No expectation to verify against -- a zero exit is all there is."""
+
+    def no_dns(*args, **kwargs):
+        raise OSError("DNS disabled in tests")
+
+    monkeypatch.setattr(netimps._ping._socket, "getaddrinfo", no_dns)
+    monkeypatch.setattr(
+        netimps._ping,
+        "_run",
+        lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, stdout=b"pong\n"),
+    )
+    assert bool(ping("host.invalid")) is True
 
 
 def test_ping_returns_false_when_binary_missing(monkeypatch):

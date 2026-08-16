@@ -613,6 +613,157 @@ def test_tcp_check_and_ping_tcp_ask_different_questions():
         assert rtt is not None
 
 
+# --------------------------------------------------------------------------- #
+# ping(method="tcp"/"udp"): address family and the UDP liveness signal          #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def v6_loopback():
+    """A listening IPv6 loopback socket, or a skip on a v4-only host."""
+    try:
+        server = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+        server.bind(("::1", 0))
+        server.listen(1)
+    except OSError:  # pragma: no cover - env dependent
+        pytest.skip("no IPv6 loopback on this host")
+    try:
+        yield server.getsockname()[1]
+    finally:
+        server.close()
+
+
+def test_ping_tcp_reaches_an_ipv6_destination(v6_loopback):
+    """A v6 destination must not read as unreachable.
+
+    The regression: `_tcp_ping` opened an AF_INET socket unconditionally, so
+    connecting to a v6 address raised OSError inside `connect` and the probe
+    reported "unreachable" -- a wrong *falsy answer*, not an error.
+    """
+    result = netimps.ping("::1", method="tcp", port=v6_loopback, timeout=2.0)
+    assert result.ok
+    assert result.rtt_ms is not None
+
+
+def test_ping_tcp_probe_family_follows_the_destination(monkeypatch, v6_loopback):
+    """Pinned deterministically: the probe socket is AF_INET6 for a v6 dst."""
+    families = []
+    real_socket = socket.socket
+
+    def recording(family, *args, **kwargs):
+        families.append(family)
+        return real_socket(family, *args, **kwargs)
+
+    monkeypatch.setattr(netimps._ping._socket, "socket", recording)
+    netimps.ping("::1", method="tcp", port=v6_loopback, timeout=2.0)
+    assert families == [socket.AF_INET6]
+
+
+def test_ping_tcp_honours_ipv6_flag_for_a_hostname(monkeypatch):
+    """`ipv6=` is not ICMP-only -- it selects the tcp/udp probe family too."""
+    seen = {}
+
+    def fake_getaddrinfo(host, port, family=0, type=0, *args, **kwargs):
+        seen["family"] = family
+        raise OSError("resolution blocked in tests")
+
+    monkeypatch.setattr(netimps._ping._socket, "getaddrinfo", fake_getaddrinfo)
+    netimps.ping("host.invalid", method="tcp", port=80, ipv6=True)
+    assert seen["family"] == socket.AF_INET6
+    netimps.ping("host.invalid", method="tcp", port=80, ipv6=False)
+    assert seen["family"] == socket.AF_INET
+    netimps.ping("host.invalid", method="tcp", port=80)
+    assert seen["family"] == socket.AF_UNSPEC
+
+
+def test_udp_ping_connects_before_sending(monkeypatch):
+    """The probe socket must be connected, and that is not a stylistic choice.
+
+    POSIX delivers asynchronous ICMP errors only to a *connected* UDP socket,
+    so the previous `sendto`/`recvfrom` pair never saw the port-unreachable
+    that the documented contract treats as proof of liveness -- it just timed
+    out, making `method="udp"` under-report on Linux/macOS while looking
+    correct on Windows.
+    """
+    from netimps._ping import _udp_ping
+
+    order = []
+
+    class Recording:
+        def settimeout(self, timeout):
+            pass
+
+        def connect(self, address):
+            order.append("connect")
+
+        def send(self, payload):
+            order.append("send")
+            return len(payload)
+
+        def recv(self, size):
+            order.append("recv")
+            raise ConnectionRefusedError("ICMP port unreachable")
+
+        def sendto(self, payload, address):  # pragma: no cover - must not run
+            order.append("sendto")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(netimps._ping._socket, "socket", lambda *a, **k: Recording())
+    ok, rtt, note = _udp_ping("127.0.0.1", 9, 1.0)
+    assert order == ["connect", "send", "recv"]
+    assert ok and note == "port-unreachable"
+
+
+def test_udp_ping_treats_connection_reset_as_liveness_too(monkeypatch):
+    """Windows spells the same ICMP error ECONNRESET; both must count."""
+    from netimps._ping import _udp_ping
+
+    class Resetting:
+        def settimeout(self, timeout):
+            pass
+
+        def connect(self, address):
+            pass
+
+        def send(self, payload):
+            return len(payload)
+
+        def recv(self, size):
+            raise ConnectionResetError("WSAECONNRESET")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(netimps._ping._socket, "socket", lambda *a, **k: Resetting())
+    ok, _rtt, note = _udp_ping("127.0.0.1", 9, 1.0)
+    assert ok and note == "port-unreachable"
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "::1"])
+def test_ping_udp_closed_loopback_port_proves_liveness(host):
+    """The real thing, unprivileged: nothing listening, host obviously up.
+
+    Skipped rather than failed when the platform declines to deliver the
+    ICMP error (macOS rate-limits them, and a host firewall can drop them) --
+    that is an environment fact. The connected-socket *mechanism* is asserted
+    deterministically by the tests above, which need no traffic at all.
+    """
+    if host == "::1":
+        try:
+            probe = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+            probe.close()
+        except OSError:  # pragma: no cover - env dependent
+            pytest.skip("no IPv6 on this host")
+
+    port = netimps.get_free_port()
+    result = netimps.ping(host, method="udp", port=port, timeout=2.0)
+    if not result:  # pragma: no cover - env dependent
+        pytest.skip("this host does not deliver ICMP port-unreachable to us")
+    assert result.rtt_ms is not None
+
+
 def test_discover_mtu_forwards_ping_kwargs(monkeypatch):
     """ipv6/tries and friends reach ping rather than being dropped."""
     seen = []

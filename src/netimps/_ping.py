@@ -16,7 +16,7 @@ import socket as _socket
 import sys as _sys
 from subprocess import TimeoutExpired as _SubprocessTimeout
 from subprocess import run as _run
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from ._iface_spec import InterfaceSpec, interface_address as _interface_address
 from ._ip import AddressLike, IPAddress, _dst_argument
@@ -96,8 +96,47 @@ _PING_RTT = _re.compile(r"time[=<]\s*([0-9]+(?:\.[0-9]+)?)\s*ms", _re.IGNORECASE
 _PING_TTL = _re.compile(r"ttl[=\s]\s*([0-9]+)", _re.IGNORECASE)
 
 
+def _expected_addresses(dst: str, ipv6: "Optional[bool]") -> "List[IPAddress]":
+    """Addresses a reply from ``dst`` may legitimately carry.
+
+    An address literal is its own answer. A hostname has to be resolved, and
+    **honouring ``ipv6``** while doing so is the whole point: the obvious
+    ``gethostbyname`` is IPv4-only, so ``ping(host, ipv6=True)`` would compare
+    a v6 reply against a v4 expectation and report a healthy ping as falsy.
+    ``ipv6=None`` collects both families, since the platform binary is then
+    free to pick either.
+
+    Returns ``[]`` when nothing resolves, which callers read as "no
+    expectation to verify against" rather than as a failure.
+    """
+    from . import try_parse as _try_parse
+
+    literal = _try_parse(dst)
+    if literal is not None:
+        return [literal]
+
+    if ipv6 is True:
+        family = _socket.AF_INET6
+    elif ipv6 is False:
+        family = _socket.AF_INET
+    else:
+        family = _socket.AF_UNSPEC
+
+    try:
+        infos = _socket.getaddrinfo(dst, None, family, _socket.SOCK_STREAM)
+    except OSError:
+        return []
+
+    found: "List[IPAddress]" = []
+    for info in infos:
+        address = _try_parse(info[4][0])
+        if address is not None and address not in found:
+            found.append(address)
+    return found
+
+
 def _parse_ping_output(
-    text: str, expect: "Optional[IPAddress]"
+    text: str, expected: "List[IPAddress]"
 ) -> "Tuple[Optional[float], Optional[int], Optional[IPAddress]]":
     """Pull (rtt_ms, ttl, src) out of ping's stdout.
 
@@ -123,13 +162,39 @@ def _parse_ping_output(
                 ttl = int(found_ttl.group(1))
             except ValueError:
                 pass
-        if src is None and expect is not None and str(expect) in line:
-            src = expect
+        if src is None:
+            src = next((a for a in expected if str(a) in line), None)
         break
     return rtt, ttl, src
 
 
-def _tcp_ping(dst, port, timeout, size=None):
+def _probe_targets(dst: str, port: int, ipv6: "Optional[bool]", socktype: int):
+    """``(family, sockaddr)`` pairs to probe ``dst`` on, in resolver order.
+
+    Both probe methods used to hardcode ``AF_INET``, so a v6 destination
+    failed inside ``connect``/``sendto`` and the ``OSError`` was reported as
+    "unreachable"/"no reply" -- a wrong *falsy answer* rather than an error,
+    with ``ipv6=`` silently ignored. Resolving here keeps the family a
+    property of the destination (and of ``ipv6=``) rather than of the code.
+
+    Returns ``[]`` when nothing resolves, which the callers treat as a
+    failure to reach rather than raising.
+    """
+    if ipv6 is True:
+        family = _socket.AF_INET6
+    elif ipv6 is False:
+        family = _socket.AF_INET
+    else:
+        family = _socket.AF_UNSPEC
+
+    try:
+        infos = _socket.getaddrinfo(dst, port, family, socktype)
+    except OSError:
+        return []
+    return [(info[0], info[4]) for info in infos]
+
+
+def _tcp_ping(dst, port, timeout, size=None, ipv6=None):
     """Time a TCP handshake. Returns (ok, rtt_ms, error).
 
     A refused connection still counts as reachable: the RST proves the host
@@ -137,45 +202,66 @@ def _tcp_ping(dst, port, timeout, size=None):
     """
     import time as _time
 
-    sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
-    sock.settimeout(timeout)
-    start = _time.perf_counter()
-    try:
-        sock.connect((dst, port))
-        return True, (_time.perf_counter() - start) * 1000.0, None
-    except ConnectionRefusedError:
-        # The host is alive and said "no" -- that is a measurement.
-        return True, (_time.perf_counter() - start) * 1000.0, "refused"
-    except (_socket.timeout, OSError):
+    targets = _probe_targets(dst, port, ipv6, _socket.SOCK_STREAM)
+    if not targets:
         return False, None, "unreachable"
-    finally:
-        sock.close()
+
+    for family, sockaddr in targets:
+        sock = _socket.socket(family, _socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        start = _time.perf_counter()
+        try:
+            sock.connect(sockaddr)
+            return True, (_time.perf_counter() - start) * 1000.0, None
+        except ConnectionRefusedError:
+            # The host is alive and said "no" -- that is a measurement.
+            return True, (_time.perf_counter() - start) * 1000.0, "refused"
+        except (_socket.timeout, OSError):
+            continue  # try the next resolved address before giving up
+        finally:
+            sock.close()
+    return False, None, "unreachable"
 
 
-def _udp_ping(dst, port, timeout, size=0):
+def _udp_ping(dst, port, timeout, size=0, ipv6=None):
     """Send a UDP datagram and wait for either a reply or ICMP unreachable.
 
     Two distinct signals prove liveness: an application reply, or an ICMP
-    port-unreachable (surfaced as ``ConnectionResetError``) meaning the host
-    answered but nothing is listening. Silence is ambiguous -- UDP has no
-    handshake, so a filtered port and an absent host look identical.
+    port-unreachable meaning the host answered but nothing is listening.
+    Silence is ambiguous -- UDP has no handshake, so a filtered port and an
+    absent host look identical.
+
+    The socket is **connected** before sending, which is load-bearing rather
+    than tidiness: POSIX delivers asynchronous ICMP errors only to a
+    connected UDP socket, so an unconnected probe never sees the
+    port-unreachable at all and just times out. Windows reports it either
+    way, which is why the unconnected version looked correct. The two
+    platforms then spell the same event differently -- ``ECONNRESET`` on
+    Windows, ``ECONNREFUSED`` on Linux -- so both count.
     """
     import time as _time
 
-    sock = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
-    sock.settimeout(timeout)
-    start = _time.perf_counter()
-    try:
-        sock.sendto(bytes(max(0, size)), (dst, port))
-        sock.recvfrom(65535)
-        return True, (_time.perf_counter() - start) * 1000.0, None
-    except ConnectionResetError:
-        # ICMP port unreachable -- the host is there.
-        return True, (_time.perf_counter() - start) * 1000.0, "port-unreachable"
-    except (_socket.timeout, OSError):
+    targets = _probe_targets(dst, port, ipv6, _socket.SOCK_DGRAM)
+    if not targets:
         return False, None, "no reply"
-    finally:
-        sock.close()
+
+    for family, sockaddr in targets:
+        sock = _socket.socket(family, _socket.SOCK_DGRAM)
+        sock.settimeout(timeout)
+        start = _time.perf_counter()
+        try:
+            sock.connect(sockaddr)
+            sock.send(bytes(max(0, size)))
+            sock.recv(65535)
+            return True, (_time.perf_counter() - start) * 1000.0, None
+        except (ConnectionResetError, ConnectionRefusedError):
+            # ICMP port unreachable -- the host is there.
+            return True, (_time.perf_counter() - start) * 1000.0, "port-unreachable"
+        except (_socket.timeout, OSError):
+            continue
+        finally:
+            sock.close()
+    return False, None, "no reply"
 
 
 def ping(
@@ -224,8 +310,11 @@ def ping(
     :param timeout: seconds to wait per attempt. POSIX ``ping`` only accepts a
         whole number of seconds, so sub-second values are rounded **up** to 1 --
         never down to 0, which some implementations read as "wait forever".
-    :param ipv6: force the IPv6 (``-6``) or IPv4 (``-4``) binary. ``None``
-        (default) lets the system resolver decide.
+    :param ipv6: force the IPv6 or IPv4 family. Applies to **all three**
+        ``method`` values: it selects the ``-6``/``-4`` flag for ICMP and the
+        address family the ``tcp``/``udp`` probes resolve and connect with.
+        ``None`` (default) lets the resolver decide, and accepts a reply from
+        either family. An address-literal ``dst`` decides for itself.
     :param src: send from this local address, choosing which interface the
         echo leaves by. Accepts an :class:`Interface`, an address object, or a
         string::
@@ -273,6 +362,13 @@ def ping(
         as success -- the RST proves something answered -- and so does an ICMP
         port-unreachable for UDP. Use :func:`netimps.tcp_check` when the
         question is "is the *service* up?", where a refusal is a failure.
+
+        The UDP probe connects its socket before sending, so the ICMP
+        port-unreachable is delivered on POSIX as well as Windows -- an
+        unconnected socket never receives one on Linux/BSD, which made this
+        method under-report liveness there for exactly the case it exists
+        for. Silence still means "no answer": UDP cannot tell a filtered
+        port from an absent host.
     :param port: destination port for ``tcp``/``udp``. Required for those, and
         ignored for ICMP.
     :param dont_fragment: set the DF bit (Windows ``-f``, Linux ``-M do``).
@@ -303,15 +399,17 @@ def ping(
             raise ValueError("method=%r needs a port" % (method,))
         prober = _tcp_ping if method == "tcp" else _udp_ping
         probe_size = size or 0
+        # `ipv6=` applies to these methods too, not just the ICMP binary.
+        probe_src = _try_parse(dst)
         last = None
         for attempt in range(1, max(1, tries) + 1):
-            ok, rtt, note = prober(dst, port, timeout, probe_size)
+            ok, rtt, note = prober(dst, port, timeout, probe_size, ipv6)
             if ok:
                 return PingResult(
                     True,
                     dst,
                     rtt_ms=rtt,
-                    src=_try_parse(dst),
+                    src=probe_src,
                     attempts=attempt,
                 )
             last = attempt
@@ -364,13 +462,9 @@ def ping(
     # Windows exits 0 for "TTL expired in transit", so a zero exit alone does
     # not mean the target answered. Confirm the reply came from the target
     # itself by matching its address in the output -- an address comparison,
-    # never the localised prose around it.
-    expect_address = _try_parse(dst)
-    if expect_address is None:
-        try:
-            expect_address = _try_parse(_socket.gethostbyname(dst))
-        except OSError:
-            expect_address = None
+    # never the localised prose around it. A hostname can resolve to several
+    # addresses (and to either family), so any of them counts as the target.
+    expected = _expected_addresses(dst, ipv6)
 
     for attempt in range(1, tries + 1):
         try:
@@ -391,11 +485,11 @@ def ping(
         # for "TTL expired in transit", where a router replied instead. Confirm
         # by address, which is locale-independent -- but only when the target's
         # address is known, since a bare exit code is all we have otherwise.
-        if expect_address is not None:
-            needle = "%s:" % expect_address
+        if expected:
+            needles = ["%s:" % (address,) for address in expected]
             answered = False
             for line in text.splitlines():
-                if needle not in line:
+                if not any(needle in line for needle in needles):
                     continue
                 lowered = line.lower()
                 if "expired" in lowered or "unreachable" in lowered:
@@ -406,13 +500,15 @@ def ping(
             if not answered:
                 continue
 
-        rtt, reply_ttl, reply_src = _parse_ping_output(text, expect_address)
+        rtt, reply_ttl, reply_src = _parse_ping_output(text, expected)
+        if reply_src is None and expected:
+            reply_src = expected[0]
         return PingResult(
             True,
             dst,
             rtt_ms=rtt,
             ttl=reply_ttl,
-            src=reply_src if reply_src is not None else expect_address,
+            src=reply_src,
             attempts=attempt,
         )
     return PingResult(False, dst, attempts=tries)
