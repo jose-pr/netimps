@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-08-16
+
 ### Fixed
 
 - **`resolve_system(timeout=)` now bounds wall time.** The lookup ran inside a
@@ -237,7 +239,8 @@ below is simply what the package contains.
 - **`Host`**, **`retry()`/`backoff_delays()`**, and the named networks `APIPA`,
   `LOOPBACK_V4`, `LOOPBACK_V6`, `LINK_LOCAL_V6`.
 
-[Unreleased]: https://github.com/jose-pr/netimps/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/jose-pr/netimps/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/jose-pr/netimps/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/jose-pr/netimps/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/jose-pr/netimps/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jose-pr/netimps/compare/v0.0.2...v0.1.0
