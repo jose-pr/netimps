@@ -309,6 +309,12 @@ cannot see (its own DNS query bypasses all of that). Same `AddressLike`
   trick `host`/`getent` scripts use. A **list of domain names** tries `query`
   qualified with each, in order, one `getaddrinfo` call per candidate,
   independent of (and untouched by) the OS's own search list.
+- **`timeout` bounds wall time, per candidate name tried.** `getaddrinfo` has
+  no timeout of its own, so each attempt runs in a daemon helper thread that
+  is abandoned at the deadline; the underlying call is not cancelled, but
+  neither the caller nor interpreter exit waits for it. A broken resolver
+  therefore costs `timeout`, not however long it takes to give up — which is
+  also what lets `resolve()`'s chain reach `nslookup` on schedule.
 
 **`resolve_nslookup(query, rdtype=None, ns=None, timeout=5.0, search=True)`**
 
@@ -338,8 +344,8 @@ path is usable. Address records only: `rdtype` must be `"a"`, `"aaaa"` or
 **`ping(dst, tries=1, timeout=1.0, ipv6=None, src=None, size=None, ttl=None, dont_fragment=False, method="icmp", port=None) -> PingResult`**
 
 `PingResult` is **truthy on success** and compares equal to `bool`, so
-`if ping(host):` and `== True` keep working, while carrying `.ok`, `.rtt_ms`,
-`.ttl`, `.source`, `.attempts`.
+`if ping(host):` and `== True` keep working, while carrying `.ok`, `.host`,
+`.rtt_ms`, `.ttl`, `.src`, `.attempts`.
 
 | Argument | Notes |
 | --- | --- |
@@ -360,6 +366,19 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
   "TTL expired in transit", so the reply address is verified rather than
   trusting the exit code. Locale-independent — it matches on addresses, never
   prose.
+- **`ipv6=` applies to all three methods**, not just the ICMP binary: it picks
+  the `-6`/`-4` flag, the family the reply address is resolved in, and the
+  family the `tcp`/`udp` probe sockets use. `ipv6=None` accepts either. A
+  hostname with several addresses counts as answered if the reply came from
+  any of them.
+- **The `udp` probe connects its socket before sending**, which is why the ICMP
+  port-unreachable is seen on POSIX and not only on Windows — an unconnected
+  UDP socket is never delivered an asynchronous ICMP error on Linux/BSD.
+  `ECONNREFUSED` and `ECONNRESET` both count as "the host answered".
+- **Known gap: macOS/BSD `ping6` reply lines.** Verification looks for
+  `from <addr>:`; BSD `ping6` is documented as printing `from <addr>,`. If
+  that holds, a v6 *literal* ping on macOS verifies as falsy despite a healthy
+  reply. Unverified on real hardware, so deliberately not "fixed" by guess.
 - An unusable `src` (unknown MAC, adapter with no address, foreign address)
   gives a falsy result — it **never silently falls back** to the default route.
 - Never raises: missing binary, hung subprocess and non-zero exit are all falsy.
@@ -417,7 +436,7 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
 
 ## Routing, hops and MTU
 
-- **`get_route(dst="8.8.8.8") -> Route`** — `.source`, `.gateway`,
+- **`get_route(dst="8.8.8.8") -> Route`** — `.dst`, `.src`, `.gateway`,
   `.interface_index`, `.on_link`. **First hop only, deliberately** — that is
   available unprivileged everywhere, unlike the full path. Never raises;
   unknown pieces are `None`/`0`. The gateway resolves on Windows and Linux only.
@@ -501,6 +520,12 @@ receives nothing, and looks fine:
   *both* send and receive. Without it the kernel picks by routing table, which
   on a multi-homed host is regularly the wrong adapter. An unknown interface
   **raises** rather than falling back.
+- **The two families identify an adapter differently**, and the spec is
+  resolved accordingly: IPv4 by local *address* (`IP_ADD_MEMBERSHIP`,
+  `IP_MULTICAST_IF`), IPv6 by interface *index* (`IPV6_JOIN_GROUP`,
+  `IPV6_MULTICAST_IF`). An adapter the platform reports **no index** for
+  raises for an IPv6 group, because index `0` means "kernel's choice" — the
+  default `interface=` was passed to override.
 
 ## UDP with arrival interface
 

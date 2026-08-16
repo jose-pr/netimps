@@ -148,6 +148,23 @@ map:
 - **Check for silent platform gaps before adding a socket option.** `IP_MTU`,
   `IP_MTU_DISCOVER`, `IP_DONTFRAG` and `SO_REUSEPORT` do not exist on Windows;
   binding a multicast socket to the group address fails there too.
+- **IPv6 multicast names an adapter by *index*, IPv4 by *address*.** They are
+  not two spellings of one thing: feeding an address to the v6 side does not
+  raise, it lands as index `0`, which is "kernel's choice". Use
+  `_iface_spec.interface_index()` for anything v6, `interface_address()` for
+  v4.
+- **POSIX delivers asynchronous ICMP errors only to *connected* UDP sockets.**
+  An unconnected probe never sees a port-unreachable and just times out, while
+  Windows reports it either way — so the unconnected version tests green here
+  and under-reports on Linux CI. Also note `_discover_mtu_udp` is still
+  unconnected by design; it treats such errors as failure anyway.
+- **`ThreadPoolExecutor.__exit__` calls `shutdown(wait=True)`,** and its atexit
+  hook joins worker threads too. It is therefore the wrong tool for bounding a
+  blocking call: a daemon `threading.Thread` joined through a queue is what
+  `_dns._resolve_system_once` uses, and why.
+- **Match a ping reply by address token, and remember hostnames are plural.**
+  `gethostbyname` is IPv4-only — use `getaddrinfo` with an explicit family, or
+  `ipv6=` silently does nothing.
 - **Windows exposes no cached path MTU.** Already investigated, so do not
   re-derive it: `MIB_IPFORWARDROW.dwForwardMtu` reads 0 (unsupported), and
   `MIB_IPFORWARD_ROW2` has no MTU field. `Interface.mtu` is the link MTU;

@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`resolve_system(timeout=)` now bounds wall time.** The lookup ran inside a
+  `with ThreadPoolExecutor(...)` block, whose `__exit__` joins the worker
+  still blocked in `getaddrinfo` -- so the timeout changed *what* was raised
+  but not *when*, and a 30s resolver hang still cost the caller 30s despite
+  `timeout=5.0`. `resolve()`'s chain consequently never reached `nslookup` at
+  the promised deadline either.
+- **`interface=` is honoured for IPv6 multicast.** The spec was reduced to an
+  address and then passed to `if_nametoindex()`, which always fails for an
+  address string, so the `IPV6_JOIN_GROUP` index silently stayed `0` --
+  "kernel's choice", the exact default `interface=` exists to override.
+  `IPV6_MULTICAST_IF` was never set at all, so sends left by the default
+  route while joins listened elsewhere. Both now resolve the adapter to its
+  interface index. IPv4 behaviour is unchanged.
+- **`ping(hostname, ipv6=True)` is no longer always false.** The reply address
+  was resolved with the IPv4-only `gethostbyname`, so a v6 reply was checked
+  against a v4 expectation and never matched. The expectation now comes from
+  `getaddrinfo` honouring `ipv6=`, and a name resolving to several addresses
+  counts as answered if the reply came from any of them.
+- **`ping(..., method="tcp"/"udp")` reaches IPv6 destinations.** Both probes
+  opened `AF_INET` sockets unconditionally, so a v6 destination failed inside
+  `connect`/`sendto` and was reported as unreachable -- a wrong falsy answer
+  rather than an error. `ipv6=` now applies to all three methods.
+- **`ping(..., method="udp")` detects ICMP port-unreachable on POSIX.** The
+  probe socket was never connected, and POSIX delivers asynchronous ICMP
+  errors only to connected UDP sockets -- so the documented "host answered,
+  nothing listening" signal worked on Windows alone and the probe just timed
+  out on Linux/macOS. `ECONNREFUSED` and `ECONNRESET` both now count.
+
+### Documentation
+
+- The shipped API header named `PingResult.source` and `Route.source`; both
+  attributes are spelled `.src` (and `PingResult.host` was unlisted).
+- Recorded the per-family multicast interface selection, `ping`'s `ipv6=`
+  reach across all three methods, and `resolve_system`'s real wall-time
+  deadline in the shipped header.
+- Added the known, still-unverified macOS/BSD `ping6` reply-shape gap
+  (`from <addr>,` rather than `from <addr>:`) to the header rather than
+  guessing a parser change without a macOS runner.
+
 ## [0.2.1] - 2026-07-30
 
 ### Added
@@ -196,7 +237,9 @@ below is simply what the package contains.
 - **`Host`**, **`retry()`/`backoff_delays()`**, and the named networks `APIPA`,
   `LOOPBACK_V4`, `LOOPBACK_V6`, `LINK_LOCAL_V6`.
 
-[Unreleased]: https://github.com/jose-pr/netimps/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/jose-pr/netimps/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/jose-pr/netimps/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/jose-pr/netimps/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jose-pr/netimps/compare/v0.0.2...v0.1.0
 [0.0.2]: https://github.com/jose-pr/netimps/releases/tag/v0.0.2
 [0.0.1]: https://github.com/jose-pr/netimps/releases/tag/v0.0.1
