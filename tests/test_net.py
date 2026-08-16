@@ -308,6 +308,69 @@ def test_resolve_system_empty_on_lookup_failure(monkeypatch):
     assert resolve_system("does-not-exist.invalid") == []
 
 
+@pytest.fixture
+def hung_getaddrinfo(monkeypatch):
+    """Patch getaddrinfo with a lookup that never answers on its own.
+
+    Yields nothing: the fake blocks until the fixture releases it on teardown,
+    so a test asserting on the *deadline* never has to actually wait one out.
+    """
+    import threading
+
+    released = threading.Event()
+
+    def _hang(*a, **k):
+        released.wait(30.0)
+        return []
+
+    monkeypatch.setattr(_dns._socket, "getaddrinfo", _hang)
+    try:
+        yield
+    finally:
+        released.set()
+
+
+def test_resolve_system_timeout_bounds_wall_time(hung_getaddrinfo):
+    """`timeout=` must bound how long the *caller* waits, not merely what raises.
+
+    The regression: running the lookup inside a
+    ``with ThreadPoolExecutor(...)`` block made the timeout cosmetic --
+    ``__exit__`` calls ``shutdown(wait=True)``, which joins the worker thread
+    still stuck inside ``getaddrinfo``, so the caller waited out the whole
+    hang and only the exception type changed.
+    """
+    import time
+
+    start = time.monotonic()
+    with pytest.raises(_dns.ResolutionError, match="timed out"):
+        resolve_system("slow.example.invalid", timeout=0.1)
+    elapsed = time.monotonic() - start
+    assert elapsed < 1.0, "waited %.2fs for a lookup capped at 0.1s" % elapsed
+
+
+def test_resolve_system_search_list_timeout_is_per_candidate(hung_getaddrinfo):
+    """Each candidate gets its own deadline; none of them may block past it."""
+    import time
+
+    start = time.monotonic()
+    with pytest.raises(_dns.ResolutionError, match="timed out"):
+        resolve_system("host", timeout=0.1, search=["a.example", "b.example"])
+    assert time.monotonic() - start < 2.0
+
+
+def test_resolve_chain_moves_on_when_system_backend_hangs(hung_getaddrinfo):
+    """A hung OS resolver must not hold the whole chain past `timeout`."""
+    import time
+
+    start = time.monotonic()
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(_dns, "_run", _fake_run(stdout=_NSLOOKUP_A_BIND))
+        result = resolve("example.com", timeout=0.1, backends=["system", "nslookup"])
+    elapsed = time.monotonic() - start
+    assert result == [IPv4Address("104.20.23.154"), IPv4Address("172.66.147.243")]
+    assert elapsed < 1.0, "the chain waited %.2fs on the hung backend" % elapsed
+
+
 def test_resolve_system_rejects_non_address_rdtype():
     """system has no MX/TXT/etc equivalent -- this is a caller bug, not a lookup outcome."""
     with pytest.raises(_dns.ResolutionError):

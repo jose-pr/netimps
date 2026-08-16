@@ -246,18 +246,36 @@ def _resolve_system_once(
         except _socket.gaierror:
             return []
     else:
-        import concurrent.futures as _futures
+        import queue as _queue
+        import threading as _threading
 
-        with _futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(_lookup)
+        # A *daemon* thread, joined through a queue rather than a
+        # ThreadPoolExecutor. The executor looks like the obvious fit and is
+        # the wrong one: `__exit__` calls `shutdown(wait=True)` on every
+        # supported Python, so raising out of the `with` block joins the
+        # worker still stuck inside getaddrinfo() and the caller waits out the
+        # whole hang anyway -- `timeout` would change *what* is raised but not
+        # *when*. Its atexit hook joins pool threads too, so even
+        # `shutdown(wait=False)` would move the hang to interpreter exit.
+        # A daemon thread is abandoned at both points, which is the contract.
+        outcome: "_queue.Queue" = _queue.Queue(maxsize=1)
+
+        def _run_lookup() -> None:
             try:
-                infos = future.result(timeout=timeout)
-            except _socket.gaierror:
+                outcome.put(("ok", _lookup()))
+            except BaseException as exc:  # relayed to the caller verbatim
+                outcome.put(("error", exc))
+
+        _threading.Thread(target=_run_lookup, daemon=True).start()
+        try:
+            kind, payload = outcome.get(timeout=timeout)
+        except _queue.Empty:
+            raise ResolutionError("resolve_system timed out after %.1fs" % (timeout,))
+        if kind == "error":
+            if isinstance(payload, _socket.gaierror):
                 return []
-            except _futures.TimeoutError as exc:
-                raise ResolutionError(
-                    "resolve_system timed out after %.1fs" % (timeout,)
-                ) from exc
+            raise payload
+        infos = payload
 
     seen = []
     for info in infos:
@@ -308,9 +326,13 @@ def resolve_system(
         otherwise. Anything else raises.
     :param timeout: seconds to wait *per candidate name tried* (see
         ``search``). There is no native per-call timeout for
-        ``getaddrinfo``/``gethostbyaddr``, so each attempt runs in a helper
-        thread and is abandoned (without cancelling the underlying blocking
-        call) past the deadline. ``None`` waits indefinitely.
+        ``getaddrinfo``/``gethostbyaddr``, so each attempt runs in a daemon
+        helper thread and is abandoned (without cancelling the underlying
+        blocking call) past the deadline. The deadline bounds **wall time**:
+        a resolver that hangs for a minute still raises
+        :class:`ResolutionError` at ``timeout``, and the abandoned thread
+        holds up neither the caller nor interpreter exit. ``None`` waits
+        indefinitely.
     :param search: how to expand an unqualified ``query``. Ignored for
         ``rdtype="ptr"`` -- an address has no search-list suffix to try.
         There is no per-call search-list override on
