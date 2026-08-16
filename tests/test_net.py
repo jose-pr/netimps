@@ -458,14 +458,14 @@ def test_resolve_system_search_list_ignored_for_already_qualified_query(monkeypa
 # --------------------------------------------------------------------------- #
 
 _NSLOOKUP_A_BIND = (
-    b"Server:\t\t192.0.2.1\nAddress:\t192.0.2.1#53\n\n"
+    b"Server:\t\t192.0.2.53\nAddress:\t192.0.2.53#53\n\n"
     b"Non-authoritative answer:\n"
     b"Name:\texample.com\nAddress: 104.20.23.154\n"
     b"Name:\texample.com\nAddress: 172.66.147.243\n"
 )
 
 _NSLOOKUP_AAAA_WINDOWS = (
-    b"Server:  ns1.example.net\r\nAddress:  192.0.2.1\r\n\r\n"
+    b"Server:  ns1.example.net\r\nAddress:  192.0.2.53\r\n\r\n"
     b"Non-authoritative answer:\r\n"
     b"Name:    example.com\r\n"
     b"Addresses:  2606:4700:10::ac42:93f3\r\n"
@@ -476,7 +476,7 @@ _NSLOOKUP_AAAA_WINDOWS = (
 # configurations even for a single -type= query. The parser must filter to
 # the requested family rather than trust the query type alone.
 _NSLOOKUP_A_WINDOWS_MIXED_FAMILY = (
-    b"Server:  ns1.example.net\r\nAddress:  192.0.2.1\r\n\r\n"
+    b"Server:  ns1.example.net\r\nAddress:  192.0.2.53\r\n\r\n"
     b"Non-authoritative answer:\r\n"
     b"Name:    example.com\r\n"
     b"Addresses:  2606:4700:10::ac42:93f3\r\n"
@@ -486,7 +486,7 @@ _NSLOOKUP_A_WINDOWS_MIXED_FAMILY = (
 )
 
 _NSLOOKUP_PTR = (
-    b"Server:\t\t192.0.2.1\nAddress:\t192.0.2.1#53\n\n"
+    b"Server:\t\t192.0.2.53\nAddress:\t192.0.2.53#53\n\n"
     b"8.8.8.8.in-addr.arpa\tname = dns.google.\n"
 )
 
@@ -494,7 +494,7 @@ _NSLOOKUP_PTR = (
 # requested type. Exit 0, no error text anywhere, no Address(es): line --
 # just a bare Name:. Verified against live `nslookup -type=a` output.
 _NSLOOKUP_A_WINDOWS_NODATA = (
-    b"Server:  ns1.example.net\r\nAddress:  192.0.2.1\r\n\r\n"
+    b"Server:  ns1.example.net\r\nAddress:  192.0.2.53\r\n\r\n"
     b"Name:    nonexistent-xyz-abc.example.com\r\n\r\n"
 )
 
@@ -552,7 +552,7 @@ def test_resolve_nslookup_nxdomain_on_stderr_is_empty_not_an_error(monkeypatch):
         _dns,
         "_run",
         _fake_run(
-            stdout=b"Server:  x\r\nAddress:  192.0.2.1\r\n\r\n",
+            stdout=b"Server:  x\r\nAddress:  192.0.2.53\r\n\r\n",
             stderr=b"*** x can't find nope.invalid: Non-existent domain\r\n",
         ),
     )
