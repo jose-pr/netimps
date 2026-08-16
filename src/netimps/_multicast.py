@@ -15,6 +15,13 @@ The parts people get wrong
   routing table -- which on a host with VMs, containers or a VPN is regularly
   the wrong adapter, and the socket then receives nothing at all. Pass one when
   it matters.
+* **The two families name an adapter differently.** IPv4 identifies it by a
+  local *address* (``IP_ADD_MEMBERSHIP``'s ``imr_interface``,
+  ``IP_MULTICAST_IF``); IPv6 identifies it by interface *index*
+  (``IPV6_JOIN_GROUP``'s ``ipv6mr_interface``, ``IPV6_MULTICAST_IF``).
+  Feeding an address to the v6 side does not fail loudly -- it lands as index
+  ``0``, which means "kernel's choice", i.e. the default this module exists
+  to let you override.
 * **``SO_REUSEPORT`` does not exist on Windows.** Code that sets it
   unconditionally raises there, so it is applied only where present.
 * **Default TTL is 1**, confining traffic to the local link. Raising it is a
@@ -25,9 +32,10 @@ from __future__ import annotations
 
 import socket as _socket
 import struct as _struct
-from typing import List, Optional, Union
+from typing import List, Union
 
 from ._iface_spec import InterfaceSpec, interface_address as _interface_address
+from ._iface_spec import interface_index as _interface_index
 from ._ip import AddressLike
 
 __all__ = ["multicast_socket", "join_group", "leave_group", "is_multicast"]
@@ -50,18 +58,19 @@ def is_multicast(address: "AddressLike") -> bool:
     return bool(parsed is not None and parsed.is_multicast)
 
 
-def _membership_request(group: str, interface_address: "Optional[str]", ipv6: bool):
-    """Build the mreq structure for IP_ADD_MEMBERSHIP / IPV6_JOIN_GROUP."""
+def _membership_request(group: str, interface: "InterfaceSpec", ipv6: bool):
+    """Build the mreq structure for IP_ADD_MEMBERSHIP / IPV6_JOIN_GROUP.
+
+    Resolving the interface spec lives here rather than in the callers
+    because the two families need *different* resolutions of the same spec:
+    IPv4 wants a local address, IPv6 wants an interface index.
+    """
     if ipv6:
-        index = 0
-        if interface_address:
-            try:
-                index = _socket.if_nametoindex(interface_address)
-            except (OSError, AttributeError, ValueError):
-                index = 0
+        index = _interface_index(interface) or 0
         return _socket.inet_pton(_socket.AF_INET6, group) + _struct.pack("@I", index)
 
-    local = interface_address or "0.0.0.0"
+    address = _interface_address(interface, want_ipv6=False)
+    local = "0.0.0.0" if address is None else str(address)
     return _struct.pack("4s4s", _socket.inet_aton(group), _socket.inet_aton(local))
 
 
@@ -75,17 +84,19 @@ def join_group(
     host with VMs or a VPN is often the wrong adapter -- and the failure is
     silent: the socket simply never receives.
 
-    Raises :class:`ValueError` for a non-multicast group or an interface with no
-    usable address, and :class:`OSError` if the kernel rejects the join.
+    The spec is resolved per family: to a local **address** for an IPv4
+    group, to an interface **index** for an IPv6 one, since that is what each
+    ``mreq`` carries.
+
+    Raises :class:`ValueError` for a non-multicast group, or for an interface
+    that resolves to no usable address (IPv4) or no index (IPv6), and
+    :class:`OSError` if the kernel rejects the join.
     """
     if not is_multicast(group):
         raise ValueError("%r is not a multicast group" % (group,))
 
     ipv6 = ":" in group
-    address = _interface_address(interface, want_ipv6=ipv6)
-    request = _membership_request(
-        group, None if address is None else str(address), ipv6
-    )
+    request = _membership_request(group, interface, ipv6)
     if ipv6:
         sock.setsockopt(_socket.IPPROTO_IPV6, _socket.IPV6_JOIN_GROUP, request)
     else:
@@ -104,10 +115,7 @@ def leave_group(
         raise ValueError("%r is not a multicast group" % (group,))
 
     ipv6 = ":" in group
-    address = _interface_address(interface, want_ipv6=ipv6)
-    request = _membership_request(
-        group, None if address is None else str(address), ipv6
-    )
+    request = _membership_request(group, interface, ipv6)
     if ipv6:
         sock.setsockopt(_socket.IPPROTO_IPV6, _socket.IPV6_LEAVE_GROUP, request)
     else:
@@ -139,7 +147,10 @@ def multicast_socket(
         pass the port the senders use.
     :param interface: :class:`Interface`, MAC, adapter name or local address to
         join through. **Strongly recommended on multi-homed hosts** -- the
-        routing-table default is frequently the wrong adapter.
+        routing-table default is frequently the wrong adapter. Pins outgoing
+        traffic as well as the joins (``IP_MULTICAST_IF`` for IPv4,
+        ``IPV6_MULTICAST_IF`` for IPv6), so sends and receives cannot end up
+        on different adapters.
     :param ttl: hop limit for outgoing datagrams. The default of **1 keeps
         traffic on the local link**; raise it deliberately to cross routers.
     :param loop: whether this host receives its own transmissions. ``True``
@@ -180,14 +191,26 @@ def multicast_socket(
             sock.setsockopt(_socket.IPPROTO_IP, _socket.IP_MULTICAST_LOOP, int(loop))
 
         # Pin outgoing traffic to the chosen adapter as well as incoming, or
-        # sends leave by the default route while joins listen elsewhere.
-        outgoing = _interface_address(interface, want_ipv6=ipv6)
-        if outgoing is not None and not ipv6:
-            sock.setsockopt(
-                _socket.IPPROTO_IP,
-                _socket.IP_MULTICAST_IF,
-                _socket.inet_aton(str(outgoing)),
-            )
+        # sends leave by the default route while joins listen elsewhere. The
+        # option is per-family: IPv4 names the adapter by local address, IPv6
+        # by interface index.
+        if interface is not None:
+            if ipv6:
+                index = _interface_index(interface)
+                if index:
+                    sock.setsockopt(
+                        _socket.IPPROTO_IPV6,
+                        _socket.IPV6_MULTICAST_IF,
+                        _struct.pack("@I", index),
+                    )
+            else:
+                outgoing = _interface_address(interface, want_ipv6=False)
+                if outgoing is not None:
+                    sock.setsockopt(
+                        _socket.IPPROTO_IP,
+                        _socket.IP_MULTICAST_IF,
+                        _socket.inet_aton(str(outgoing)),
+                    )
 
         if bind:
             # "" rather than the group address: binding to the group works on

@@ -277,3 +277,136 @@ def test_multicast_socket_closes_on_failure(monkeypatch):
     with pytest.raises(ValueError):
         netimps.multicast_socket("239.7.7.45", 0, interface="no-such-nic")
     assert closed, "socket was not closed after the failure"
+
+
+# --------------------------------------------------------------------------- #
+# multicast: per-family interface selection                                    #
+# --------------------------------------------------------------------------- #
+#
+# IPv6 identifies an adapter by *index*, IPv4 by local *address*. These fake
+# get_interfaces() so the assertions are exact rather than host-dependent, and
+# capture setsockopt on a stub rather than asking the kernel to accept a
+# membership for an adapter that may not carry IPv6 on the runner.
+
+_FAKE_INDEX = 37
+
+
+@pytest.fixture
+def fake_adapter(monkeypatch):
+    """One non-loopback adapter with both families and a known index."""
+    adapter = netimps.Interface(
+        name="fake0",
+        index=_FAKE_INDEX,
+        mac=netimps.MACAddress("02:00:00:00:00:01"),
+        ips=[
+            netimps.IPv4Interface("192.0.2.10/24"),
+            netimps.IPv6Interface("2001:db8::10/64"),
+        ],
+    )
+    # Everything reaches enumeration through `._ifaddrs.get_interfaces` (a
+    # function-local import in each caller), so one patch covers them all.
+    monkeypatch.setattr(netimps._ifaddrs, "get_interfaces", lambda **k: [adapter])
+    return adapter
+
+
+class _StubSocket:
+    """Records setsockopt calls; everything else is a no-op."""
+
+    def __init__(self, *args, **kwargs):
+        self.options = []
+
+    def setsockopt(self, level, option, value):
+        self.options.append((level, option, value))
+
+    def bind(self, address):
+        pass
+
+    def close(self):
+        pass
+
+
+@pytest.fixture
+def stub_socket(monkeypatch):
+    made = []
+
+    def _factory(*args, **kwargs):
+        sock = _StubSocket(*args, **kwargs)
+        made.append(sock)
+        return sock
+
+    monkeypatch.setattr(netimps._multicast._socket, "socket", _factory)
+    return made
+
+
+@pytest.mark.parametrize("spec", ["fake0", "2001:db8::10", "02:00:00:00:00:01"])
+def test_ipv6_membership_carries_the_interface_index(fake_adapter, spec):
+    """The v6 mreq's trailing index must be the adapter's, not 0.
+
+    The regression: `interface=` was reduced to an *address* and then fed to
+    `if_nametoindex()`, which always raises for an address string -- so the
+    index silently stayed 0, i.e. "kernel's choice", the exact default the
+    caller passed `interface=` to override.
+    """
+    import struct
+
+    request = netimps._multicast._membership_request("ff02::fb", spec, ipv6=True)
+    assert len(request) == 20  # 16-byte group + 4-byte index
+    assert request[:16] == socket.inet_pton(socket.AF_INET6, "ff02::fb")
+    assert struct.unpack("@I", request[16:])[0] == _FAKE_INDEX
+
+
+def test_ipv6_membership_without_an_interface_is_still_kernel_choice(fake_adapter):
+    """No `interface=` means index 0 -- unchanged, and the documented default."""
+    import struct
+
+    request = netimps._multicast._membership_request("ff02::fb", None, ipv6=True)
+    assert struct.unpack("@I", request[16:])[0] == 0
+
+
+def test_ipv4_membership_is_unchanged_by_the_v6_fix(fake_adapter):
+    """v4 still names the adapter by address, byte-for-byte as before."""
+    request = netimps._multicast._membership_request("239.7.7.50", "fake0", ipv6=False)
+    assert request == socket.inet_aton("239.7.7.50") + socket.inet_aton("192.0.2.10")
+
+
+def test_ipv6_multicast_socket_sets_multicast_if(fake_adapter, stub_socket):
+    """Sends must be pinned too, or joins and sends use different adapters."""
+    import struct
+
+    netimps.multicast_socket("ff02::fb", 5353, interface="fake0")
+    (sock,) = stub_socket
+    pinned = [
+        value
+        for level, option, value in sock.options
+        if (level, option) == (socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_IF)
+    ]
+    assert pinned, "IPV6_MULTICAST_IF was never set"
+    assert struct.unpack("@I", pinned[0])[0] == _FAKE_INDEX
+
+
+def test_ipv4_multicast_socket_still_sets_multicast_if_by_address(
+    fake_adapter, stub_socket
+):
+    netimps.multicast_socket("239.7.7.51", 5354, interface="fake0")
+    (sock,) = stub_socket
+    pinned = [
+        value
+        for level, option, value in sock.options
+        if (level, option) == (socket.IPPROTO_IP, socket.IP_MULTICAST_IF)
+    ]
+    assert pinned == [socket.inet_aton("192.0.2.10")]
+
+
+def test_ipv6_interface_without_an_index_raises_rather_than_defaulting(monkeypatch):
+    """Index 0 is the kernel's "pick for me" -- never a resolved answer.
+
+    Returning it for an adapter the caller explicitly named would recreate
+    the silent wrong-adapter failure, so an adapter the platform reports no
+    index for is an error instead.
+    """
+    indexless = netimps.Interface(
+        name="fake0", index=0, ips=[netimps.IPv6Interface("2001:db8::10/64")]
+    )
+    monkeypatch.setattr(netimps._ifaddrs, "get_interfaces", lambda **k: [indexless])
+    with pytest.raises(ValueError, match="reports no index"):
+        netimps._multicast._membership_request("ff02::fb", "fake0", ipv6=True)

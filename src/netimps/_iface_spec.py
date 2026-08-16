@@ -24,7 +24,7 @@ from ._ifaddrs import Interface
 from ._ip import IPAddress
 from ._mac import MACAddress
 
-__all__ = ["interface_address"]
+__all__ = ["interface_address", "interface_index"]
 
 #: The loose "which interface?" spec every ``src=``/``interface=`` parameter
 #: in the package accepts: an :class:`Interface`, a :class:`MACAddress` (or
@@ -109,3 +109,71 @@ def interface_address(
     if parsed is None:
         return _fail("cannot resolve %r to a local address" % (interface,))
     return parsed
+
+
+def interface_index(interface: "InterfaceSpec", strict: bool = True) -> "Optional[int]":
+    """Reduce an interface spec to its OS interface index.
+
+    The index-shaped sibling of :func:`interface_address`, for the OS
+    interfaces that identify an adapter by number rather than by address:
+    ``IPV6_JOIN_GROUP``/``IPV6_LEAVE_GROUP``'s ``mreq`` and
+    ``IPV6_MULTICAST_IF`` all take an index. Reducing such a spec to an
+    address first is not a lossy shortcut but an outright wrong answer --
+    ``if_nametoindex("2001:db8::5")`` raises, leaving index ``0``, which the
+    kernel reads as "choose by routing table".
+
+    :param interface: an :class:`Interface`, a :class:`MACAddress` (or MAC
+        string), an adapter name, an address held by a local interface, or
+        ``None``.
+    :param strict: when True (the default) a spec that names no local
+        interface -- or one the platform reports no index for -- raises
+        :class:`ValueError`; when False it returns ``None``.
+
+    ``None`` in gives ``None`` out -- "no preference", which callers translate
+    into leaving the index at ``0`` and letting the kernel pick.
+
+    An index of ``0`` is never returned as a value: ``0`` *is* the kernel's
+    "pick for me", so reporting it for an adapter the caller explicitly named
+    would recreate the silent wrong-adapter failure this exists to prevent.
+    """
+    from . import IPAddress, MACAddress, interface_for, is_valid, try_parse
+    from ._ifaddrs import Interface, get_interfaces
+
+    if interface is None:
+        return None
+
+    def _fail(message: str):
+        if strict:
+            raise ValueError(message)
+        return None
+
+    match: "Optional[Interface]" = None
+    if isinstance(interface, Interface):
+        match = interface
+    elif isinstance(interface, MACAddress) or (
+        isinstance(interface, str) and is_valid(interface, MACAddress)
+    ):
+        wanted = MACAddress(interface)
+        match = interface_for(wanted)
+        if match is None:
+            return _fail("no interface with MAC %s" % (wanted,))
+    elif isinstance(interface, str) and not is_valid(interface, IPAddress):
+        # An adapter name. Resolved through get_interfaces() rather than
+        # socket.if_nametoindex() so the Windows *friendly* name works too --
+        # if_nametoindex there wants the adapter's GUID-ish system name.
+        match = next(
+            (iface for iface in get_interfaces() if iface.name == interface), None
+        )
+        if match is None:
+            return _fail("no interface named %r" % (interface,))
+    else:
+        address = try_parse(str(interface).strip(), IPAddress)
+        if address is None:
+            return _fail("cannot resolve %r to a local interface" % (interface,))
+        match = interface_for(address)
+        if match is None:
+            return _fail("no local interface holds address %s" % (address,))
+
+    if not match.index:
+        return _fail("interface %r reports no index on this platform" % (match.name,))
+    return match.index
