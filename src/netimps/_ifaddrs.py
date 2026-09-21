@@ -27,9 +27,14 @@ Loopback name        ``lo``              ``lo0``             ``Loopback Pseudo-I
 
 Two consequences worth stating outright, because getting them wrong is subtle:
 
-* ``Interface.is_loopback`` is derived from the *addresses*, never the name --
-  a ``name == "lo"`` test silently fails on macOS (``lo0``) and is meaningless
-  on Windows.
+* ``Interface.is_loopback`` comes from the kernel's own flag -- ``IFF_LOOPBACK``
+  on POSIX, ``IF_TYPE_SOFTWARE_LOOPBACK`` on Windows -- and never from the
+  name: a ``name == "lo"`` test silently fails on macOS (``lo0``) and is
+  meaningless on Windows. The address heuristic remains only as the fallback
+  for the degraded enumeration path, which reports no flags; it is wrong
+  wherever a loopback interface *also* carries a routable address, which WSL2
+  does by default (``10.255.255.254/32`` on ``lo``) and every keepalived /
+  anycast / VIP host does on purpose.
 * Prefixes are always real prefix lengths. The POSIX netmask sockaddr is
   converted by counting bits; Windows already reports an integer. Either way
   ``iface.ips[0].network`` behaves identically.
@@ -65,6 +70,7 @@ from typing import (
     Iterator,
     List,
     Optional,
+    Sequence,
     Tuple,
     Union,
 )
@@ -87,6 +93,12 @@ _IS_WINDOWS = _sys.platform == "win32"
 _AF_PACKET = 17  # Linux
 _AF_LINK = 18  # macOS / BSD
 
+#: ``IFF_LOOPBACK`` in ``ifa_flags``. Same value (8) on Linux and on the BSDs.
+_IFF_LOOPBACK = 0x8
+#: ``IF_TYPE_SOFTWARE_LOOPBACK`` in ``IP_ADAPTER_ADDRESSES.IfType`` (IANA
+#: ifType 24), the Windows spelling of the same fact.
+_IF_TYPE_SOFTWARE_LOOPBACK = 24
+
 
 class Interface:
     """One network interface, normalised to be identical across platforms.
@@ -96,18 +108,26 @@ class Interface:
             *friendly* name -- never the raw GUID).
         index: :func:`socket.if_nametoindex` value, or ``0`` when unknown.
         mac: The hardware address, or ``None`` for interfaces without one
-            (loopback, tunnels).
+            (loopback, tunnels). An all-zero address is normalised to ``None``:
+            Linux reports the loopback MAC as ``00:00:00:00:00:00`` where
+            macOS and Windows report nothing at all, and ``mac is None`` should
+            mean the same thing on every platform.
         ips: Every address bound to the interface, each as an
             ``IPv4Interface``/``IPv6Interface`` carrying its real prefix.
         mtu: Link MTU in bytes, or ``None`` when the platform does not report
             it. This is the *local link* MTU -- for a bottleneck further along
             a path see :func:`netimps.discover_mtu`.
+        loopback: The kernel's own loopback flag (``IFF_LOOPBACK`` on POSIX,
+            ``IF_TYPE_SOFTWARE_LOOPBACK`` on Windows), or ``None`` when it was
+            not reported -- the degraded enumeration path, and objects built by
+            hand. Read it through :attr:`is_loopback`, which falls back to the
+            addresses when it is ``None``.
         raw: ``None`` unless enumerated with ``get_interfaces(raw=True)``, in
             which case a platform-specific dict of leftovers. **Not portable**
             and explicitly outside the stability guarantee.
     """
 
-    __slots__ = ("name", "index", "mac", "ips", "mtu", "raw")
+    __slots__ = ("name", "index", "mac", "ips", "mtu", "loopback", "raw")
 
     def __init__(
         self,
@@ -117,28 +137,39 @@ class Interface:
         ips: "Optional[List[_IPInterface]]" = None,
         mtu: "Optional[int]" = None,
         raw: "Optional[Dict[str, Any]]" = None,
+        loopback: "Optional[bool]" = None,
     ) -> None:
         self.name = name
         self.index = index
         self.mac = mac
         self.ips = ips if ips is not None else []
         self.mtu = mtu
+        self.loopback = loopback
         self.raw = raw
 
     @property
     def is_loopback(self) -> bool:
         """True when this is the loopback interface.
 
-        Derived from the addresses rather than the name: ``lo`` (Linux),
+        The kernel's own answer when there is one: ``IFF_LOOPBACK`` on POSIX,
+        ``IF_TYPE_SOFTWARE_LOOPBACK`` on Windows, captured into
+        :attr:`loopback` during enumeration. Never the name -- ``lo`` (Linux),
         ``lo0`` (macOS) and ``Loopback Pseudo-Interface 1`` (Windows) share no
-        common spelling, but ``127.0.0.0/8`` and ``::1`` do.
+        common spelling.
 
-        Requires *a* loopback address and **no routable one**. Not "every
-        address is loopback": macOS's ``lo0`` also carries ``fe80::1/64``, so
-        an all-must-match test reports it as non-loopback. Link-local addresses
-        are ignored here for that reason -- they are not routable, so they do
-        not make an interface non-loopback.
+        Falls back to the addresses only when :attr:`loopback` is ``None`` (the
+        degraded enumeration path reports no flags, and neither do hand-built
+        objects). That fallback requires *a* loopback address and **no routable
+        one**, which is a guess rather than an answer: WSL2 binds a routable
+        ``10.255.255.254/32`` to ``lo`` on every installation, and binding a
+        service address to the loopback interface is the standard
+        keepalived/anycast pattern -- on such a host the heuristic reports that
+        there is no loopback interface at all. Link-local addresses are ignored
+        by it, since macOS's ``lo0`` also carries ``fe80::1/64`` and a
+        non-routable address cannot make an interface non-loopback.
         """
+        if self.loopback is not None:
+            return self.loopback
         if not self.ips:
             return False
         has_loopback = False
@@ -214,6 +245,16 @@ class Interface:
             and self.mtu == other.mtu
         )
 
+    def __hash__(self) -> int:
+        """Hash the same fields :meth:`__eq__` compares, so equal hashes equal.
+
+        Defining ``__eq__`` without this sets ``__hash__`` to ``None``, which
+        made ``set(get_interfaces())`` -- de-duplicating adapters, the obvious
+        operation on the package's flagship return value -- raise
+        ``TypeError``. :attr:`ips` is a list, hence the tuple.
+        """
+        return hash((self.name, self.index, self.mac, tuple(self.ips), self.mtu))
+
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -256,6 +297,10 @@ def _make_ip_interface(addr: str, prefix: int) -> "Optional[_IPInterface]":
 # POSIX: getifaddrs(3)
 # ---------------------------------------------------------------------------
 
+#: Annotated as ``Any``-valued because the two branches have different field
+#: types, and ctypes' own ``_fields_`` signature is a union of several shapes.
+_sockaddr_header_fields: "List[Tuple[str, Any]]"
+
 if _HAS_SA_LEN:
     # macOS / BSD: 1-byte length, then 1-byte family.
     _sockaddr_header_fields = [("sa_len", c_uint8), ("sa_family", c_uint8)]
@@ -287,9 +332,17 @@ class _SockaddrIn6(Structure):
 
 
 class _SockaddrLl(Structure):
-    """Linux ``struct sockaddr_ll`` -- carries the MAC under AF_PACKET."""
+    """Linux ``struct sockaddr_ll`` -- carries the MAC under AF_PACKET.
 
-    _fields_ = _sockaddr_header_fields + [
+    Declared with the *Linux* header unconditionally rather than the host's:
+    ``sockaddr_ll`` exists only on Linux, so its layout never has the BSD
+    ``sa_len`` byte no matter where this module is imported. The AF_PACKET
+    branch reading it is guarded by ``not _HAS_SA_LEN`` anyway, and pinning the
+    layout keeps it inspectable from any platform.
+    """
+
+    _fields_ = [
+        ("sll_family", c_uint16),
         ("sll_protocol", c_uint16),
         ("sll_ifindex", c_int),
         ("sll_hatype", c_uint16),
@@ -302,19 +355,58 @@ class _SockaddrLl(Structure):
 class _SockaddrDl(Structure):
     """macOS/BSD ``struct sockaddr_dl`` -- carries the MAC under AF_LINK.
 
-    The address sits ``sdl_nlen`` bytes into ``sdl_data`` (the interface name
-    is stored first, without a terminator), so it cannot be read at a fixed
-    offset.
+    Declared with the *BSD* header unconditionally, for the same reason as
+    :class:`_SockaddrLl`: ``sockaddr_dl`` is a BSD structure and always has the
+    leading ``sdl_len`` byte.
+
+    ``sdl_data`` is **12 bytes, as the C struct declares it** -- ``sizeof`` is
+    20. It used to be declared at 46 (a 54-byte struct), which made every read
+    of it a 34-byte over-read past what ``getifaddrs`` allocated. It never
+    faulted, because getifaddrs hands back one contiguous arena, but it was
+    undefined behaviour a page boundary could have turned into a crash.
+
+    The structure is *variable-length*: the interface name and the hardware
+    address are packed into ``sdl_data`` one after the other, and ``sdl_len``
+    reports how many bytes really exist. So the address sits ``sdl_nlen`` bytes
+    in -- past the declared 12 when the name is long -- and every read of it
+    must be bounded by ``sdl_len`` rather than by ``sizeof``.
     """
 
-    _fields_ = _sockaddr_header_fields + [
+    _fields_ = [
+        ("sdl_len", c_uint8),
+        ("sdl_family", c_uint8),
         ("sdl_index", c_uint16),
         ("sdl_type", c_uint8),
         ("sdl_nlen", c_uint8),
         ("sdl_alen", c_uint8),
         ("sdl_slen", c_uint8),
-        ("sdl_data", c_char * 46),
+        ("sdl_data", c_char * 12),
     ]
+
+
+def _mac_from_sockaddr_dl(sdl: "_SockaddrDl") -> "Optional[MACAddress]":
+    """Extract the MAC from a BSD ``sockaddr_dl``, or ``None``.
+
+    The address starts ``sdl_nlen`` bytes into ``sdl_data`` (the interface
+    name is stored first, without a terminator), so it cannot be read at a
+    fixed offset -- and it can begin past the declared end of ``sdl_data``,
+    since the structure is variable-length.
+
+    ``sdl_len`` is the bound: it is the size the kernel actually allocated, so
+    anything that does not fit inside it is not ours to read. A structure whose
+    ``sdl_len`` does not cover the address yields ``None`` rather than a guess.
+
+    The read goes through the struct's own address because ``sdl.sdl_data`` is
+    a ``c_char`` array, which ctypes converts to ``bytes`` on attribute access
+    -- and ``addressof()`` on that copy is a ``TypeError``, not a pointer to
+    the buffer.
+    """
+    if sdl.sdl_alen != 6:
+        return None
+    offset = _SockaddrDl.sdl_data.offset + sdl.sdl_nlen
+    if offset + 6 > sdl.sdl_len:
+        return None
+    return _mac(_ctypes.string_at(_ctypes.addressof(sdl) + offset, 6))
 
 
 class _Ifaddrs(Structure):
@@ -356,7 +448,11 @@ def _posix_mtu(name: str) -> "Optional[int]":
         return None
     try:
         request = _struct.pack("16sI12x", name.encode("utf-8")[:15], 0)
-        packed = fcntl.ioctl(sock.fileno(), _SIOCGIFMTU, request)
+        # typeshed marks the whole fcntl module as POSIX-only, so a Windows
+        # type-check run sees no `ioctl`; the import above is what guards it.
+        packed = fcntl.ioctl(  # type: ignore[attr-defined]
+            sock.fileno(), _SIOCGIFMTU, request
+        )
         return int(_struct.unpack("16sI12x", packed)[1]) or None
     except (OSError, ValueError, _struct.error):
         return None
@@ -413,11 +509,16 @@ def _posix_interfaces(want_raw: bool) -> "List[Interface]":
                     index = _socket.if_nametoindex(name)
                 except (OSError, AttributeError, ValueError):
                     index = 0
+                flags = int(node.ifa_flags)
                 iface = Interface(
                     name=name,
                     index=index,
                     mtu=_posix_mtu(name),
-                    raw={"flags": node.ifa_flags, "families": []} if want_raw else None,
+                    # The kernel's own answer, rather than the address
+                    # heuristic that stood in for it. Every node of one
+                    # interface carries the same flags, so the first is enough.
+                    loopback=bool(flags & _IFF_LOOPBACK),
+                    raw={"flags": flags, "families": []} if want_raw else None,
                 )
                 found[name] = iface
 
@@ -459,20 +560,9 @@ def _posix_interfaces(want_raw: bool) -> "List[Interface]":
 
             elif family == _AF_LINK and _HAS_SA_LEN:
                 sdl = _cast_sockaddr(node.ifa_addr, _SockaddrDl)
-                if sdl.sdl_alen == 6:
-                    # The MAC follows the interface name inside sdl_data, so it
-                    # starts sdl_nlen bytes in rather than at a fixed offset.
-                    #
-                    # Read it through the struct's own address: `sdl.sdl_data`
-                    # is a `c_char` array, which ctypes converts to `bytes` on
-                    # attribute access -- and `addressof()` on that copy is a
-                    # TypeError, not a pointer to the buffer.
-                    offset = _SockaddrDl.sdl_data.offset
-                    raw_data = _ctypes.string_at(
-                        _ctypes.addressof(sdl) + offset, _SockaddrDl.sdl_data.size
-                    )
-                    start = sdl.sdl_nlen
-                    iface.mac = _mac(raw_data[start : start + 6])
+                mac = _mac_from_sockaddr_dl(sdl)
+                if mac is not None:
+                    iface.mac = mac
     finally:
         # getifaddrs allocates; skipping this leaks on every call.
         freeifaddrs(head)
@@ -655,6 +745,8 @@ def _windows_interfaces(want_raw: bool) -> "List[Interface]":
                 mac=mac,
                 ips=ips,
                 mtu=mtu if 0 < mtu < 0xFFFFFFFF else None,
+                # IfType is the Windows spelling of IFF_LOOPBACK.
+                loopback=int(node.IfType) == _IF_TYPE_SOFTWARE_LOOPBACK,
                 raw=raw,
             )
         )
@@ -684,14 +776,16 @@ def _fallback_interfaces(want_raw: bool) -> "List[Interface]":
     except OSError:
         infos = []
     for family, _, _, _, sockaddr in infos:
-        addr = sockaddr[0]
+        # getaddrinfo's sockaddr is typed as a union; the first element is the
+        # address text for both AF_INET and AF_INET6.
+        addr = str(sockaddr[0])
         if addr in seen:
             continue
         seen.add(addr)
         if family == _socket.AF_INET:
             built = _make_ip_interface(addr, 32)
         elif family == _socket.AF_INET6:
-            built = _make_ip_interface(str(addr).split("%")[0], 128)
+            built = _make_ip_interface(addr.split("%")[0], 128)
         else:
             continue
         if built is not None:
@@ -712,10 +806,20 @@ def _fallback_interfaces(want_raw: bool) -> "List[Interface]":
     ]
 
 
-def _mac(octets: bytes):
-    """Build a MACAddress, deferring the import to avoid a circular import."""
+def _mac(octets: bytes) -> "Optional[MACAddress]":
+    """Build a MACAddress, deferring the import to avoid a circular import.
+
+    An **all-zero** address is normalised to ``None``: Linux reports the
+    loopback MAC as ``00:00:00:00:00:00`` while macOS and Windows report no
+    address at all, and ``iface.mac is None`` must mean "no hardware address"
+    on every platform rather than growing a per-platform branch in caller code.
+    ``MACAddress(b"\\x00" * 6)`` itself stays perfectly valid -- this is a
+    normalisation of what the OS reported, not a change to the type.
+    """
     from . import MACAddress
 
+    if not any(octets):
+        return None
     try:
         return MACAddress(octets)
     except (ValueError, TypeError):
@@ -769,20 +873,43 @@ def iter_addresses(
         :func:`get_interfaces` again. Worth passing in a loop, since
         enumeration is a syscall.
     :param family: ``4`` or ``6`` to yield only that family; ``None`` for both.
+        This is the **short form**, not ``socket.AF_INET``/``AF_INET6`` --
+        unlike :func:`netimps.bind` and :func:`netimps.get_free_port`, which
+        take the ``AF_*`` constants. Anything else raises :class:`ValueError`
+        **when this function is called**, not on the first ``next()``: a
+        generator that validates lazily reports a bad argument from somewhere
+        the traceback no longer names the caller.
 
     The ``interface`` is the full :class:`Interface`, so its name, MAC and MTU
     stay reachable -- the flattening loses no information.
     """
+    if family not in (None, 4, 6):
+        hint = ""
+        if family == _socket.AF_INET:
+            hint = " -- that is socket.AF_INET; this parameter wants 4"
+        elif family == _socket.AF_INET6:
+            hint = " -- that is socket.AF_INET6; this parameter wants 6"
+        raise ValueError(
+            "family must be 4, 6 or None (the short form, not socket.AF_INET/"
+            "AF_INET6), got %r%s" % (family, hint)
+        )
+    return _iter_addresses(interfaces, family)
+
+
+def _iter_addresses(
+    interfaces: "Optional[Iterable[Interface]]",
+    family: "Optional[int]",
+) -> "Iterator[Tuple[Interface, _IPInterface]]":
+    """The generator half of :func:`iter_addresses`, after validation."""
     if interfaces is None:
         interfaces = get_interfaces()
     for iface in interfaces:
+        entries: "Sequence[_IPInterface]"
         if family == 4:
             entries = iface.ipv4
         elif family == 6:
             entries = iface.ipv6
-        elif family is None:
-            entries = iface.ips
         else:
-            raise ValueError("family must be 4, 6 or None, got %r" % (family,))
+            entries = iface.ips
         for entry in entries:
             yield iface, entry

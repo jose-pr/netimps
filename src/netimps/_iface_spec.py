@@ -12,6 +12,14 @@ The OS never accepts all of those: ``ping -S`` and ``IP_MULTICAST_IF`` want an
 *address*, IPv6 multicast wants an interface *index*, and only POSIX ``ping -I``
 takes a name. Resolving in one place keeps every caller from re-deriving that.
 
+Both functions apply the **same rule** to the same spec, so that a caller
+choosing between them by address family does not get two different answers:
+under ``strict=True`` an address spec must name an interface this host actually
+has, exactly as an adapter name or a MAC must. They diverge only where they
+must -- an address that no local interface claims can still be handed to the OS
+verbatim, while an interface *index* cannot be invented -- and only when
+``strict=False`` says the caller will check the result itself.
+
 Re-exported from nothing -- this is used internally by ``_ping``,
 ``_multicast`` and ``_sockets``.
 """
@@ -34,8 +42,44 @@ __all__ = ["interface_address", "interface_index"]
 InterfaceSpec = Optional[Union[Interface, MACAddress, IPAddress, str]]
 
 
+def _without_zone(address: "IPAddress") -> "IPAddress":
+    """Drop an IPv6 ``%zone`` suffix, which enumeration never reports.
+
+    ``ipaddress`` keeps the zone as part of the address, so
+    ``IPv6Address("::1%1") != IPv6Address("::1")`` and a scoped address matches
+    nothing in :func:`netimps.get_interfaces`. The zone identifies the
+    *interface*, not the address, so it is stripped before any lookup and kept
+    only in what is returned to the caller.
+    """
+    from . import IPAddress, parse
+
+    if not getattr(address, "scope_id", None):
+        return address
+    return parse(str(address).split("%", 1)[0], IPAddress)
+
+
+def _family_name(want_ipv6: bool) -> str:
+    return "IPv6" if want_ipv6 else "IPv4"
+
+
+def _enumeration_is_degraded() -> bool:
+    """True when :func:`netimps.get_interfaces` fell back to hostname lookup.
+
+    That path reports a single synthetic interface named ``"<unknown>"``
+    carrying only the addresses ``getaddrinfo(gethostname())`` returns -- never
+    ``127.0.0.1``, usually not a VPN or container address. Checking an address
+    against *that* answers a different question, so the locality rule below
+    steps aside rather than rejecting addresses the host really has.
+    """
+    from ._ifaddrs import get_interfaces
+
+    return any(iface.name == "<unknown>" for iface in get_interfaces())
+
+
 def interface_address(
-    interface: "InterfaceSpec", want_ipv6: bool = False, strict: bool = True
+    interface: "InterfaceSpec",
+    want_ipv6: "Optional[bool]" = False,
+    strict: bool = True,
 ) -> "Optional[IPAddress]":
     """Reduce an interface spec to a local address.
 
@@ -45,10 +89,15 @@ def interface_address(
 
     :param interface: an :class:`Interface`, a :class:`MACAddress` (or MAC
         string), an adapter name, an address, or ``None``.
-    :param want_ipv6: pick the IPv6 address of an ``Interface`` rather than its
-        IPv4 one.
+    :param want_ipv6: the family the caller can use -- ``False`` for IPv4,
+        ``True`` for IPv6, ``None`` for "either". It picks which address of an
+        ``Interface`` to take **and** is checked against a bare address spec,
+        which it used to ignore: a wrong-family literal otherwise sailed
+        through to ``inet_aton`` or ``bind`` and failed there instead, naming
+        neither the spec nor the family that was wanted.
     :param strict: when True (the default) an unresolvable spec raises
-        :class:`ValueError`; when False it returns ``None``.
+        :class:`ValueError`; when False it returns the best answer it has and
+        never raises.
 
     ``None`` in gives ``None`` out -- "no preference", which callers translate
     into leaving the flag off entirely.
@@ -59,7 +108,20 @@ def interface_address(
     The ``strict`` split exists because the two original callers disagreed:
     multicast raised on an unknown interface (a join to the wrong adapter
     silently receives nothing, so failing loudly is right), while ``ping``
-    returned ``None`` and reported a falsy result. Both are preserved.
+    returned ``None`` and reported a falsy result. Both are preserved, and the
+    split now also decides how hard a bare *address* spec is checked:
+
+    * ``strict=True`` -- the address must be of the wanted family and must be
+      held by a local interface, the same rule :func:`interface_index` applies.
+      This is for callers that hand the result straight to the OS as an
+      adapter selector (``bind``, ``IP_MULTICAST_IF``, an IPv4 ``mreq``),
+      where an address no adapter holds is guaranteed to fail; saying so here
+      beats a bare ``EADDRNOTAVAIL`` from three frames away.
+    * ``strict=False`` -- the address is returned as given, family and all.
+      The tolerant callers (``ping -I``, UDP source pinning) inspect it and do
+      something better than dropping it: ``_udp`` turns an IPv4 source for an
+      IPv6 socket into a v4-mapped one, and rejects the reverse with its own
+      message.
     """
     from . import IPAddress, MACAddress, interface_for, is_valid, try_parse
     from ._ifaddrs import Interface, get_interfaces
@@ -96,11 +158,17 @@ def interface_address(
     if isinstance(interface, Interface):
         # The Interface -> address half is a method on the type itself; this
         # function only adds the loose-spec coercion around it.
-        chosen = interface.primary_ip(ipv6=want_ipv6)
+        chosen = interface.primary_ip(ipv6=bool(want_ipv6))
+        if chosen is None and want_ipv6 is None:
+            # "Either family": try the other one before giving up.
+            chosen = interface.primary_ip(ipv6=True)
         if chosen is None:
             return _fail(
                 "interface %r has no %s address"
-                % (interface.name, "IPv6" if want_ipv6 else "IPv4")
+                % (
+                    interface.name,
+                    "IPv4 or IPv6" if want_ipv6 is None else _family_name(want_ipv6),
+                )
             )
         return chosen.ip
 
@@ -108,6 +176,22 @@ def interface_address(
     parsed = try_parse(str(interface).strip(), IPAddress)
     if parsed is None:
         return _fail("cannot resolve %r to a local address" % (interface,))
+
+    if want_ipv6 is not None and (parsed.version == 6) != want_ipv6:
+        if not strict:
+            return parsed  # the caller checks the family itself; see above.
+        return _fail(
+            "%s is an IPv%d address, but an %s one was requested"
+            % (parsed, parsed.version, _family_name(want_ipv6))
+        )
+
+    # An address spec names an interface just as a name or a MAC does, so it
+    # is held to the same rule -- otherwise the very same spec is accepted for
+    # IPv4 (which wants an address) and rejected for IPv6 (which wants an
+    # index), which is interface_index's behaviour below.
+    bare = _without_zone(parsed)
+    if strict and interface_for(bare) is None and not _enumeration_is_degraded():
+        return _fail("no local interface holds address %s" % (bare,))
     return parsed
 
 
@@ -135,6 +219,13 @@ def interface_index(interface: "InterfaceSpec", strict: bool = True) -> "Optiona
     An index of ``0`` is never returned as a value: ``0`` *is* the kernel's
     "pick for me", so reporting it for an adapter the caller explicitly named
     would recreate the silent wrong-adapter failure this exists to prevent.
+
+    A ``%zone`` suffix is **honoured, not ignored**: it is the one part of a
+    scoped address that names an interface, which is exactly what is being
+    asked for here. Linux and Windows spell the zone as the numeric index and
+    the BSDs as the adapter name, and both are read. Without this, every
+    scoped literal failed the lookup outright -- ``ipaddress`` keeps the zone
+    as part of the address, so ``fe80::1%12`` matches no enumerated address.
     """
     from . import IPAddress, MACAddress, interface_for, is_valid, try_parse
     from ._ifaddrs import Interface, get_interfaces
@@ -170,6 +261,20 @@ def interface_index(interface: "InterfaceSpec", strict: bool = True) -> "Optiona
         address = try_parse(str(interface).strip(), IPAddress)
         if address is None:
             return _fail("cannot resolve %r to a local interface" % (interface,))
+        zone = getattr(address, "scope_id", None)
+        if zone:
+            if zone.isdigit():
+                # The OS wrote this index itself; take it at face value.
+                index = int(zone)
+                if index:
+                    return index
+            else:
+                named = next(
+                    (iface for iface in get_interfaces() if iface.name == zone), None
+                )
+                if named is not None and named.index:
+                    return named.index
+            address = _without_zone(address)
         match = interface_for(address)
         if match is None:
             return _fail("no local interface holds address %s" % (address,))
