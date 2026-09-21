@@ -1,23 +1,28 @@
 name: Test
 
-# On-demand / ad-hoc test workflow, kept separate from release.yml's own
-# release-gate test job so it can be run without cutting a release. Two ways
-# to trigger it:
+# Three ways to trigger:
+#   - push to main, so the README's CI badge reflects the state of main rather
+#     than whichever manual run happened last.
 #   - workflow_dispatch (optionally against a specific ref), for manual runs.
 #   - push of a tag matching "ci-*" (throwaway tag, delete after) so an agent
 #     without dashboard access can trigger + poll a run via the API/CLI.
-# Not triggered by push/PR on branches by default -- add that only if the
-# project actually wants CI on every commit.
 on:
+  push:
+    branches:
+      - main
+    tags:
+      - "ci-*"
+  # Gate pull requests too. Without this a PR is unchecked until it merges,
+  # which is the one moment the check is worth having.
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       ref:
         description: "Git ref to test (branch, tag, or SHA)"
         required: false
         default: ""
-  push:
-    tags:
-      - "ci-*"
 
 permissions:
   contents: read
@@ -27,6 +32,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  lint:
+    # The gate the repo has always claimed to have. Formatting, the package's own
+    # type contract, and the typing-conformance file that nothing used to run --
+    # all three were opt-in config with no job behind them, so mypy silently drifted
+    # to 27 errors while `py.typed` promised consumers a checked surface.
+    name: Lint and type-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # The floor, deliberately: `[tool.mypy] python_version = "3.9"` means the
+          # errors that only appear on the oldest supported version are the ones
+          # worth catching.
+          python-version: "3.9"
+      - name: Install package with all extras
+        run: python -m pip install -e ".[dev]"
+      - name: Check formatting
+        run: python -m black --check src/ tests/
+      - name: Type-check the package
+        run: python -m mypy src/netimps
+      - name: Type-check the public typing contract
+        # tests/typing/api.py exists to prove the shipped header's static-typing
+        # promises. It is not a pytest module and pytest never collected it, so
+        # until this step it was executed by nothing at all.
+        #
+        # Deliberately checked with a CONSUMER's config, not the package's own:
+        # the package enables the experimental TypeForm feature so mypy will
+        # type-check its own overload definitions, and nobody downstream does.
+        # tests/typing/consumer.ini explains the difference and the measurement.
+        run: python -m mypy --config-file tests/typing/consumer.ini tests/typing/api.py
+
   test:
     name: Test (py${{ matrix.python-version }}, ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -68,4 +105,10 @@ jobs:
         # silently skip (pytest.importorskip) instead of actually running.
         run: python -m pip install -e ".[dev]"
       - name: Run tests
+        # tests/test_platform_smoke.py is collected here on purpose. The rest of
+        # the suite fakes subprocess.run throughout, so it asserts the argv the
+        # library BUILDS and never that the platform's binary accepts it -- which
+        # is exactly how macOS shipped broken for every IPv6 ping while CI stayed
+        # green (`ping -6` is not a flag there). The smoke file is the one place
+        # that runs the real binary, loopback only, and it must gate the matrix.
         run: python -m pytest -q

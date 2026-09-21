@@ -1,0 +1,77 @@
+name: Docs
+
+# This workflow owns EVERY Pages deploy, so there is exactly one path to the
+# published site. Previously these jobs lived inside release.yml, which meant the
+# site could only change by cutting a PyPI release -- a wrong sentence on the
+# landing page stayed wrong until the next version.
+#
+# Three ways in:
+#   - `release: published`, so a v* release ships its matching docs. The release
+#     workflow only *gates* on a strict docs build; publishing the release fires
+#     this deploy. That keeps deployment in one place without making a release
+#     the only way the site can change.
+#   - a docs-affecting push to main, so a correction ships on its own, and the
+#     site stays current between releases;
+#   - workflow_dispatch, for a manual rebuild.
+on:
+  release:
+    types: [published]
+  push:
+    branches:
+      - main
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "src/netimps/**"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Pages allows one deploy at a time; queue rather than cancel so a release-time
+  # build is never dropped halfway.
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build documentation site
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - uses: actions/configure-pages@v5
+        with:
+          # Self-enabling, as release.yml already was -- a fresh fork should not
+          # need the Pages switch flipped by hand before its first docs run.
+          enablement: true
+      - name: Install package with docs tooling
+        run: python -m pip install -e ".[dev,docs]"
+      - name: Build docs
+        run: mkdocs build --strict
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/
+
+  deploy:
+    name: Deploy documentation to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
