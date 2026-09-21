@@ -838,3 +838,47 @@ def test_explicit_family_may_not_contradict_the_group():
         netimps.multicast_socket("239.1.2.3", ipv6=True, bind=False)
     with pytest.raises(ValueError, match="contradicts"):
         netimps.multicast_socket("ff02::fb", ipv6=False, bind=False)
+
+
+@pytest.mark.parametrize(
+    "group, needs_scope",
+    [
+        ("ff01::1", True),  # interface-local scope
+        ("ff02::fb", True),  # link-local scope -- mDNS, the common case
+        ("ff05::fb", False),  # site-local: routable within a site
+        ("ff0e::fb", False),  # global
+        ("239.1.2.3", False),  # IPv4 has no scope nibble
+    ],
+)
+def test_only_unroutable_scopes_get_a_default_index(group, needs_scope, monkeypatch):
+    """The scope lives in the low nibble of byte 1, not in `is_link_local`.
+
+    This is the trap that made the first attempt at the macOS fix a no-op:
+    `ipaddress`'s `is_link_local` means the `fe80::/10` **unicast** range and is
+    `False` for `ff02::fb`, so the code decided no scope was needed and the join
+    went on failing. RFC 4291 puts the multicast scope in the address itself --
+    1 interface-local, 2 link-local, 5 site-local, e global.
+
+    Faking the platform flag is what lets this run anywhere: the behaviour is
+    macOS-only, and CI is the only macOS available.
+    """
+    from netimps import _multicast
+
+    monkeypatch.setattr(_multicast, "_NEEDS_EXPLICIT_V6_SCOPE", True)
+    index = _multicast._default_v6_scope(group)
+    if needs_scope:
+        assert index > 0, "%s cannot be joined without an interface" % group
+    else:
+        assert index == 0, "%s is routable; the kernel should choose" % group
+
+
+def test_no_default_index_where_the_kernel_chooses(monkeypatch):
+    """Linux and Windows honour index 0, so nothing is supplied there.
+
+    Index 0 means "kernel's choice" and is the right default -- this fallback
+    exists only for the platforms that refuse to make that choice.
+    """
+    from netimps import _multicast
+
+    monkeypatch.setattr(_multicast, "_NEEDS_EXPLICIT_V6_SCOPE", False)
+    assert _multicast._default_v6_scope("ff02::fb") == 0

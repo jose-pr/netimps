@@ -76,6 +76,11 @@ def is_multicast(address: "AddressLike") -> bool:
     return bool(parsed is not None and parsed.is_multicast)
 
 
+#: Multicast scope values (low nibble of the address's second byte, RFC 4291):
+#: 1 interface-local, 2 link-local, 5 site-local, e global. At or below
+#: link-local the address means nothing without an interface.
+_LINK_LOCAL_SCOPE = 0x2
+
 #: Platforms whose kernel will not pick a scope for a link-local IPv6 join.
 _NEEDS_EXPLICIT_V6_SCOPE = not (
     _sys.platform == "win32" or _sys.platform.startswith("linux")
@@ -107,8 +112,16 @@ def _default_v6_scope(group: str) -> int:
     from . import try_parse
 
     parsed = try_parse(group)
-    if parsed is None or not parsed.is_link_local:
-        return 0  # a routable group needs no scope
+    if parsed is None or parsed.version != 6 or not parsed.is_multicast:
+        return 0
+    # The scope of a multicast address is the low nibble of its second byte --
+    # 1 interface-local, 2 link-local, 5 site-local, e global. It is NOT
+    # `is_link_local`, which means the `fe80::/10` **unicast** range and is
+    # False for `ff02::fb`; using it here is why this returned 0 and the join
+    # went on failing on macOS. Only the scopes that cannot be routed need an
+    # interface to be meaningful.
+    if parsed.packed[1] & 0x0F > _LINK_LOCAL_SCOPE:
+        return 0
 
     from . import get_interfaces
 
