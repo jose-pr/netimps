@@ -473,3 +473,128 @@ def test_get_ip_accepts_address_object(monkeypatch):
 def test_get_ip_rejects_network():
     with pytest.raises(TypeError, match="not a network"):
         netimps.get_ip(IPv4Network("10.0.0.0/24"))
+
+
+# --------------------------------------------------------------------------- #
+# get_ip resolves with getaddrinfo, not the IPv4-only gethostbyname           #
+# --------------------------------------------------------------------------- #
+
+
+def test_get_ip_resolves_an_aaaa_only_name(monkeypatch):
+    """`gethostbyname` cannot return a v6 address, so this used to be None.
+
+    A v6-only name answered "no such host" rather than its AAAA record -- a
+    falsy wrong answer with nothing to catch. The repo's own AGENTS.md records
+    the lesson; it had been applied in _ping.py and nowhere else.
+    """
+    import socket
+
+    def explode(_name):  # pragma: no cover - must not run
+        raise AssertionError("gethostbyname is IPv4-only and must not be used")
+
+    monkeypatch.setattr(netimps._ip._socket, "gethostbyname", explode)
+    monkeypatch.setattr(
+        netimps._ip._socket,
+        "getaddrinfo",
+        lambda *a, **k: [
+            (socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("2001:db8::5", 0, 0, 0))
+        ],
+    )
+    assert netimps.get_ip("v6only.example") == IPv6Address("2001:db8::5")
+
+
+def test_get_ip_honours_the_ipv6_flag(monkeypatch):
+    import socket
+
+    seen = {}
+
+    def fake_getaddrinfo(host, port, family=0, kind=0, *a, **k):
+        seen["family"] = family
+        raise OSError("resolution blocked in tests")
+
+    monkeypatch.setattr(netimps._ip._socket, "getaddrinfo", fake_getaddrinfo)
+    assert netimps.get_ip("host.invalid", ipv6=True) is None
+    assert seen["family"] == socket.AF_INET6
+    assert netimps.get_ip("host.invalid", ipv6=False) is None
+    assert seen["family"] == socket.AF_INET
+    assert netimps.get_ip("host.invalid") is None
+    assert seen["family"] == socket.AF_UNSPEC
+
+
+def test_get_ip_literal_never_resolves(monkeypatch):
+    """A literal is its own answer, whatever family it is."""
+
+    def explode(*a, **k):  # pragma: no cover - must not run
+        raise AssertionError("a literal must not reach the resolver")
+
+    monkeypatch.setattr(netimps._ip._socket, "getaddrinfo", explode)
+    assert netimps.get_ip("10.0.0.5") == IPv4Address("10.0.0.5")
+    assert netimps.get_ip("2001:db8::5") == IPv6Address("2001:db8::5")
+
+
+# --------------------------------------------------------------------------- #
+# normalize_host                                                              #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("example.com:8080", ("example.com", 8080)),
+        ("example.com", ("example.com", None)),
+        ("10.0.0.5", ("10.0.0.5", None)),
+        ("10.0.0.5:53", ("10.0.0.5", 53)),
+        ("[::1]:8080", ("::1", 8080)),
+        ("[::1]", ("::1", None)),
+        ("::1", ("::1", None)),  # not host "::" port 1
+        ("2001:db8::5", ("2001:db8::5", None)),
+        ("fe80::1%eth0", ("fe80::1%eth0", None)),
+        ("[fe80::1%eth0]:80", ("fe80::1%eth0", 80)),
+        ("::ffff:1.2.3.4", ("::ffff:1.2.3.4", None)),
+    ],
+)
+def test_normalize_host_splits(text, expected):
+    assert netimps.normalize_host(text) == expected
+
+
+def test_normalize_host_uses_the_default_port():
+    assert netimps.normalize_host("example.com", 443) == ("example.com", 443)
+    assert netimps.normalize_host("example.com:80", 443) == ("example.com", 80)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "host:80:extra",  # a typo, not an address
+        "not:an:address",
+        "2001:db8::zz",  # nearly an address
+        "::1::2",
+        "a:b:c:d",
+    ],
+)
+def test_normalize_host_rejects_multi_colon_non_addresses(text):
+    """Two or more colons and no brackets used to be assumed to be IPv6.
+
+    The whole unparseable string came back as the *host*, so the caller went
+    on to look up a name that cannot exist instead of being told what was
+    wrong -- a confident wrong answer, which is the shape of defect this
+    review was about.
+    """
+    with pytest.raises(ValueError, match="not an IPv6 address"):
+        netimps.normalize_host(text)
+
+
+@pytest.mark.parametrize(
+    "text, message",
+    [
+        ("", "non-empty"),
+        ("   ", "non-empty"),
+        ("[::1", "unclosed"),
+        ("[::1]x", "unexpected"),
+        ("example.com:notaport", "invalid port"),
+        ("example.com:70000", "out of range"),
+    ],
+)
+def test_normalize_host_rejects_malformed_input(text, message):
+    with pytest.raises(ValueError, match=message):
+        netimps.normalize_host(text)

@@ -117,7 +117,7 @@ def test_tcp_check_closed_port():
         ("127.0.0.1", 0),  # invalid port
     ],
 )
-def test_tcp_check_never_raises(host, port):
+def test_tcp_check_never_raises(host, port, no_such_host):
     assert tcp_check(host, port, timeout=1.0) is False
 
 
@@ -136,17 +136,29 @@ def test_wait_for_port_times_out():
 
 
 def test_wait_for_port_respects_deadline_with_slow_connects(monkeypatch):
-    """A blocking connect must not let the call overrun its timeout."""
+    """A blocking connect must not let the call overrun its timeout.
+
+    The previous version of this test capped its own stub at
+    ``min(timeout, 0.2)``, so no connect ever blocked past the deadline and
+    the assertion held no matter what the code did. This stub sleeps the
+    *whole* timeout it is handed, which is what a real blocking connect does.
+    """
     import time
 
+    handed = []
+
     def slow(host, port, timeout=None):
-        time.sleep(min(timeout or 0.2, 0.2))
+        handed.append(timeout)
+        time.sleep(timeout or 0)
         return False
 
     monkeypatch.setattr(_sockets, "tcp_check", slow)
     start = time.monotonic()
-    assert wait_for_port("127.0.0.1", 9, timeout=0.5) is False
-    assert time.monotonic() - start < 3.0
+    assert wait_for_port("127.0.0.1", 9, timeout=0.5, interval=0.05) is False
+    elapsed = time.monotonic() - start
+    # One attempt of slack, not one per address the name resolves to.
+    assert elapsed < 0.5 + max(handed) + 0.5
+    assert all(t <= 1.0 for t in handed), "per-try timeout must be clamped"
 
 
 # --------------------------------------------------------------------------- #
@@ -203,14 +215,28 @@ def test_route_shape():
     assert isinstance(route.interface_index, int)
 
 
-def test_route_never_raises_for_bad_destination():
+def test_route_never_raises_for_bad_destination(no_such_host):
     route = get_route("no-such-host-xyz.invalid")
     assert isinstance(route, Route)
 
 
-def test_route_on_link_is_derived_from_gateway():
-    assert Route(dst="x", gateway=None).on_link is True
+def test_route_on_link_is_three_state():
+    """ "No gateway" and "we never looked" are different answers.
+
+    The old ``on_link = gateway is None`` reported a confident ``True`` for
+    every destination whose next hop could not be looked up -- measured on
+    macOS, where ``get_route('1.1.1.1')`` claimed on-link from a
+    192.168.64.3/24 host. ``None`` is falsy, so ``if route.on_link:`` still
+    takes the safe branch.
+    """
+    assert Route(dst="x", gateway=None).on_link is None
+    assert not Route(dst="x", gateway=None).on_link
+    assert Route(dst="x", gateway=None, on_link=True).on_link is True
     assert Route(dst="x", gateway=netimps.parse("10.0.0.1")).on_link is False
+    # A gateway is proof on its own and overrides a contradicting flag.
+    assert (
+        Route(dst="x", gateway=netimps.parse("10.0.0.1"), on_link=True).on_link is False
+    )
 
 
 def test_route_equality_and_repr():
@@ -220,6 +246,19 @@ def test_route_equality_and_repr():
     assert a != Route(dst=netimps.parse("1.1.1.1"))
     assert a != "not a route"
     assert "8.8.8.8" in repr(a)
+    # An unknown on_link is not the same route as a known on-link one.
+    assert a != Route(
+        dst=netimps.parse("8.8.8.8"), src=netimps.parse("10.0.0.5"), on_link=True
+    )
+
+
+def test_route_is_hashable():
+    """Defining __eq__ without __hash__ made Route unusable in a set at all."""
+    a = Route(dst=netimps.parse("8.8.8.8"), src=netimps.parse("10.0.0.5"))
+    b = Route(dst=netimps.parse("8.8.8.8"), src=netimps.parse("10.0.0.5"))
+    assert hash(a) == hash(b)
+    assert len({a, b}) == 1
+    assert len({a, Route(dst=netimps.parse("1.1.1.1"))}) == 2
 
 
 # --------------------------------------------------------------------------- #
@@ -240,49 +279,116 @@ def test_hop_count_raises_without_privileges_when_fallback_disabled(monkeypatch)
         netimps.hop_count("127.0.0.1", allow_traceroute=False)
 
 
+def _no_raw(family, kind, proto=0, *a, **k):
+    if kind == socket.SOCK_RAW:
+        raise PermissionError("not permitted")
+    return socket.socket(family, kind, proto)
+
+
 def test_hop_count_falls_back_to_traceroute(monkeypatch):
     """Without a raw socket, the system tool is used instead of failing."""
-
-    def no_raw(family, kind, proto=0, *a, **k):
-        if kind == socket.SOCK_RAW:
-            raise PermissionError("not permitted")
-        return socket.socket(family, kind, proto)
-
-    monkeypatch.setattr(_sockets._socket, "socket", no_raw)
+    monkeypatch.setattr(_sockets._socket, "socket", _no_raw)
     monkeypatch.setattr(
-        _sockets, "_hop_count_traceroute", lambda target, hops, timeout: 7
+        _sockets, "_hop_count_traceroute", lambda target, hops, timeout, ipv6=False: 7
     )
     assert netimps.hop_count("127.0.0.1") == 7
 
 
 def test_hop_count_unresolvable_is_none(monkeypatch):
-    def fail(_name):
+    def fail(*a, **k):
         raise OSError("no such host")
 
-    monkeypatch.setattr(_sockets._socket, "gethostbyname", fail)
+    monkeypatch.setattr(netimps._ping._socket, "getaddrinfo", fail)
     assert netimps.hop_count("nope.invalid") is None
 
 
 def test_hop_count_accepts_interface_object(monkeypatch):
-    """The .ip must reach gethostbyname, not "127.0.0.1/8" as a whole string."""
+    """The .ip must reach the resolver, not "127.0.0.1/8" as a whole string."""
     seen = []
+    real = socket.getaddrinfo
 
-    def fake_gethostbyname(name):
-        seen.append(name)
-        return name
+    def recording(host, port, family=0, kind=0, *a, **k):
+        seen.append(host)
+        return real(host, port, family, kind, *a, **k)
 
-    def no_raw(family, kind, proto=0, *a, **k):
-        if kind == socket.SOCK_RAW:
-            raise PermissionError("not permitted")
-        return socket.socket(family, kind, proto)
-
-    monkeypatch.setattr(_sockets._socket, "gethostbyname", fake_gethostbyname)
-    monkeypatch.setattr(_sockets._socket, "socket", no_raw)
+    monkeypatch.setattr(netimps._ping._socket, "getaddrinfo", recording)
+    monkeypatch.setattr(_sockets._socket, "socket", _no_raw)
     monkeypatch.setattr(
-        _sockets, "_hop_count_traceroute", lambda target, hops, timeout: 1
+        _sockets, "_hop_count_traceroute", lambda target, hops, timeout, ipv6=False: 1
     )
     netimps.hop_count(IPv4Interface("127.0.0.1/8"), allow_traceroute=True)
     assert seen == ["127.0.0.1"]
+
+
+def test_hop_count_resolves_with_getaddrinfo_not_gethostbyname(monkeypatch):
+    """The v4-only lookup is gone: an AAAA-only name must still be probed.
+
+    `gethostbyname` cannot return a v6 address at all, so a v6 destination
+    used to leave hop_count returning None -- indistinguishable from "the
+    host never answered". The repo's own AGENTS.md records this lesson; it
+    had been applied in _ping.py and nowhere else.
+    """
+
+    def explode(_name):  # pragma: no cover - must not run
+        raise AssertionError("gethostbyname is IPv4-only and must not be used")
+
+    monkeypatch.setattr(_sockets._socket, "gethostbyname", explode)
+    monkeypatch.setattr(_sockets._socket, "socket", _no_raw)
+
+    seen = {}
+
+    def fake_traceroute(target, hops, timeout, ipv6=False):
+        seen["target"], seen["ipv6"] = target, ipv6
+        return 3
+
+    monkeypatch.setattr(_sockets, "_hop_count_traceroute", fake_traceroute)
+    assert netimps.hop_count("::1") == 3
+    assert seen == {"target": "::1", "ipv6": True}
+
+
+def test_hop_count_v6_probe_uses_the_v6_options(monkeypatch):
+    """A v6 target gets an ICMPv6 raw socket and a hop limit, not IP_TTL.
+
+    IP_TTL on an AF_INET6 socket raises rather than limiting anything, so
+    without this the probe loop silently sent nothing.
+    """
+    families = []
+    options = []
+
+    class Recording:
+        def __init__(self, family, kind, proto=0):
+            families.append((family, kind, proto))
+
+        def setsockopt(self, level, option, value):
+            options.append((level, option, value))
+
+        def sendto(self, payload, address):
+            raise OSError("probe not actually sent in tests")
+
+        def connect(self, address):
+            raise OSError("no source lookup in tests")
+
+        def settimeout(self, timeout):
+            pass
+
+        def bind(self, address):
+            pass
+
+        def recvfrom(self, size):
+            raise socket.timeout()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(_sockets._socket, "socket", Recording)
+    monkeypatch.setattr(
+        _sockets,
+        "_hop_count_traceroute",
+        lambda target, hops, timeout, ipv6=False: None,
+    )
+    assert netimps.hop_count("::1", max_hops=1) is None
+    assert families[0] == (socket.AF_INET6, socket.SOCK_RAW, socket.IPPROTO_ICMPV6)
+    assert (socket.IPPROTO_IPV6, socket.IPV6_UNICAST_HOPS, 1) in options
 
 
 def test_traceroute_parser_reads_hop_number(monkeypatch):
@@ -357,16 +463,44 @@ def test_is_icmp_reply_rejects_short_packets():
 # --------------------------------------------------------------------------- #
 
 
-def test_get_pmtu_returns_none_without_ip_mtu(monkeypatch):
-    """Windows has no IP_MTU; the documented answer is None, not a guess."""
-    monkeypatch.delattr(_sockets._socket, "IP_MTU", raising=False)
+@pytest.mark.skipif(not _sockets._IS_LINUX, reason="IP_MTU is a Linux socket option")
+@pytest.mark.parametrize("dst", ["127.0.0.1", "::1"])
+def test_get_pmtu_answers_on_linux(dst):
+    """The positive assertion, on the one platform that must answer it.
+
+    This replaces a test that asserted ``None`` after deleting an attribute
+    ``socket`` never had -- so it passed against dead code and pinned the bug.
+    CPython exports neither ``IP_MTU`` nor ``IP_MTU_DISCOVER`` on *any*
+    platform, Linux included, so the old ``getattr`` guard returned before the
+    socket was created and every line after it was unreachable. Loopback has a
+    known, offline, deterministic MTU, which is exactly what the vacuous
+    "None or a positive int" assertions could never catch.
+    """
+    if dst == "::1":
+        try:
+            socket.socket(socket.AF_INET6, socket.SOCK_DGRAM).close()
+        except OSError:  # pragma: no cover - env dependent
+            pytest.skip("no IPv6 on this host")
+    result = netimps.get_pmtu(dst)
+    assert isinstance(result, int) and result >= 1280
+
+
+@pytest.mark.skipif(
+    _sockets._IS_LINUX, reason="Linux is the platform that does have IP_MTU"
+)
+def test_get_pmtu_is_none_where_the_option_does_not_exist():
+    """Windows and BSD expose no cached path MTU; None is the right answer.
+
+    Documented at length in get_pmtu's docstring: Windows' MIB_IPFORWARDROW
+    reads 0 for dwForwardMtu and MIB_IPFORWARD_ROW2 dropped the field, so
+    probing with discover_mtu is the only route to a *path* MTU there.
+    """
     assert netimps.get_pmtu("127.0.0.1") is None
 
 
-def test_get_pmtu_shape():
-    """A lookup, so None is a perfectly normal answer."""
-    result = netimps.get_pmtu("127.0.0.1")
-    assert result is None or (isinstance(result, int) and result > 0)
+def test_get_pmtu_rejects_an_out_of_range_port():
+    with pytest.raises(ValueError, match="out of range"):
+        netimps.get_pmtu("127.0.0.1", 65536)
 
 
 def test_get_pmtu_accepts_interface_object():
@@ -396,7 +530,7 @@ def test_get_pmtu_sends_nothing(monkeypatch):
 
 def test_discover_mtu_probe_false_delegates_to_get_pmtu(monkeypatch):
     """probe=False is exactly get_pmtu -- and must not ping."""
-    monkeypatch.setattr(_sockets, "get_pmtu", lambda dst, port=80: 1400)
+    monkeypatch.setattr(_sockets, "get_pmtu", lambda dst, port=80, ipv6=None: 1400)
     monkeypatch.setattr(
         netimps, "ping", lambda *a, **k: pytest.fail("probe=False must not ping")
     )
@@ -513,7 +647,7 @@ def test_ip_header_bytes_by_family():
     assert _sockets._tcp_header_overhead("2001:db8::1") == 60
 
 
-def test_ip_header_bytes_falls_back_to_v4():
+def test_ip_header_bytes_falls_back_to_v4(no_such_host):
     """An unresolvable name assumes IPv4: under-reporting an MTU is safer."""
     assert _sockets._ip_header_bytes("no-such-host-xyz.invalid") == 20
 
@@ -782,3 +916,490 @@ def test_discover_mtu_rejects_search_owned_kwargs(owned):
     """Overriding what the search varies would silently break the result."""
     with pytest.raises(TypeError, match="sets"):
         netimps.discover_mtu("10.0.0.1", **{owned: 1})
+
+
+# --------------------------------------------------------------------------- #
+# bind: SO_REUSEADDR means something else on Windows                           #
+# --------------------------------------------------------------------------- #
+
+
+def test_bind_default_does_not_allow_a_port_takeover():
+    """A second process must not be able to steal a bound listener.
+
+    Reproduced on Windows 11: ``SO_REUSEADDR`` there lets *any* process bind
+    an ``addr:port`` another socket is already listening on, and the later
+    binder can win subsequent connections. ``bind()`` set it unconditionally,
+    so its own listeners were takeable while a plain stdlib bind was refused.
+    On POSIX the second bind must fail too, for the ordinary reason.
+    """
+    server = netimps.bind("127.0.0.1", 0, kind=socket.SOCK_STREAM, listen=5)
+    try:
+        port = server.getsockname()[1]
+        thief = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        thief.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            with pytest.raises(OSError):
+                thief.bind(("127.0.0.1", port))
+        finally:
+            thief.close()
+    finally:
+        server.close()
+
+
+def _recording_socket(monkeypatch):
+    """Patch the module's socket factory and return the options it is given."""
+    applied = []
+    real = socket.socket
+
+    class Recording(real):
+        def setsockopt(self, level, option, value):
+            applied.append((level, option, value))
+            return real.setsockopt(self, level, option, value)
+
+    monkeypatch.setattr(_sockets._socket, "socket", Recording)
+    return applied
+
+
+def test_bind_sets_exclusiveaddruse_on_windows_and_reuseaddr_elsewhere(monkeypatch):
+    """One flag, two options -- because one option would not be one meaning."""
+    applied = _recording_socket(monkeypatch)
+    netimps.bind("127.0.0.1", 0).close()
+
+    exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+    wanted = socket.SO_REUSEADDR if exclusive is None else exclusive
+    assert (socket.SOL_SOCKET, wanted, 1) in applied
+    if exclusive is not None:
+        assert (socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) not in applied
+
+
+def test_bind_takeover_is_an_explicit_opt_in(monkeypatch):
+    """The literal SO_REUSEADDR is still reachable, under a name that says so."""
+    applied = _recording_socket(monkeypatch)
+    netimps.bind("127.0.0.1", 0, allow_address_takeover=True).close()
+    assert (socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) in applied
+
+
+# --------------------------------------------------------------------------- #
+# tcp_check: port validation, timeout floor, one overall deadline              #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("port", [65536, -1, 131072])
+def test_tcp_check_rejects_an_out_of_range_port(port):
+    """The socket layer masks to 16 bits and answers about a *different* port.
+
+    Measured: with a listener on 50287, ``tcp_check(host, 50287 + 65536)``
+    returned True. ``base + offset`` in a loop is the obvious way to generate
+    that, and nothing indicated the question had changed.
+    """
+    with pytest.raises(ValueError, match="out of range"):
+        tcp_check("127.0.0.1", port)
+
+
+def test_tcp_check_rejects_a_non_integer_port():
+    with pytest.raises(TypeError, match="must be an int"):
+        tcp_check("127.0.0.1", "80")
+
+
+def test_tcp_check_with_zero_timeout_still_sees_an_open_port(listening_port):
+    """``settimeout(0)`` is non-blocking, not "fail fast".
+
+    It made ``connect`` raise BlockingIOError immediately, which read as
+    "closed" -- so ``scan_ports(timeout=0)`` reported every port on every host
+    closed. The value is floored, matching ping's existing round-up.
+    """
+    assert tcp_check("127.0.0.1", listening_port, timeout=0) is True
+
+
+def test_tcp_check_resolves_once_and_shares_one_deadline(monkeypatch):
+    """A name with N addresses must not cost N x timeout.
+
+    ``socket.create_connection`` applies the timeout *per resolved address*,
+    inside its own loop, after an unbounded getaddrinfo -- so the documented
+    per-call bound was false by a factor of N, and with it wait_for_port's
+    "cannot overrun by more than one attempt".
+    """
+    import time
+
+    addresses = [
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 9)),
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.2", 9)),
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.3", 9)),
+    ]
+    lookups = []
+
+    def fake_getaddrinfo(host, port, *a, **k):
+        lookups.append(host)
+        return addresses
+
+    timeouts = []
+
+    class Blocking:
+        def __init__(self, *a, **k):
+            pass
+
+        def settimeout(self, timeout):
+            timeouts.append(timeout)
+            self._timeout = timeout
+
+        def connect(self, address):
+            time.sleep(self._timeout)
+            raise socket.timeout("blocked for the whole budget")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(_sockets._socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(_sockets._socket, "socket", Blocking)
+
+    start = time.monotonic()
+    assert tcp_check("many.example", 9, timeout=0.3) is False
+    elapsed = time.monotonic() - start
+
+    assert lookups == ["many.example"], "resolve once, not once per address"
+    assert elapsed < 0.3 * len(addresses), "the budget is shared, not per address"
+    assert sum(timeouts) <= 0.3 + 0.01
+
+
+def test_wait_for_port_rejects_an_out_of_range_port():
+    with pytest.raises(ValueError, match="out of range"):
+        wait_for_port("127.0.0.1", 70000, timeout=0.1)
+
+
+# --------------------------------------------------------------------------- #
+# get_source_ip: the family comes from the resolver, not from a substring test #
+# --------------------------------------------------------------------------- #
+
+
+def test_get_source_ip_family_follows_the_resolver(monkeypatch):
+    """``":" in dst`` is not an address-family test -- no hostname has a colon.
+
+    Every hostname was therefore probed as IPv4, so a v6-only name answered
+    None and a dual-stack one returned the v4 source even when traffic would
+    leave over v6.
+    """
+    families = []
+    real = socket.socket
+
+    def recording(family, kind, *a, **k):
+        families.append(family)
+        return real(family, kind, *a, **k)
+
+    monkeypatch.setattr(_sockets._socket, "socket", recording)
+    monkeypatch.setattr(
+        netimps._ping._socket,
+        "getaddrinfo",
+        lambda *a, **k: [
+            (socket.AF_INET6, socket.SOCK_DGRAM, 17, "", ("::1", 80, 0, 0))
+        ],
+    )
+    source = get_source_ip("v6only.example")
+    assert families == [socket.AF_INET6]
+    assert source is None or source.version == 6
+
+
+def test_get_source_ip_honours_an_explicit_ipv6_flag(monkeypatch):
+    seen = {}
+
+    def fake_getaddrinfo(host, port, family=0, kind=0, *a, **k):
+        seen["family"] = family
+        return []
+
+    monkeypatch.setattr(netimps._ping._socket, "getaddrinfo", fake_getaddrinfo)
+    assert get_source_ip("host.invalid", ipv6=True) is None
+    assert seen["family"] == socket.AF_INET6
+    assert get_source_ip("host.invalid", ipv6=False) is None
+    assert seen["family"] == socket.AF_INET
+    assert get_source_ip("host.invalid") is None
+    assert seen["family"] == socket.AF_UNSPEC
+
+
+def test_get_source_ip_for_v6_loopback(v6_loopback):
+    source = get_source_ip("::1")
+    assert source is not None and source.is_loopback and source.version == 6
+
+
+# --------------------------------------------------------------------------- #
+# Zone-qualified IPv6 in the membership lookups                                #
+# --------------------------------------------------------------------------- #
+
+
+def _link_local_v6():
+    for iface in netimps.get_interfaces():
+        for entry in iface.ips:
+            if entry.version == 6 and entry.ip.is_link_local:
+                return iface, entry.ip
+    return None, None
+
+
+def test_zone_qualified_address_is_still_local():
+    """``fe80::1%15`` is the form every OS tool emits, and it matched nothing.
+
+    ``getsockname()``, ``getaddrinfo``, ``ip addr`` and ``ipconfig`` all report
+    the zone, and it is *required* to use a link-local address at all -- yet
+    adding it made the library deny the address was local.
+    """
+    iface, address = _link_local_v6()
+    if address is None:  # pragma: no cover - env dependent
+        pytest.skip("no link-local IPv6 address on this host")
+
+    bare = str(address)
+    assert netimps.is_local_address(bare) is True
+    assert netimps.interface_for(bare) is not None
+
+    forms = ["%s%%%s" % (bare, iface.name)]
+    if iface.index:
+        forms.append("%s%%%d" % (bare, iface.index))
+    for form in forms:
+        assert netimps.is_local_address(form) is True, form
+        assert netimps.interface_for(form) is not None, form
+        assert list(netimps.interfaces_for(form)), form
+
+
+def test_zone_that_names_another_adapter_does_not_match():
+    """A zone is extra information, so a contradicting one is a real miss."""
+    _iface, address = _link_local_v6()
+    if address is None:  # pragma: no cover - env dependent
+        pytest.skip("no link-local IPv6 address on this host")
+    impossible = "%s%%%d" % (address, 999999)
+    assert netimps.is_local_address(impossible) is False
+    assert netimps.interface_for(impossible) is None
+
+
+def test_zone_is_stripped_for_the_synthetic_interface():
+    """strict=False builds a host route, which must not carry the zone."""
+    built = netimps.interface_for("fe80::dead:beef%1", strict=False)
+    assert built is not None and built.name == "<unknown>"
+    assert [str(entry) for entry in built.ips] == ["fe80::dead:beef/128"]
+
+
+# --------------------------------------------------------------------------- #
+# Next-hop parsers, offline                                                    #
+# --------------------------------------------------------------------------- #
+
+
+#: Captured from WSL2 (`cat /proc/net/ipv6_route`). No header line, big-endian
+#: hex nibbles, and note the `::/0` entry on `lo` with RTF_UP clear and
+#: RTF_REJECT set -- an unreachable route that a flag-blind longest-prefix
+#: match would report as "every global v6 destination is on-link via lo".
+_IPV6_ROUTE_TABLE = (
+    "fe800000000000000000000000000000 40 "
+    "00000000000000000000000000000000 00 "
+    "00000000000000000000000000000000 00000100 00000001 00000000 00000001 eth0\n"
+    "00000000000000000000000000000000 00 "
+    "00000000000000000000000000000000 00 "
+    "00000000000000000000000000000000 ffffffff 00000001 00000000 00200200 lo\n"
+    "00000000000000000000000000000001 80 "
+    "00000000000000000000000000000000 00 "
+    "00000000000000000000000000000000 00000000 00000003 00000000 80200001 lo\n"
+    "20010db8000000000000000000000000 20 "
+    "00000000000000000000000000000000 00 "
+    "fe800000000000000000000000000001 00000400 00000001 00000000 00000003 eth0\n"
+)
+
+
+def test_ipv6_route_table_finds_the_gateway():
+    hop = _sockets._parse_ipv6_route_table(_IPV6_ROUTE_TABLE, "2001:db8::5")
+    assert hop is not None
+    assert hop[0] == "fe80::1"
+
+
+def test_ipv6_route_table_reports_on_link_for_loopback():
+    hop = _sockets._parse_ipv6_route_table(_IPV6_ROUTE_TABLE, "::1")
+    assert hop is not None and hop[0] is None
+
+
+def test_ipv6_route_table_skips_the_reject_default():
+    """RTF_UP clear + RTF_REJECT set is "unreachable", not "on-link via lo"."""
+    assert (
+        _sockets._parse_ipv6_route_table(_IPV6_ROUTE_TABLE, "2606:4700::1111") is None
+    )
+
+
+def test_ipv6_route_table_prefers_the_longest_prefix():
+    hop = _sockets._parse_ipv6_route_table(_IPV6_ROUTE_TABLE, "fe80::abcd")
+    assert hop is not None and hop[0] is None  # on-link via the /64, not the /32
+
+
+#: macOS `route -n get 1.1.1.1`, numeric so nothing depends on reverse DNS.
+_ROUTE_GET_VIA_GATEWAY = (
+    "   route to: 1.1.1.1\n"
+    "destination: default\n"
+    "       mask: default\n"
+    "    gateway: 192.168.64.1\n"
+    "  interface: en0\n"
+    "      flags: <UP,GATEWAY,DONE,STATIC,PRCLONING,GLOBAL>\n"
+)
+
+#: The on-link shape: BSD writes `link#N` where there is no router.
+_ROUTE_GET_ON_LINK = (
+    "   route to: 192.168.64.5\n"
+    "destination: 192.168.64.0\n"
+    "       mask: 255.255.255.0\n"
+    "    gateway: link#4\n"
+    "  interface: en0\n"
+)
+
+
+def test_route_get_output_reads_the_gateway():
+    hop = _sockets._parse_route_get_output(_ROUTE_GET_VIA_GATEWAY)
+    assert hop is not None and hop[0] == "192.168.64.1"
+
+
+def test_route_get_output_treats_a_link_gateway_as_on_link():
+    """`link#4` is not an address; it is BSD for "no router involved"."""
+    hop = _sockets._parse_route_get_output(_ROUTE_GET_ON_LINK)
+    assert hop is not None and hop[0] is None
+
+
+def test_route_get_output_unmatched_is_unknown():
+    assert (
+        _sockets._parse_route_get_output("route: writing to routing socket\n") is None
+    )
+
+
+def test_route_reports_unknown_rather_than_on_link(monkeypatch):
+    """Where the lookup cannot be made, on_link is None -- not a cheerful True.
+
+    This is the macOS case: no /proc, so nothing was read, and `gateway is
+    None` then claimed "no router involved" for a destination two subnets
+    away.
+    """
+    monkeypatch.setattr(_sockets, "_windows_next_hop", lambda dst, ipv6=False: None)
+    monkeypatch.setattr(_sockets, "_posix_next_hop", lambda dst, ipv6=False: None)
+    monkeypatch.setattr(_sockets, "_bsd_next_hop", lambda dst, ipv6=False: None)
+    route = get_route("1.1.1.1")
+    assert route.gateway is None
+    assert route.on_link is None
+    assert not route.on_link  # the safe branch still reads the same
+
+
+def test_route_v6_destination_reaches_the_next_hop_lookup(monkeypatch):
+    """The `version == 4` gate made every v6 destination read as on-link."""
+    seen = {}
+
+    def record(dst, ipv6=False):
+        seen["dst"], seen["ipv6"] = dst, ipv6
+        return ("fe80::1", 7)
+
+    for name in ("_windows_next_hop", "_posix_next_hop", "_bsd_next_hop"):
+        monkeypatch.setattr(_sockets, name, record)
+    route = get_route("2001:db8::5")
+    assert seen == {"dst": "2001:db8::5", "ipv6": True}
+    assert route.on_link is False
+    assert route.interface_index == 7
+
+
+# --------------------------------------------------------------------------- #
+# discover_mtu: the don't-fragment bit is what makes the search mean anything  #
+# --------------------------------------------------------------------------- #
+
+
+def test_dont_fragment_is_settable_for_both_families():
+    """If this fails the UDP search cannot answer, and must say so."""
+    for family in (socket.AF_INET, socket.AF_INET6):
+        try:
+            sock = socket.socket(family, socket.SOCK_DGRAM)
+        except OSError:  # pragma: no cover - env dependent
+            continue
+        try:
+            assert _sockets._set_dont_fragment(sock, family) is True
+        finally:
+            sock.close()
+
+
+def test_discover_mtu_udp_returns_none_when_df_cannot_be_set(monkeypatch):
+    """Without DF every probe survives and the search returns its ceiling.
+
+    Measured: no DF option was set on any platform, so oversized datagrams
+    were fragmented locally, reassembled by the peer and answered -- making
+    `discover_mtu(method="udp")` report `high` (9000 by default) everywhere.
+    """
+    monkeypatch.setattr(_sockets, "_set_dont_fragment", lambda sock, family: False)
+    assert netimps.discover_mtu("127.0.0.1", port=9, method="udp", timeout=0.1) is None
+
+
+def test_discover_mtu_udp_probe_family_follows_the_destination(monkeypatch):
+    """AF_INET was hardcoded, so every v6 destination failed inside sendto."""
+    families = []
+
+    class Recording:
+        def __init__(self, family, kind, *a, **k):
+            families.append(family)
+
+        def settimeout(self, timeout):
+            pass
+
+        def setsockopt(self, level, option, value):
+            pass
+
+        def sendto(self, payload, address):
+            raise OSError("not sent in tests")
+
+        def recvfrom(self, size):  # pragma: no cover - never reached
+            raise AssertionError
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(_sockets._socket, "socket", Recording)
+    assert netimps.discover_mtu("::1", port=9, method="udp", timeout=0.1) is None
+    assert families and set(families) == {socket.AF_INET6}
+
+
+def test_discover_mtu_icmp_declines_when_df_is_unavailable(monkeypatch):
+    """BSD's ping6 has no DF flag, so the honest answer is None, not a number."""
+    monkeypatch.setattr(netimps._ping, "supports_dont_fragment", lambda *a, **k: False)
+    monkeypatch.setattr(
+        netimps, "ping", lambda *a, **k: pytest.fail("must not probe without DF")
+    )
+    assert netimps.discover_mtu("10.0.0.1") is None
+
+
+def test_is_icmp_reply_reads_a_v6_packet_without_an_ip_header():
+    """Raw IPv6 sockets deliver the ICMPv6 message, not the whole datagram.
+
+    And the type numbers are not the v4 ones: 3 is "time exceeded" in v6 and
+    "destination unreachable" in v4, so the tables cannot be shared.
+    """
+    assert _sockets._is_icmp_reply(b"\x03\x00\x00\x00", ipv6=True)  # time exceeded
+    assert _sockets._is_icmp_reply(b"\x01\x00", ipv6=True)  # unreachable
+    assert _sockets._is_icmp_reply(b"\x81\x00", ipv6=True)  # echo reply
+    assert not _sockets._is_icmp_reply(b"\x80\x00", ipv6=True)  # echo *request*
+    assert not _sockets._is_icmp_reply(b"", ipv6=True)
+
+
+def test_bsd_next_hop_answers_loopback_without_spawning(monkeypatch):
+    """Loopback is on-link by definition -- no subprocess, no parsing risk.
+
+    The `route -n get` output shape for a *host* route is the one thing here
+    that could not be measured locally, and loopback is the case that must be
+    right on every platform, so it never reaches the parser.
+    """
+    monkeypatch.setattr(
+        _sockets,
+        "_subprocess_run",
+        lambda *a, **k: pytest.fail("loopback must not spawn a process"),
+    )
+    assert _sockets._bsd_next_hop("127.0.0.1") == (None, 0)
+    assert _sockets._bsd_next_hop("::1", ipv6=True) == (None, 0)
+
+
+def test_subprocess_helpers_never_read_the_callers_stdin(monkeypatch):
+    """A library that inherits stdin can swallow its caller's input."""
+    import subprocess
+
+    seen = []
+
+    class Result:
+        returncode = 0
+        stdout = "  interface: en0\n"
+
+    def recording(cmd, **kwargs):
+        seen.append(kwargs.get("stdin"))
+        return Result()
+
+    monkeypatch.setattr(_sockets, "_subprocess_run", recording)
+    _sockets._bsd_next_hop("1.1.1.1")
+    _sockets._hop_count_traceroute("1.1.1.1", 5, 1.0)
+    assert seen == [subprocess.DEVNULL, subprocess.DEVNULL]

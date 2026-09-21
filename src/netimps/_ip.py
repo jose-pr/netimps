@@ -185,7 +185,21 @@ def _dst_argument(value) -> str:
     return str(value)
 
 
-def get_ip(address: "AddressLike") -> Optional[IPAddress]:
+def _family_for(ipv6: Optional[bool]) -> int:
+    """``AF_INET``/``AF_INET6``/``AF_UNSPEC`` for an ``ipv6=`` argument.
+
+    The three-state ``ipv6`` flag (``True`` v6, ``False`` v4, ``None`` either)
+    is the package's standard spelling for "which family?", and every
+    ``getaddrinfo`` caller has to turn it into a constant. Internal.
+    """
+    if ipv6 is True:
+        return _socket.AF_INET6
+    if ipv6 is False:
+        return _socket.AF_INET
+    return _socket.AF_UNSPEC
+
+
+def get_ip(address: "AddressLike", ipv6: Optional[bool] = None) -> Optional[IPAddress]:
     """Resolve a hostname *or* literal address to an address object, or ``None``.
 
     Tries to parse ``address`` as a literal first and falls back to a DNS
@@ -193,11 +207,22 @@ def get_ip(address: "AddressLike") -> Optional[IPAddress]:
 
         get_ip("10.0.0.5")        # IPv4Address('10.0.0.5')   -- no DNS traffic
         get_ip("example.com")     # IPv4Address('93.184.216.34')
+        get_ip("v6only.example", ipv6=True)   # IPv6Address(...)
         get_ip("nonexistent.")    # None
 
     Also accepts an :class:`IPv4Interface`/:class:`IPv6Interface` (its ``.ip``
     is used) or an existing :class:`IPv4Address`/:class:`IPv6Address`
     (returned as-is, no DNS touched) -- not just a bare hostname string.
+
+    :param ipv6: which family to resolve to -- ``True`` for IPv6, ``False``
+        for IPv4, ``None`` (the default) for whichever the resolver returns
+        first. The lookup goes through ``getaddrinfo``, **not**
+        ``gethostbyname``, which is IPv4-only: an AAAA-only name used to
+        resolve to ``None`` here and read as "no such host".
+
+    A literal of the wrong family is returned as-is rather than rejected --
+    ``ipv6`` selects among a *name's* records and no lookup happens for a
+    literal.
 
     .. note::
        The difference from ``try_parse(address)`` matters: that never
@@ -207,12 +232,22 @@ def get_ip(address: "AddressLike") -> Optional[IPAddress]:
     """
     address = _dst_argument(address)
     try:
-        try:
-            return _ipaddress.ip_address(address)
-        except ValueError:
-            return _ipaddress.ip_address(_socket.gethostbyname(address))
-    except (ValueError, OSError):
+        return _ipaddress.ip_address(address)
+    except ValueError:
+        pass
+
+    try:
+        infos = _socket.getaddrinfo(
+            address, None, _family_for(ipv6), _socket.SOCK_STREAM
+        )
+    except OSError:
         return None
+    for info in infos:
+        try:
+            return _ipaddress.ip_address(info[4][0])
+        except ValueError:
+            continue
+    return None
 
 
 def collapse(networks: "Iterable[IPNetworkLike]") -> "List[IPNetwork]":
@@ -316,8 +351,12 @@ def normalize_host(
     (``"[fe80::1%eth0]:80"`` -> ``("fe80::1%eth0", 80)``). ``default_port`` is
     used when no port is present.
 
-    Raises :class:`ValueError` on empty input, an unclosed bracket, or a port
-    that is not an integer in 0-65535.
+    Raises :class:`ValueError` on empty input, an unclosed bracket, a port that
+    is not an integer in 0-65535, or an unbracketed string with two or more
+    colons that is **not** a valid IPv6 address. That last one is a real input
+    class, not a theoretical one: ``"host:80:extra"`` and a half-typed address
+    used to be handed back whole as the *host*, so the caller then looked up a
+    name that cannot exist instead of being told what was wrong.
     """
     if not isinstance(text, str) or not text.strip():
         raise ValueError("host must be a non-empty string, got %r" % (text,))
@@ -336,8 +375,16 @@ def normalize_host(
         else:
             raise ValueError("unexpected %r after ']' in %r" % (rest, text))
     elif text.count(":") > 1:
-        # More than one colon and no brackets: a bare IPv6 address. Splitting
-        # here would turn "::1" into host "::" port 1.
+        # More than one colon and no brackets: a bare IPv6 address is the only
+        # thing that can be, and splitting would turn "::1" into host "::"
+        # port 1. Confirm it really parses rather than assuming -- the
+        # assumption returned the whole unparseable string as the host, which
+        # is a confident wrong answer the caller cannot detect.
+        if not _is_ipv6_literal(text):
+            raise ValueError(
+                "%r has several colons but is not an IPv6 address; "
+                "bracket it as [host]:port if a port was meant" % (text,)
+            )
         host, port = text, default_port
     elif ":" in text:
         host, _, raw_port = text.partition(":")
@@ -348,6 +395,19 @@ def normalize_host(
     if not host:
         raise ValueError("empty host in %r" % (text,))
     return host, port
+
+
+def _is_ipv6_literal(text: str) -> bool:
+    """True if ``text`` is an IPv6 address, zone id and all.
+
+    ``IPv6Address`` accepts a ``%zone`` suffix from Python 3.9 on, which is the
+    floor here, so the scoped form needs no special casing.
+    """
+    try:
+        IPv6Address(text)
+    except ValueError:
+        return False
+    return True
 
 
 def _parse_port(raw: str, original: str) -> int:
