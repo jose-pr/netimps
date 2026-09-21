@@ -2,7 +2,9 @@
 
 An IEEE 802 hardware address modelled the way :mod:`ipaddress` models IP
 addresses: an immutable value object compared and hashed by its canonical
-bytes, exposing ``.packed`` rather than subclassing :class:`bytes`.
+bytes and -- like :class:`ipaddress.IPv4Address` -- equal only to another
+value of its own type, exposing ``.packed`` rather than subclassing
+:class:`bytes`.
 
 Re-exported from :mod:`netimps`.
 """
@@ -10,45 +12,61 @@ Re-exported from :mod:`netimps`.
 from __future__ import annotations
 
 import re as _re
-from typing import TYPE_CHECKING, Optional, Union
-
-if TYPE_CHECKING:
-    try:
-        from typing import TypeGuard
-    except ImportError:  # pragma: no cover - 3.9
-        from typing_extensions import TypeGuard
+from typing import Optional, Union
 
 __all__ = ["MACAddress", "MACLike"]
 
-#: Anything :class:`MACAddress` accepts.
-MACLike = Union[str, int, bytes, "MACAddress"]
+#: Anything :class:`MACAddress` accepts. ``bytearray`` is listed because the
+#: constructor takes one; ``bool`` is not, because it is rejected despite
+#: being an ``int`` subclass.
+MACLike = Union[str, int, bytes, bytearray, "MACAddress"]
 
 
 class MACAddress:
     """An IEEE 802 MAC address.
 
-    Accepts the common textual forms on construction -- colon (``AA:BB:CC:DD:EE:FF``),
-    hyphen (``AA-BB-CC-DD-EE-FF``), dot/Cisco (``aabb.ccdd.eeff``) or bare
-    (``AABBCCDDEEFF``) -- as well as an ``int`` or another ``MACAddress``. The
-    value is normalised to lowercase and compared/hashed by its canonical bytes,
-    so instances are usable as dict keys and set members.
+    Accepts the common textual forms on construction -- colon
+    (``AA:BB:CC:DD:EE:FF``), hyphen (``AA-BB-CC-DD-EE-FF``), dot per octet
+    (``aa.bb.cc.dd.ee.ff``), dot/Cisco triplets (``aabb.ccdd.eeff``) or bare
+    (``AABBCCDDEEFF``) -- as well as an ``int``, six raw ``bytes`` or
+    ``bytearray``, or another ``MACAddress``. Separators may not be mixed
+    (``00-11:22-33:44-55`` is rejected), and a ``bool`` is not taken as an
+    integer even though Python says it is one.
+
+    The value is normalised to lowercase and compared/hashed by its canonical
+    bytes, so instances are usable as dict keys and set members.
+
+    Equality holds **only against another** ``MACAddress``: comparing with
+    text is ``False``, because no hash can agree with ``str``'s across every
+    spelling of one address. Parse the text first::
+
+        MACAddress.try_parse(text) == mac
 
     ``as_str(sep)`` renders the address with an arbitrary separator between
-    octets; ``sep=""`` produces the bare form.
+    octets; ``sep=""`` produces the bare form, and every separator the
+    constructor accepts round-trips through it.
     """
 
     #: Compiled pattern matching the accepted textual MAC forms. Exposed as a
     #: class attribute so callers can pre-screen text with
     #: ``MACAddress._VALID_MAC.match(text)`` before attempting construction.
+    #: Each separated form is spelled out on its own rather than as a shared
+    #: ``[:.-]`` class, so one address cannot mix separators.
     _VALID_MAC = _re.compile(
         r"^(?:"
-        r"[0-9A-Fa-f]{2}(?:[:-][0-9A-Fa-f]{2}){5}"  # colon/hyphen separated
+        r"[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}"  # colon separated
+        r"|[0-9A-Fa-f]{2}(?:-[0-9A-Fa-f]{2}){5}"  # hyphen separated
+        r"|[0-9A-Fa-f]{2}(?:\.[0-9A-Fa-f]{2}){5}"  # dot separated, per octet
         r"|[0-9A-Fa-f]{4}(?:\.[0-9A-Fa-f]{4}){2}"  # dot / Cisco triplets
         r"|[0-9A-Fa-f]{12}"  # bare, no separators
         r")$"
     )
 
     __slots__ = ("_octets",)
+
+    #: Declared (not assigned) so a checker can type the slot: the first
+    #: assignment reads ``value._octets``, which it otherwise cannot infer.
+    _octets: bytes
 
     def __init__(self, value: MACLike) -> None:
         if isinstance(value, MACAddress):
@@ -60,6 +78,10 @@ class MACAddress:
                 raise ValueError("MAC address must be 6 bytes, got %d" % len(octets))
             self._octets = octets
             return
+        if isinstance(value, bool):
+            # bool is an int subclass, so an unguarded int branch would turn a
+            # stray flag into 00:00:00:00:00:01 instead of rejecting it.
+            raise TypeError("Cannot build MACAddress from %r" % (type(value).__name__,))
         if isinstance(value, int):
             if value < 0 or value > 0xFFFFFFFFFFFF:
                 raise ValueError("MAC integer out of range: %r" % (value,))
@@ -75,7 +97,7 @@ class MACAddress:
         raise TypeError("Cannot build MACAddress from %r" % (type(value).__name__,))
 
     @classmethod
-    def is_valid(cls, value: object) -> "TypeGuard[MACAddress]":
+    def is_valid(cls, value: object) -> bool:
         """Return True if ``value`` can be parsed as a MAC. Never raises.
 
         The type-local spelling of ``netimps.is_valid(value, MACAddress)``,
@@ -85,8 +107,13 @@ class MACAddress:
                 ...
 
         A classmethod rather than a staticmethod so a subclass validates
-        against itself. Declared as a :data:`typing.TypeGuard`, so a checker
-        narrows ``value`` in the ``True`` branch.
+        against itself.
+
+        Returns a plain ``bool`` and deliberately does **not** narrow
+        ``value``: a :data:`typing.TypeGuard` here would let a checker certify
+        ``user_input.packed`` on something that is still a ``str``, which is
+        the unsoundness removed from the module-level ``is_valid`` in 0.1.0.
+        Use :meth:`try_parse` when you want the parsed object.
         """
         try:
             cls(value)  # type: ignore[arg-type]
@@ -100,7 +127,10 @@ class MACAddress:
 
         The type-local spelling of ``netimps.try_parse(value, MACAddress)``.
         Prefer it to :meth:`is_valid` followed by construction -- one call, and
-        no window in which the two disagree.
+        no window in which the two disagree. It is also how text is compared
+        against a MAC, since :meth:`__eq__` does not coerce a ``str``::
+
+            MACAddress.try_parse(user_input) == known_mac
         """
         try:
             return cls(value)  # type: ignore[arg-type]
@@ -116,6 +146,13 @@ class MACAddress:
 
             mac.as_str("-")               # 'aa-bb-cc-dd-ee-ff'
             mac.as_str("-", upper=True)   # 'AA-BB-CC-DD-EE-FF'
+
+        ``sep`` always goes between *octets*, ``"."`` included: the Cisco
+        triplet spelling ``aabb.ccdd.eeff`` is accepted on input but never
+        produced, so that one separator does not quietly mean something
+        different from the others. ``":"``, ``"-"``, ``"."`` and ``""`` all
+        parse back through the constructor; any other separator renders but
+        does not round-trip.
 
         Case affects only this rendering -- two ``MACAddress`` values that
         differ solely in the case they were parsed from remain equal.
@@ -135,7 +172,20 @@ class MACAddress:
 
     @property
     def oui(self) -> bytes:
-        """The 3-byte Organisationally Unique Identifier (vendor prefix)."""
+        """The first three octets -- the vendor prefix -- **verbatim**.
+
+        The I/G (group) and U/L (locally administered) flags live in the low
+        two bits of octet 0 and are *not* masked out here, so for a multicast
+        or locally administered address this is **not** a registered IEEE OUI:
+        ``01:00:5e:00:00:01`` reports ``01:00:5e`` where the registered
+        assignment is ``00:00:5e``. Mask them before a registry lookup::
+
+            bytes([mac.oui[0] & 0xFC]) + mac.oui[1:]
+
+        The bits are kept because this is the prefix as it appears on the wire
+        and in this package's own output; :attr:`is_multicast` and
+        :attr:`is_local` say when the masked form would differ.
+        """
         return self._octets[:3]
 
     @property
@@ -192,13 +242,21 @@ class MACAddress:
         return "MACAddress(%r)" % (self.as_str(":"),)
 
     def __eq__(self, other: object) -> bool:
+        """Equal only to another :class:`MACAddress` -- never to text.
+
+        Coercing a ``str`` here cannot be made lawful: every spelling of one
+        address would compare equal, while ``str.__hash__`` -- not ours to
+        change -- hashes each spelling differently, so ``mac == text`` and
+        ``mac in {text}`` would silently disagree. Parse the text instead::
+
+            MACAddress.try_parse(text) == mac
+
+        Anything that is not a ``MACAddress`` yields ``NotImplemented``, so
+        Python falls back to the reflected comparison and, failing that, to
+        ``False`` -- a mismatch, never an exception.
+        """
         if isinstance(other, MACAddress):
             return self._octets == other._octets
-        if isinstance(other, str):
-            try:
-                return self._octets == MACAddress(other)._octets
-            except (ValueError, TypeError):
-                return NotImplemented
         return NotImplemented
 
     def __hash__(self) -> int:
