@@ -123,4 +123,9 @@ jobs:
         # is exactly how macOS shipped broken for every IPv6 ping while CI stayed
         # green (`ping -6` is not a flag there). The smoke file is the one place
         # that runs the real binary, loopback only, and it must gate the matrix.
-        run: python -m pytest -q
+        # -rs prints the reason for every skip. A skip is not a pass, and this
+        # suite has guards that step aside on a host without IPv6 or without
+        # recvmsg -- so a silent skip count is indistinguishable from the
+        # platform tests never running at all, which is the failure this whole
+        # file exists to make impossible.
+        run: python -m pytest -q -rs
