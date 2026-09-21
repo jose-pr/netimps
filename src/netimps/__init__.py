@@ -166,7 +166,29 @@ __all__ = [
     "HOST_DN",
 ]
 
-__version__ = "0.2.2"
+
+def _installed_version() -> str:
+    """The version the installed distribution actually declares.
+
+    Read rather than restated. A literal here is a second source of truth for
+    one fact, and it drifts the moment `pyproject.toml` is bumped and this line
+    is not -- which is exactly what happened cutting 0.3.0, leaving
+    `__version__` saying 0.2.2 while the metadata said 0.3.0 and the shipped
+    header promised the two were the same value.
+
+    Falls back to "0.0.0+unknown" when the package is not installed at all
+    (running straight from a source tree with no metadata), which is honest
+    about not knowing rather than inventing a number.
+    """
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("netimps")
+    except PackageNotFoundError:  # pragma: no cover - only in a bare checkout
+        return "0.0.0+unknown"
+
+
+__version__ = _installed_version()
 
 #: Fully-qualified (or short) name of the host running this process.
 HOST_DN = _platform.node()

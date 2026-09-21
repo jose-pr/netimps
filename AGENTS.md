@@ -290,11 +290,32 @@ map:
 
 ## Develop
 
+Venvs are named `.venv/<version>-<os>-<arch>/`, one per interpreter this
+project is tested against. The suffix is not decoration: this repo tests two
+Pythons, and on a machine that can run more than one architecture the name is
+the only thing distinguishing them.
+
+`<arch>` is what the interpreter was **built for**
+(`sysconfig.get_platform()`), not what the host is (`platform.machine()`).
+They differ: an ARM64 Windows box runs emulated x64 CPython perfectly happily
+and reports `ARM64` for the machine while the interpreter is `win-amd64`.
+Prefer a native build where one exists — the emulated one is slower and can
+diverge on exactly the low-level behaviour this package pokes at.
+
 ```bash
-python -m venv .venv/dev
-.venv/dev/Scripts/pip install -e ".[dev]"   # POSIX: .venv/dev/bin/pip
-.venv/dev/Scripts/pytest -q                 # POSIX: .venv/dev/bin/pytest -q
+# Latest (development), and the floor (what CI's oldest job runs).
+py -3.14-arm64 -m venv .venv/3.14-nt-arm64
+py -3.9-arm64  -m venv .venv/3.9-nt-arm64
+
+.venv/3.14-nt-arm64/Scripts/pip install -e ".[dev,docs]"
+.venv/3.9-nt-arm64/Scripts/pip install -e ".[dev]"
+
+.venv/3.14-nt-arm64/Scripts/pytest -q
+.venv/3.9-nt-arm64/Scripts/pytest -q          # the floor -- run it before pushing
 ```
+
+On POSIX the scripts live in `bin/` rather than `Scripts/`, and the name is
+e.g. `.venv/3.14-posix-x86_64`.
 
 Tests live in `tests/` and run via `pytest -q` from a checkout;
 `pyproject.toml` puts `src/` on the path.
@@ -332,8 +353,8 @@ Code is formatted with **black** (`target-version = py39`, configured in
 `pyproject.toml`; installed by the `dev` extra):
 
 ```bash
-.venv/dev/Scripts/black src/ tests/          # format
-.venv/dev/Scripts/black --check src/ tests/  # verify, as CI does
+.venv/3.14-nt-arm64/Scripts/black src/ tests/          # format
+.venv/3.14-nt-arm64/Scripts/black --check src/ tests/  # verify, as CI does
 ```
 
 `benchmarks/run.py` is a perf suite run **on demand**, never per push — shared

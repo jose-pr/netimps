@@ -208,11 +208,15 @@ A few behaviours are deliberate and worth knowing:
 
 ## Development
 
+Venvs are named `.venv/<version>-<os>-<arch>/`, one per interpreter tested
+against — `<arch>` being what the interpreter was built for, not what the host
+is. Substitute your own:
+
 ```bash
-python -m venv .venv/dev
-.venv/dev/Scripts/pip install -e ".[dev]"   # POSIX: .venv/dev/bin/pip
-.venv/dev/Scripts/pytest -q
-.venv/dev/Scripts/black src/ tests/
+python -m venv .venv/3.14-nt-arm64
+.venv/3.14-nt-arm64/Scripts/pip install -e ".[dev]"   # POSIX: .../bin/pip
+.venv/3.14-nt-arm64/Scripts/pytest -q
+.venv/3.14-nt-arm64/Scripts/black src/ tests/
 ```
 
 Tested on Python 3.9 (the floor) and 3.14.

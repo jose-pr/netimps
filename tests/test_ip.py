@@ -1,5 +1,7 @@
 import ipaddress
 
+import pathlib
+
 import pytest
 
 import netimps
@@ -598,3 +600,20 @@ def test_normalize_host_rejects_multi_colon_non_addresses(text):
 def test_normalize_host_rejects_malformed_input(text, message):
     with pytest.raises(ValueError, match=message):
         netimps.normalize_host(text)
+
+
+def test_version_is_read_not_restated():
+    """__version__ must equal the installed metadata, not a literal beside it.
+
+    A hardcoded string here is a second source of truth for one fact, and it
+    drifted the moment pyproject.toml was bumped for 0.3.0 -- leaving
+    __version__ at 0.2.2 while the metadata said 0.3.0, and the shipped header
+    promising the two were the same value.
+    """
+    from importlib.metadata import version
+
+    import netimps
+
+    assert netimps.__version__ == version("netimps")
+    source = pathlib.Path(netimps.__file__).read_text(encoding="utf-8")
+    assert '__version__ = "' not in source, "__version__ is hardcoded again"
