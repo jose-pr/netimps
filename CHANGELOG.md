@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`bind_error_hint` no longer reports a Windows `WSAEACCES` as a privilege
+  problem.** Windows has no privileged ports -- any user may bind port 80 --
+  and `WSAEACCES` (WinError 10013) on a bind means the address is held
+  exclusively by another socket, or refused by a firewall or an excluded port
+  range. Python maps it to `PermissionError`/`EACCES`, so the POSIX branch
+  matched first and produced "permission denied binding port 64514" for an
+  unprivileged port, plus the "ports below 1024 need root/Administrator" rider
+  on a low port. The POSIX `EACCES` reading is unchanged, where that advice is
+  correct.
+- **A release publishes its documentation again.** `docs.yml` was triggered by
+  `release: published`, which never fires: the release is created with
+  `GITHUB_TOKEN`, and GitHub does not start workflow runs from token-created
+  events. It now keys off the Release workflow completing successfully. The
+  0.3.0 site was published anyway, by the push-to-main trigger.
+
 ## [0.3.0] - 2026-09-21
 
 Entries marked **BREAKING** change a documented contract. See

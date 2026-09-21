@@ -7,6 +7,19 @@ checked*.
 
 ## [Unreleased]
 
+Two patch-level fixes since 0.3.0, both found by looking outward rather than
+inward: one by reading a consuming package, one by watching the release it had
+just cut.
+
+- `bind_error_hint` misdiagnosed Windows `WSAEACCES` as a privilege problem.
+  Found in `pydhcp`, which requires `netimps>=0.3.0` and had written its own
+  replacement with the measurement in a comment. A consumer routing around our
+  bug is a stronger signal than any test we had -- ours asserted the wrong
+  behaviour as the requirement.
+- `docs.yml`'s `release: published` trigger never fired, because GitHub does
+  not start workflow runs from `GITHUB_TOKEN`-created events. The 0.3.0 site
+  was correct only because the push-to-main trigger happened to cover it.
+
 **Next perf target:** none set. The 0.3.0 baseline is the first measurement
 this project has; the figure worth watching is `get_interfaces`, since every
 membership lookup pays it (see the table below).
