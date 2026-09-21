@@ -10,17 +10,61 @@ are available from a shell -- or to an agent -- without writing Python::
     netimps scan 192.0.2.1 --ports common
 
 Every command takes ``--json`` for machine-readable output, because the whole
-point of a library like this is being scripted against.
+point of a library like this is being scripted against -- so the payload is
+the only thing on stdout, and every diagnostic goes to stderr.
 
-Installed by the ``cli`` extra: ``pip install netimps[cli]``.
+Installed by the ``cli`` extra: ``pip install netimps[cli]``. Importing this
+module does *not* require it: the console script is installed either way, and
+:func:`run` is what reports the missing extra.
 """
 
 from __future__ import annotations
 
 import json as _json
+import sys as _sys
 import typing as _ty
 
-from duho import AUTO, Arg, Args, Choice, Cmd, LoggingArgs, main
+if _ty.TYPE_CHECKING:
+    from duho import AUTO, Args, Choice, Cmd, LoggingArgs
+else:
+    try:
+        from duho import AUTO, Args, Choice, Cmd, LoggingArgs
+    except ImportError:
+        # `pip install netimps` installs the `netimps` console script whether
+        # or not the `cli` extra was asked for, and a console script imports
+        # this module before it can call anything -- so importing it must not
+        # raise. The stand-ins exist only so the command classes below can
+        # still be *defined*; `run()` refuses before it ever uses one.
+        AUTO = Choice = None
+
+        class _Unavailable:
+            """Stand-in for a duho base when the ``cli`` extra is absent."""
+
+        class Args(_Unavailable):
+            pass
+
+        class Cmd(_Unavailable):
+            pass
+
+        class LoggingArgs(_Unavailable):
+            pass
+
+
+# duho's ``Arg`` *is* ``typing.Annotated`` -- but duho binds it as a plain
+# variable (``Arg = _ty.Annotated``), and a variable is not usable in type
+# position, so a type checker rejects every field annotated through it. The
+# annotated fields below therefore spell ``_ty.Annotated[...]`` directly:
+# identical at runtime (duho reads ``__metadata__``, which is what
+# ``Annotated`` produces), and it type-checks.
+#
+# The ``"int | None"`` return annotations below are PEP 604 written inside
+# strings, which the 3.9 floor cannot evaluate -- and never has to.
+# ``from __future__ import annotations`` leaves every annotation unevaluated,
+# and duho's only runtime introspection is ``typing.get_type_hints(cls)`` in
+# ``_introspect.get_clsargs``, which reads CLASS-level fields and never a
+# method signature. Measured on 3.9.13: the whole parser tree builds and
+# commands run. The class-level fields are the ones that must stay
+# ``_ty.Optional[...]`` -- and they are.
 
 from ._dns import ResolutionError
 from . import (
@@ -50,6 +94,33 @@ from . import (
 )
 
 __all__ = ["run"]
+
+#: What a user who ran the console script without the extra needs to be told.
+_NEEDS_EXTRA = "netimps: the CLI needs the 'cli' extra -- pip install 'netimps[cli]'"
+
+
+def _error(text: str) -> None:
+    """Print a diagnostic on stderr, keeping stdout for the answer alone.
+
+    Errors used to go to stdout, which made ``--json`` unparseable exactly
+    where a script needs it most: prose landed in the pipe instead of (or
+    ahead of) the payload. Anything that is not the answer belongs on stderr.
+    """
+    print(text, file=_sys.stderr)
+
+
+def _as_int(text: str) -> "int | None":
+    """``int(text)``, or ``None`` when it is not a number.
+
+    The conversion *is* the test: ``str.isdigit()`` answers a different
+    question -- it is true for ``'\N{SUPERSCRIPT TWO}'`` and other Unicode
+    digits that ``int()`` then rejects, turning a mistyped port into a
+    traceback instead of a usage error.
+    """
+    try:
+        return int(text)
+    except ValueError:
+        return None
 
 
 def _emit(payload, as_json: bool, plain=None) -> None:
@@ -98,7 +169,7 @@ class Interfaces(_Base):
         if self.name:
             found = [i for i in found if i.name == self.name]
             if not found:
-                print("no interface named %r" % self.name)
+                _error("no interface named %r" % self.name)
                 return 1
 
         if self.json_out:
@@ -133,11 +204,13 @@ class Ping(_Base):
 
     _parsername_ = "ping"
 
-    dst: str = ""
+    # No default: a missing host must be argparse's "required argument"
+    # message, not a ping of the empty string reported as unreachable.
+    dst: str
     "Host to ping"
     ("dst",)
 
-    method: "Arg[str, Choice('icmp', 'tcp', 'udp')]" = "icmp"
+    method: _ty.Annotated[str, Choice("icmp", "tcp", "udp")] = "icmp"
     "Probe type; tcp/udp reach hosts that drop ICMP echo"
     ("--method", "-m")
 
@@ -203,7 +276,7 @@ class Resolve(_Base):
     _parsername_ = "resolve"
     _parseraliases_ = ["dns"]
 
-    query: str = ""
+    query: str
     "Name to look up"
     ("query",)
 
@@ -237,7 +310,7 @@ class Resolve(_Base):
             # every applicable backend failed to even attempt the query
             # (e.g. a non-address rdtype with dnspython not installed) --
             # neither is a DNS answer, so both are reported the same way.
-            print("error: %s" % exc)
+            _error("error: %s" % exc)
             return 2
         _emit([str(r) for r in records], self.json_out)
         # Empty is a real answer (NXDOMAIN / no records), not an error.
@@ -250,11 +323,11 @@ class Check(_Base):
     _parsername_ = "check"
     _parseraliases_ = ["tcp"]
 
-    dst: str = ""
+    dst: str
     "Host to connect to"
     ("dst",)
 
-    port: str = ""
+    port: str
     "Port number or scheme name (https, ssh, ...)"
     ("port",)
 
@@ -267,11 +340,13 @@ class Check(_Base):
     ("--wait", "-w")
 
     def __call__(self) -> "int | None":
-        port = self.port if self.port.isdigit() else get_default_port(self.port)
+        number = _as_int(self.port)
+        port = number if number is not None else get_default_port(self.port)
         if port is None:
-            print("error: unknown port or scheme %r" % self.port)
+            # A port the command cannot derive is a caller error (exit 2), not
+            # a closed port (exit 1): nothing was tested.
+            _error("error: unknown port or scheme %r" % self.port)
             return 2
-        port = int(port)
 
         if self.wait is not None:
             ok = wait_for_port(self.dst, port, timeout=self.wait)
@@ -301,7 +376,7 @@ class Route(_Base):
 
     def __call__(self) -> "int | None":
         found = get_route(self.dst)
-        payload = {
+        payload: _ty.Dict[str, _ty.Any] = {
             "dst": str(found.dst),
             "src": None if found.src is None else str(found.src),
             "gateway": None if found.gateway is None else str(found.gateway),
@@ -311,17 +386,31 @@ class Route(_Base):
         if self.hops:
             payload["hops"] = hop_count(self.dst)
 
+        # ``on_link`` is a tri-state: True (no router needed), False (via the
+        # gateway), or None when this platform could not be asked. Rendering
+        # None as "on-link" would state as fact the one thing the lookup
+        # failed to establish, so the two stay distinguishable in text
+        # ("unknown") exactly as they are in JSON (``null``).
+        if found.gateway is not None:
+            gateway_text = str(found.gateway)
+        elif found.on_link:
+            gateway_text = "(on-link, no router)"
+        else:
+            gateway_text = "(unknown)"
+
+        lines = [
+            "dst      %s" % payload["dst"],
+            "src      %s" % payload["src"],
+            "gateway  %s" % gateway_text,
+            "on-link  %s" % ("unknown" if found.on_link is None else found.on_link),
+        ]
+        if self.hops:
+            lines.append("hops     %s" % payload["hops"])
+
         _emit(
             payload,
             self.json_out,
-            plain="\n".join(
-                [
-                    "dst      %s" % payload["dst"],
-                    "src      %s" % payload["src"],
-                    "gateway  %s" % (payload["gateway"] or "(on-link, no router)"),
-                    "hops     %s" % payload["hops"] if self.hops else None,
-                ][: 4 if self.hops else 3]
-            ),
+            plain="\n".join(lines),
         )
         return None
 
@@ -331,11 +420,11 @@ class Mtu(_Base):
 
     _parsername_ = "mtu"
 
-    dst: str = ""
+    dst: str
     "Destination to measure toward"
     ("dst",)
 
-    method: "Arg[str, Choice('icmp', 'udp', 'tcp')]" = "icmp"
+    method: _ty.Annotated[str, Choice("icmp", "udp", "tcp")] = "icmp"
     "How to probe; tcp derives from the negotiated MSS"
     ("--method", "-m")
 
@@ -386,7 +475,7 @@ class Scan(_Base):
 
     _parsername_ = "scan"
 
-    target: str = ""
+    target: str
     "Host to scan, or a network in CIDR form"
     ("target",)
 
@@ -410,6 +499,13 @@ class Scan(_Base):
         network = try_parse(self.target, IPNetwork)
         # A bare address parses as a /32, which is a host scan, not a sweep.
         is_network = network is not None and "/" in self.target
+
+        # The two branches answer different questions and so emit different
+        # shapes: a list of hosts for a sweep, one host for a port scan.
+        # Declared up front, because inferring the type from whichever
+        # branch comes first makes the other one a type error.
+        payload: _ty.Any
+        plain: str
 
         try:
             if is_network:
@@ -443,7 +539,7 @@ class Scan(_Base):
                     or "no open ports found"
                 )
         except ValueError as exc:
-            print("error: %s" % exc)
+            _error("error: %s" % exc)
             return 2
 
         _emit(payload, self.json_out, plain=plain)
@@ -456,7 +552,7 @@ class Addr(_Base):
     _parsername_ = "addr"
     _parseraliases_ = ["parse"]
 
-    value: str = ""
+    value: str
     "Address, hostname, network or MAC to inspect"
     ("value",)
 
@@ -508,7 +604,7 @@ class Addr(_Base):
 
         address = get_ip(self.value)
         if address is None:
-            print(
+            _error(
                 "error: %r is not an address, network, MAC or resolvable name"
                 % self.value
             )
@@ -554,7 +650,7 @@ class Source(_Base):
     def __call__(self) -> "int | None":
         address = get_source_ip(self.dst)
         if address is None:
-            print("no route to %s" % self.dst)
+            _error("no route to %s" % self.dst)
             return 1
         _emit({"dst": self.dst, "src": str(address)}, self.json_out, plain=str(address))
         return None
@@ -571,17 +667,24 @@ class Port(_Base):
 
     def __call__(self) -> "int | None":
         if self.value is None:
-            port = get_free_port()
-            _emit({"free_port": port}, self.json_out, plain=str(port))
+            # Named apart from the lookup below: this branch answers a
+            # different question and always has a port, where
+            # ``get_default_port`` may have none.
+            free = get_free_port()
+            _emit({"free_port": free}, self.json_out, plain=str(free))
             return None
 
-        if self.value.isdigit():
-            scheme = get_default_scheme(int(self.value))
+        number = _as_int(self.value)
+        if number is not None:
+            scheme = get_default_scheme(number)
             _emit(
-                {"port": int(self.value), "scheme": scheme},
+                {"port": number, "scheme": scheme},
                 self.json_out,
                 plain=scheme or "unknown",
             )
+            # No registered mapping is an answer ("none"), the way an empty
+            # `resolve` is -- exit 1, not the caller error `check` reports when
+            # an unknown scheme leaves it with no port to connect to.
             return 0 if scheme else 1
 
         port = get_default_port(self.value)
@@ -598,7 +701,7 @@ class Split(_Base):
 
     _parsername_ = "split"
 
-    value: str = ""
+    value: str
     "The host:port string, e.g. '[::1]:8080'"
     ("value",)
 
@@ -610,7 +713,7 @@ class Split(_Base):
         try:
             host, port = normalize_host(self.value, self.default_port)
         except ValueError as exc:
-            print("error: %s" % exc)
+            _error("error: %s" % exc)
             return 2
         _emit(
             {"host": host, "port": port},
@@ -642,5 +745,24 @@ class Netimps(Args):
 
 
 def run(argv: "_ty.Sequence[str] | None" = None) -> "int | None":
-    """Console-script entry point."""
-    return main(Netimps, argv)
+    """Console-script entry point.
+
+    ``duho`` is imported here, not at module scope, because the console script
+    is installed by a plain ``pip install netimps`` while duho lives in the
+    ``cli`` extra: without the extra the command must say so in one line, not
+    die in an ``ImportError`` traceback from an import the user never wrote.
+
+    A ``ValueError`` out of the library is a caller error -- a port that is not
+    a port, a ``--method`` that needs an argument it was not given -- so it
+    becomes a usage error on stderr with exit 2, never a traceback.
+    """
+    try:
+        from duho import main
+    except ImportError as exc:
+        raise SystemExit(_NEEDS_EXTRA) from exc
+
+    try:
+        return main(Netimps, argv)
+    except ValueError as exc:
+        _error("error: %s" % exc)
+        return 2
