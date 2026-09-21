@@ -701,11 +701,24 @@ def test_ipv6_membership_carries_the_interface_index(fake_adapter, spec):
     assert struct.unpack("@I", request[16:])[0] == _FAKE_INDEX
 
 
-def test_ipv6_membership_without_an_interface_is_still_kernel_choice(fake_adapter):
-    """No `interface=` means index 0 -- unchanged, and the documented default."""
+def test_ipv6_membership_without_an_interface_is_still_kernel_choice(
+    fake_adapter, monkeypatch
+):
+    """No `interface=` means index 0 -- the documented default, where it works.
+
+    Index 0 is "kernel's choice" and is exactly right on Linux and Windows,
+    which honour it. macOS/BSD will not make that choice for a link-local-scope
+    group, so an index is supplied there instead -- see
+    `test_only_unroutable_scopes_get_a_default_index`. The platform flag is
+    faked here so this asserts the kernel-choice case on every runner rather
+    than only on the two where it happens to hold.
+    """
     import struct
 
-    request = netimps._multicast._membership_request("ff02::fb", None, ipv6=True)
+    from netimps import _multicast
+
+    monkeypatch.setattr(_multicast, "_NEEDS_EXPLICIT_V6_SCOPE", False)
+    request = _multicast._membership_request("ff02::fb", None, ipv6=True)
     assert struct.unpack("@I", request[16:])[0] == 0
 
 
