@@ -51,8 +51,20 @@ jobs:
         run: python -m pip install -e ".[dev]"
       - name: Check formatting
         run: python -m black --check src/ tests/
-      - name: Type-check the package
-        run: python -m mypy src/netimps
+      - name: Type-check the package for every target platform
+        # `mypy --platform` matters here as much as the Python version does.
+        # This package is full of per-platform branches, and mypy checks ALL of
+        # them whatever host it runs on -- but it resolves names like
+        # `ctypes.WinDLL`, `socket.SIO_RCVALL` and `socket.ioctl` against the
+        # platform it thinks it is targeting. So a clean run on a Windows laptop
+        # says nothing about the Linux runner, which is exactly how five
+        # attr-defined errors reached CI after a local check came back green.
+        #
+        # Three runs, one per platform the matrix below tests.
+        run: |
+          python -m mypy --platform linux src/netimps
+          python -m mypy --platform darwin src/netimps
+          python -m mypy --platform win32 src/netimps
       - name: Type-check the public typing contract
         # tests/typing/api.py exists to prove the shipped header's static-typing
         # promises. It is not a pytest module and pytest never collected it, so

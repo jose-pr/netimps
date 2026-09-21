@@ -656,7 +656,7 @@ def _windows_interfaces(want_raw: bool) -> "List[Interface]":
     :func:`get_interfaces` fall back.
     """
     try:
-        iphlpapi = _ctypes.WinDLL("iphlpapi.dll")
+        iphlpapi = _ctypes.WinDLL("iphlpapi.dll")  # type: ignore[attr-defined]  # Windows-only name; mypy checks this branch on every platform, and it is already guarded at runtime
         get_adapters = iphlpapi.GetAdaptersAddresses
     except (OSError, AttributeError) as exc:
         raise OSError("GetAdaptersAddresses unavailable: %s" % (exc,))

@@ -265,6 +265,17 @@ map:
   So: do not collapse the two invocations onto one config without passing
   `--no-incremental`, and do not read a `call-overload` error in `api.py` as a
   contract regression before re-running it from a cold cache.
+- **Type-check for every platform, not just yours.** `mypy` checks every
+  per-platform branch whatever host it runs on, but resolves names against the
+  platform it *thinks* it is targeting — so `ctypes.WinDLL`,
+  `socket.SIO_RCVALL` and `socket.ioctl` type fine on Windows and fail on the
+  Linux runner. Run `mypy --platform linux`, `--platform darwin` and
+  `--platform win32`; CI runs all three. A clean local run on one platform
+  proved nothing and let five `attr-defined` errors reach CI.
+- **Constants differ between the BSDs, not just between BSD and Linux.**
+  `IP_DONTFRAG` is 67 on FreeBSD and **28 on Darwin**; one number for "BSD"
+  made `_set_dont_fragment` fail silently on macOS, which for a DF option means
+  the MTU search loses its whole point. `IPV6_DONTFRAG` (62) they do agree on.
 - Run `black src/ tests/` before committing. CI's `lint` job runs
   `black --check src/ tests/`, `mypy src/netimps`, and the consumer-config
   check above; all three must pass.

@@ -99,8 +99,18 @@ _LINUX_IP_PMTUDISC_DO = 2  # <linux/in.h>
 _LINUX_IPV6_MTU_DISCOVER = 23  # <linux/in6.h>
 _LINUX_IPV6_PMTUDISC_DO = 2  # <linux/in6.h>
 _WINDOWS_IP_DONTFRAGMENT = 14  # <ws2ipdef.h>
-_BSD_IP_DONTFRAG = 67  # <netinet/in.h>
-_BSD_IPV6_DONTFRAG = 62  # <netinet6/in6.h>, the RFC 3542 number
+#: The BSDs do not agree with each other here, and using one number for all of
+#: them is how this shipped broken: FreeBSD's `IP_DONTFRAG` is 67, Darwin's is
+#: 28, and a `setsockopt` with the wrong one simply fails -- which, for a DF
+#: option, means the MTU search silently loses its whole point. Caught by CI on
+#: macOS, where `_set_dont_fragment` returned False with the FreeBSD value.
+_DARWIN_IP_DONTFRAG = 28  # <netinet/in.h>, Darwin
+_FREEBSD_IP_DONTFRAG = 67  # <netinet/in.h>, FreeBSD
+_BSD_IP_DONTFRAG = (
+    _DARWIN_IP_DONTFRAG if _sys.platform == "darwin" else _FREEBSD_IP_DONTFRAG
+)
+#: This one they do agree on: the RFC 3542 number, same on Darwin and FreeBSD.
+_BSD_IPV6_DONTFRAG = 62  # <netinet6/in6.h>
 
 
 def bind(
@@ -821,7 +831,7 @@ def _windows_next_hop(dest: str, ipv6: bool = False) -> "Optional[_NextHop]":
         destination.Ipv4.sin_family = family
         ctypes.memmove(destination.Ipv4.sin_addr, packed, 4)
 
-    iphlpapi = ctypes.WinDLL("iphlpapi.dll")
+    iphlpapi = ctypes.WinDLL("iphlpapi.dll")  # type: ignore[attr-defined]  # Windows-only name; mypy checks this branch on every platform, and it is already guarded at runtime
     row = _MIB_IPFORWARD_ROW2()
     best_source = _SOCKADDR_INET()
     status = iphlpapi.GetBestRoute2(
@@ -1302,7 +1312,10 @@ def hop_count(
             pass
         if _IS_WINDOWS:
             try:
-                icmp.ioctl(_socket.SIO_RCVALL, _socket.RCVALL_ON)
+                icmp.ioctl(  # type: ignore[attr-defined]
+                    _socket.SIO_RCVALL,  # type: ignore[attr-defined]
+                    _socket.RCVALL_ON,  # type: ignore[attr-defined]
+                )
             except (OSError, AttributeError):
                 pass
         for ttl in range(1, max_hops + 1):

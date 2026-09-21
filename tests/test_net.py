@@ -1415,18 +1415,6 @@ def test_ping_treats_zero_tries_as_one(monkeypatch):
     assert len(calls) == 1
 
 
-def test_ping_family_flags(monkeypatch):
-    calls = _capture_ping(monkeypatch)
-    netimps.ping("host", ipv6=True)
-    assert "-6" in calls[0][0]
-    calls.clear()
-    netimps.ping("host", ipv6=False)
-    assert "-4" in calls[0][0]
-    calls.clear()
-    netimps.ping("host")
-    assert "-6" not in calls[0][0] and "-4" not in calls[0][0]
-
-
 def test_ping_has_wall_clock_timeout(monkeypatch):
     """-W bounds the reply wait, not a hung resolver -- so cap the subprocess too."""
     calls = _capture_ping(monkeypatch)

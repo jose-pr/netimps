@@ -355,13 +355,23 @@ def _udp_ping(dst, port, timeout, size=0, ipv6=None, source=None, ttl=None):
     return False, None, "no reply"
 
 
-def _wants_ipv6(dst: str, ipv6: "Optional[bool]") -> bool:
+def _wants_ipv6(
+    dst: str,
+    ipv6: "Optional[bool]",
+    resolved: "Optional[List[IPAddress]]" = None,
+) -> bool:
     """Whether this probe should go out over IPv6.
 
     On BSD the answer selects the **binary**, not a flag, so it has to be
-    decided before argv exists. An explicit ``ipv6=`` wins; an address literal
-    answers for itself; a name is resolved, preferring v4 when it has both, so
-    the default stays the ordinary ``ping``.
+    decided before argv exists. An explicit ``ipv6=`` wins and an address
+    literal answers for itself, neither of which costs a lookup.
+
+    For a name, ``resolved`` is the answer :func:`_expected_addresses` already
+    got, reused rather than looked up again. Resolving twice is not just waste:
+    the two calls can disagree, and then the binary and the reply-address
+    expectation would be arguing about different hosts. ``getaddrinfo`` returns
+    the resolver's preferred family first, which is the same choice an
+    unqualified ``ping`` would make.
     """
     if ipv6 is not None:
         return bool(ipv6)
@@ -371,17 +381,15 @@ def _wants_ipv6(dst: str, ipv6: "Optional[bool]") -> bool:
     literal = _try_parse(dst)
     if literal is not None:
         return literal.version == 6
-    for family, wants_six in ((_socket.AF_INET, False), (_socket.AF_INET6, True)):
-        try:
-            _socket.getaddrinfo(dst, None, family, _socket.SOCK_STREAM)
-        except OSError:
-            continue
-        return wants_six
+    if resolved:
+        return resolved[0].version == 6
     return False
 
 
 def supports_dont_fragment(
-    dst: "AddressLike" = "", ipv6: "Optional[bool]" = None
+    dst: "AddressLike" = "",
+    ipv6: "Optional[bool]" = None,
+    resolved: "Optional[List[IPAddress]]" = None,
 ) -> bool:
     """Whether DF can actually be set for this destination on this host.
 
@@ -396,7 +404,7 @@ def supports_dont_fragment(
     """
     if _PLATFORM != "bsd":
         return True
-    return not _wants_ipv6(_dst_argument(dst) if dst else "", ipv6)
+    return not _wants_ipv6(_dst_argument(dst) if dst else "", ipv6, resolved)
 
 
 def _ping_command(
@@ -407,6 +415,7 @@ def _ping_command(
     size: "Optional[int]",
     ttl: "Optional[int]",
     dont_fragment: bool,
+    resolved: "Optional[List[IPAddress]]" = None,
 ) -> "Tuple[List[str], bool]":
     """Build ``(argv, used_ping6)`` for one ICMP probe.
 
@@ -414,7 +423,7 @@ def _ping_command(
     correspond: see the ``_PLATFORM`` comment for what differs and where it was
     measured.
     """
-    use_six = _PLATFORM == "bsd" and _wants_ipv6(dst, ipv6)
+    use_six = _PLATFORM == "bsd" and _wants_ipv6(dst, ipv6, resolved)
 
     if _PLATFORM == "windows":
         # Windows counts with -n and takes a timeout in milliseconds.
@@ -676,7 +685,14 @@ def ping(
         return PingResult(False, dst, attempts=last or 1)
 
     tries = max(1, tries)
-    if dont_fragment and not supports_dont_fragment(dst, ipv6):
+
+    # Resolve once, here, and let both decisions read the same answer. The
+    # reply-address expectation and (on BSD) the choice of binary are two
+    # questions about one lookup; asking twice costs an extra round trip and
+    # lets them disagree about which host is being pinged.
+    expected = _expected_addresses(dst, ipv6)
+
+    if dont_fragment and not supports_dont_fragment(dst, ipv6, expected):
         raise ValueError(
             "dont_fragment cannot be set for this destination on %s "
             "(no verified DF flag for ping6 here); a probe without DF measures "
@@ -690,19 +706,13 @@ def ping(
         size,
         ttl,
         dont_fragment,
+        expected,
     )
     # A hard cap on the subprocess itself: the per-reply flag bounds how long
     # ping waits for an answer, but not how long name resolution can hang
     # beforehand -- and BSD `ping6` has no wait flag at all, so this is the only
     # bound there.
     wall_timeout = max(timeout, 1.0) + 5.0
-
-    # Windows exits 0 for "TTL expired in transit", so a zero exit alone does
-    # not mean the target answered. Confirm the reply came from the target
-    # itself by matching its address in the output -- an address comparison,
-    # never the localised prose around it. A hostname can resolve to several
-    # addresses (and to either family), so any of them counts as the target.
-    expected = _expected_addresses(dst, ipv6)
 
     for attempt in range(1, tries + 1):
         try:
