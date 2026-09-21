@@ -1,0 +1,118 @@
+{
+  "implementation": "CPython",
+  "machine": "ARM64",
+  "metrics": {
+    "collapse_256_subnets": {
+      "max_ms": 9.562699939124286,
+      "median_ms": 2.441750024445355,
+      "min_ms": 1.9493000581860542,
+      "samples": 400
+    },
+    "get_default_port": {
+      "max_ms": 0.002300017513334751,
+      "median_ms": 0.000200001522898674,
+      "min_ms": 0.00019988510757684708,
+      "samples": 400
+    },
+    "get_free_port": {
+      "max_ms": 0.06860005669295788,
+      "median_ms": 0.02729997504502535,
+      "min_ms": 0.022500054910779,
+      "samples": 400
+    },
+    "get_interfaces": {
+      "max_ms": 15.951900044456124,
+      "median_ms": 1.318699971307069,
+      "min_ms": 0.999300042167306,
+      "samples": 400
+    },
+    "get_source_ip_loopback": {
+      "max_ms": 0.4270999925211072,
+      "median_ms": 0.04509999416768551,
+      "min_ms": 0.03430002834647894,
+      "samples": 400
+    },
+    "is_local_address_hit": {
+      "max_ms": 0.01009996049106121,
+      "median_ms": 0.003700028173625469,
+      "min_ms": 0.0029999064281582832,
+      "samples": 400
+    },
+    "iter_addresses_cached": {
+      "max_ms": 0.005600042641162872,
+      "median_ms": 0.001700012944638729,
+      "min_ms": 0.0014998950064182281,
+      "samples": 400
+    },
+    "mac_as_str": {
+      "max_ms": 0.009200070053339005,
+      "median_ms": 0.003200024366378784,
+      "min_ms": 0.0029999064281582832,
+      "samples": 400
+    },
+    "normalize_host_v6_bracketed": {
+      "max_ms": 0.004199915565550327,
+      "median_ms": 0.000600004568696022,
+      "min_ms": 0.0004998873919248581,
+      "samples": 400
+    },
+    "parse_1024_addresses": {
+      "max_ms": 12.046200106851757,
+      "median_ms": 4.657950019463897,
+      "min_ms": 3.8424000376835465,
+      "samples": 400
+    },
+    "parse_ipv4_literal": {
+      "max_ms": 0.04060007631778717,
+      "median_ms": 0.00200001522898674,
+      "min_ms": 0.0018998980522155762,
+      "samples": 400
+    },
+    "parse_ipv6_literal": {
+      "max_ms": 0.04879990592598915,
+      "median_ms": 0.0039000296965241432,
+      "min_ms": 0.003200024366378784,
+      "samples": 400
+    },
+    "parse_mac_colon": {
+      "max_ms": 0.011600088328123093,
+      "median_ms": 0.002300017513334751,
+      "min_ms": 0.0018998980522155762,
+      "samples": 400
+    },
+    "subtract_from_default_route": {
+      "max_ms": 1.1890999739989638,
+      "median_ms": 0.5131999496370554,
+      "min_ms": 0.4350000526756048,
+      "samples": 400
+    },
+    "try_parse_rejects": {
+      "max_ms": 0.008199946023523808,
+      "median_ms": 0.003100023604929447,
+      "min_ms": 0.0028999056667089462,
+      "samples": 400
+    }
+  },
+  "notes": {
+    "collapse_256_subnets": "CIDR merge over a /8 worth of /16s",
+    "get_default_port": "scheme registry lookup",
+    "get_free_port": "bind(0) + close, the standard racy-but-useful helper",
+    "get_interfaces": "full NIC enumeration through ctypes -- the expensive one",
+    "get_source_ip_loopback": "unconnected UDP socket + getsockname; sends nothing",
+    "is_local_address_hit": "membership lookup; re-enumerates, which is why it is not free",
+    "iter_addresses_cached": "flattening an already-enumerated list; isolates the loop from the syscall",
+    "mac_as_str": "render back out, as a CLI or log line would",
+    "normalize_host_v6_bracketed": "host:port splitting, the case that trips naive rsplit",
+    "parse_1024_addresses": "bulk parse, to show per-call overhead against a real workload",
+    "parse_ipv4_literal": "the hot path for anything that accepts an address as text",
+    "parse_ipv6_literal": "same, for v6 -- ipaddress is measurably slower here",
+    "parse_mac_colon": "MAC parsing, the most common spelling",
+    "subtract_from_default_route": "the set difference ipaddress does not ship",
+    "try_parse_rejects": "the validation path; rejection goes through an exception"
+  },
+  "package": "netimps",
+  "platform": "Windows-11-10.0.28000-SP0",
+  "python": "3.14.6",
+  "samples": 400,
+  "schema": 1
+}

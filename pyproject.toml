@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "netimps"
 version = "0.2.2"
-authors = [{ name = "Jose A." }]
+authors = [{ name = "jose-pr", email = "jose-pr@coqui.dev" }]
 description = "Small, self-contained network utilities: IP/MAC types, DNS lookup, ping, NIC discovery"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -45,7 +45,15 @@ Documentation = "https://jose-pr.github.io/netimps/"
 Issues = "https://github.com/jose-pr/netimps/issues"
 
 [tool.hatch.build.targets.sdist]
-exclude = ["/.*"]
+# Two separate guards. "/.*" is dotfiles only -- it provably does not cover
+# `*.local.*` (fnmatch('AGENTS.local.md', '.*') is False), and a `*.local.*`
+# file must never be packaged, so it needs a pattern of its own.
+exclude = ["/.*", "*.local.*"]
+
+[tool.hatch.build.targets.wheel]
+# The package directory ships wholesale, so the `*.local.*` guard has to be
+# repeated here: the sdist exclude above does not apply to the wheel.
+exclude = ["*.local.*"]
 
 # Ship the *consumer-facing* docs inside the installed package, so a consuming
 # agent can read them from site-packages via importlib.resources rather than

@@ -1,6 +1,9 @@
 # Agent configs / private notes — never tracked in this repo
+# `.agents` is deliberately slashless: it is usually a symlink, which a
+# directory-only `.agents/` pattern would not match.
+# `*.local.*` covers every extension, not just `.local.md`.
 .agents
-*.local.md
+*.local.*
 CLAUDE*
 .claude/
 
