@@ -5,7 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.3.1] - 2026-09-21
+
+A same-day follow-up to 0.3.0, fixing three defects that release introduced or
+exposed. No documented contract changes: the `resolve()` fix *restores* one.
 
 ### Added
 
@@ -632,7 +635,8 @@ below is simply what the package contains.
 - **`Host`**, **`retry()`/`backoff_delays()`**, and the named networks `APIPA`,
   `LOOPBACK_V4`, `LOOPBACK_V6`, `LINK_LOCAL_V6`.
 
-[Unreleased]: https://github.com/jose-pr/netimps/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/jose-pr/netimps/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/jose-pr/netimps/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/jose-pr/netimps/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/jose-pr/netimps/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/jose-pr/netimps/compare/v0.2.0...v0.2.1

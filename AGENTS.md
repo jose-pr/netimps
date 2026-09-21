@@ -346,8 +346,10 @@ windows and macos, on a push to `main`, on a pull request against `main`, on a
 `ci-*` tag (a throwaway tag, so an agent without dashboard access can trigger
 and poll a run), and on `workflow_dispatch`. The docs site is built and
 deployed by a separate `docs.yml` — on a docs-affecting push to `main`, on
-`workflow_dispatch`, and on `release: published` — so a wrong sentence on the
-landing page can be corrected without cutting a version.
+`workflow_dispatch`, and on the **Release workflow completing successfully**
+(`workflow_run`, *not* `release: published`, which never fires because GitHub
+does not start runs from `GITHUB_TOKEN`-created events) — so a wrong sentence
+on the landing page can be corrected without cutting a version.
 
 Code is formatted with **black** (`target-version = py39`, configured in
 `pyproject.toml`; installed by the `dev` extra):

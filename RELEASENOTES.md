@@ -5,24 +5,46 @@ benchmark figures and the validation evidence behind each release. The
 changelog says *what changed*; this says *what it costs you and how it was
 checked*.
 
-## [Unreleased]
+## 0.3.1 — 2026-09-21
 
-Two patch-level fixes since 0.3.0, both found by looking outward rather than
-inward: one by reading a consuming package, one by watching the release it had
-just cut.
+Three patch-level fixes, none found by the test suite. Two of the three were
+**pinned as the requirement by a passing test** — the suite asserted the
+defect. That is the pattern worth naming: a test written from the
+implementation can only ever confirm the implementation.
 
-- `bind_error_hint` misdiagnosed Windows `WSAEACCES` as a privilege problem.
-  Found in `pydhcp`, which requires `netimps>=0.3.0` and had written its own
-  replacement with the measurement in a comment. A consumer routing around our
-  bug is a stronger signal than any test we had -- ours asserted the wrong
-  behaviour as the requirement.
-- `docs.yml`'s `release: published` trigger never fired, because GitHub does
-  not start workflow runs from `GITHUB_TOKEN`-created events. The 0.3.0 site
-  was correct only because the push-to-main trigger happened to cover it.
+### Nothing to migrate
 
-**Next perf target:** none set. The 0.3.0 baseline is the first measurement
-this project has; the figure worth watching is `get_interfaces`, since every
-membership lookup pays it (see the table below).
+No documented contract changed. The `resolve()` fix restores the contract
+0.3.0 broke, so code written against 0.2.x is correct again without edits, and
+code written against 0.3.0's raise keeps working if it passes `strict=True`.
+
+### What was wrong, and how each was found
+
+- **`resolve()` raised on a resolver outage** instead of returning `[]`,
+  contradicting its own docstring in the same release. Reported by the
+  maintainer within hours of 0.3.0. `if not resolve(host):` — the idiom the
+  function exists for — became an uncaught `ResolutionError` anywhere DNS was
+  unreachable, which is the one condition a caller most wants to survive.
+  `strict=True` is the opt-in for callers that do need an outage told apart
+  from a dead name.
+- **`bind_error_hint` misdiagnosed Windows `WSAEACCES` as a privilege
+  problem.** Found in `pydhcp`, which requires `netimps>=0.3.0` and had
+  written its own replacement with the measurement in a comment. A consumer
+  routing around our bug is a stronger signal than any test we had — ours
+  asserted the wrong behaviour as the requirement.
+- **`docs.yml`'s `release: published` trigger never fired**, because GitHub
+  does not start workflow runs from `GITHUB_TOKEN`-created events. The 0.3.0
+  site was correct only because the push-to-main trigger happened to cover it.
+  This release is the first to exercise the `workflow_run` replacement.
+
+### Benchmarks
+
+Not re-run. Nothing here touches a hot path — two error-message branches, one
+return statement and a workflow trigger. The 0.3.0 baseline below still
+stands.
+
+**Next perf target:** none set. The figure worth watching is
+`get_interfaces`, since every membership lookup pays it (see the table below).
 
 ## 0.3.0 — 2026-09-21
 
