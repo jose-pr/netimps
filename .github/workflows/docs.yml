@@ -6,16 +6,21 @@ name: Docs
 # landing page stayed wrong until the next version.
 #
 # Three ways in:
-#   - `release: published`, so a v* release ships its matching docs. The release
-#     workflow only *gates* on a strict docs build; publishing the release fires
-#     this deploy. That keeps deployment in one place without making a release
-#     the only way the site can change.
+#   - the Release workflow finishing successfully, so a v* release ships its
+#     matching docs. NOT `release: published`, which looks like the obvious
+#     trigger and never fires: the release is created by the release workflow
+#     using GITHUB_TOKEN, and GitHub deliberately does not start new workflow
+#     runs from token-created events (it would recurse). Measured on v0.3.0 --
+#     the release was published at 13:08:53 by github-actions[bot] and no docs
+#     run followed. `workflow_run` keys off the workflow completing rather than
+#     off the event it emitted, so it is not subject to that rule.
 #   - a docs-affecting push to main, so a correction ships on its own, and the
 #     site stays current between releases;
 #   - workflow_dispatch, for a manual rebuild.
 on:
-  release:
-    types: [published]
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
   push:
     branches:
       - main
@@ -39,6 +44,13 @@ jobs:
   build:
     name: Build documentation site
     runs-on: ubuntu-latest
+    # `workflow_run: [completed]` fires on failure too -- there is no
+    # `types: [success]`. Without this guard a release that failed its test gate
+    # would still publish its docs, which is the one case where stale is better
+    # than wrong. Pushes and manual dispatches are unconditional.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
     permissions:
       contents: read
       pages: write
