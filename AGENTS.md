@@ -265,6 +265,14 @@ map:
   So: do not collapse the two invocations onto one config without passing
   `--no-incremental`, and do not read a `call-overload` error in `api.py` as a
   contract regression before re-running it from a cold cache.
+- **`.github/probe/` answers platform questions with captured bytes.** Push a
+  `probe-*` tag (not `ci-*` — that is test.yml's) or dispatch it, then read the
+  uploaded artifact. It has already settled several things it would be a waste
+  to re-derive: macOS `ping` has no `-4`/`-6`, BSD `-W` is milliseconds,
+  `IP_DONTFRAG` is 28 on Darwin and 67 on FreeBSD, and CPython exports
+  `socket.IP_MTU` on no platform at all. Output is redacted by default
+  (`--raw` to keep MACs and addresses for local diagnosis) because the
+  transcript is uploaded and pasted into findings.
 - **Type-check for every platform, not just yours.** `mypy` checks every
   per-platform branch whatever host it runs on, but resolves names against the
   platform it *thinks* it is targeting — so `ctypes.WinDLL`,

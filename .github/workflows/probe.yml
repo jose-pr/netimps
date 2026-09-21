@@ -1,0 +1,70 @@
+name: Probe
+
+# Instrumentation, not a gate. It runs the platform's own binaries and socket
+# options and records what they actually do, so a question about macOS or BSD
+# behaviour can be answered with captured bytes instead of a manpage and a
+# guess. It has settled several: that macOS `ping` has no `-4`/`-6` flag, that
+# BSD `-W` is milliseconds, that `IP_DONTFRAG` is 28 on Darwin and 67 on
+# FreeBSD, and that CPython exports `socket.IP_MTU` on no platform at all.
+#
+# Deliberately NOT on the `ci-*` tag that test.yml uses: sharing it meant every
+# routine CI tag also span up a multi-runner probe matrix nobody asked for.
+# Push a `probe-*` tag, or dispatch it by hand.
+on:
+  workflow_dispatch:
+    inputs:
+      raw:
+        description: "Include unredacted MACs and addresses in the artifact"
+        type: boolean
+        required: false
+        default: false
+  push:
+    tags:
+      - "probe-*"
+
+permissions:
+  contents: read
+
+concurrency:
+  # One probe per ref. These are slow and entirely diagnostic; a queued second
+  # copy of the same question is waste.
+  group: probe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    name: Probe (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # Nothing here should take minutes. A hang means a probe is waiting on a
+    # reply that will never come, and the interesting part is the transcript
+    # up to that point, not a runner held for six hours.
+    timeout-minutes: 15
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-13 is deliberately absent: the image is retired and the job
+        # simply never schedules, leaving the whole run queued forever. Nothing
+        # has been measured on Intel macOS since.
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install package with all extras
+        run: python -m pip install -e ".[dev]"
+      - name: Capture platform behaviour
+        env:
+          PROBE_JSON: probe-${{ matrix.os }}.json
+        # Redacted by default: the transcript is uploaded as an artifact, and a
+        # platform question never needs the runner's real MACs or LAN topology.
+        # `--raw` is there for a local run where you do want them.
+        run: python .github/probe/capture.py ${{ inputs.raw && '--raw' || '' }}
+      - name: Upload capture
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe-${{ matrix.os }}
+          path: probe-*.json
+          if-no-files-found: warn

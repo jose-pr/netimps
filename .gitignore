@@ -25,6 +25,10 @@ dist/
 *.egg
 .eggs/
 
+# Probe captures. .github/probe/capture.py writes one per run; they hold a
+# transcript of the host's real behaviour and are never meant to be committed.
+probe*.json
+
 # Test / coverage / type-checker caches
 .pytest_cache/
 .mypy_cache/
