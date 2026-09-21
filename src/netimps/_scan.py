@@ -3,7 +3,10 @@
 Sweeping a port range or a subnet is trivially parallel and painfully slow
 serially: 1024 ports at a 1s timeout is 17 minutes sequentially and a couple of
 seconds with a thread pool. Both scanners here are thin, honest wrappers over
-:func:`netimps.tcp_check`.
+:func:`netimps.tcp_check`, with one addition: the destination is resolved
+**once** for the whole scan rather than once per probe, because ``tcp_check``
+resolves on every call and a failing lookup is indistinguishable from a closed
+port in its answer.
 
 Re-exported from :mod:`netimps`.
 
@@ -17,10 +20,12 @@ Use it on hosts you are responsible for.
 
 from __future__ import annotations
 
+import socket as _socket
 from concurrent.futures import ThreadPoolExecutor as _ThreadPool
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
-from ._ip import AddressLike, IPAddress, IPNetworkLike
+from ._ip import AddressLike, IPAddress, IPNetworkLike, _dst_argument
+from ._scheme import coerce_port
 
 __all__ = ["scan_ports", "scan_hosts", "PORT_RANGES"]
 
@@ -81,6 +86,82 @@ PORT_RANGES = {
 #: Above ~200 the OS starts refusing sockets on some platforms.
 _DEFAULT_WORKERS = 100
 
+#: The smallest timeout a probe is allowed to run with. ``settimeout(0)`` puts
+#: a socket in **non-blocking** mode rather than meaning "do not wait", so a
+#: zero timeout reports every port -- open or not -- as closed. 1ms is the
+#: smallest value that still blocks, and is far below any real connect.
+_MIN_TIMEOUT = 0.001
+
+
+def _floor_timeout(timeout: float) -> float:
+    """Clamp a probe timeout away from zero.
+
+    A caller passing ``timeout=0`` means "be quick", which is a reasonable
+    request; what ``socket.settimeout(0)`` delivers is a non-blocking socket
+    whose ``connect`` raises ``BlockingIOError`` immediately, so every port
+    reads as closed -- a full scan's worth of confidently wrong answers.
+    :func:`netimps.ping` already rounds a sub-second POSIX timeout **up** so
+    it never becomes 0; this is the same precedent for the socket path.
+
+    A negative timeout has no such reading -- ``settimeout`` rejects it -- so
+    it raises :class:`ValueError` rather than being silently floored.
+    """
+    value = float(timeout)
+    if value < 0:
+        raise ValueError("timeout must not be negative: %r" % (timeout,))
+    return max(value, _MIN_TIMEOUT)
+
+
+def _probe_addresses(host: "AddressLike") -> "List[str]":
+    """Resolve ``host`` to address literals **once**, for a whole scan.
+
+    :func:`netimps.tcp_check` resolves its destination on every call, and a
+    scan dispatches one call per port -- so scanning a *name* issued one
+    lookup per port, 65,535 of them for a full sweep. The cost is not only
+    latency: a rate-limited or flaky resolver starts failing those lookups
+    partway through, ``tcp_check`` reads a failed lookup as unreachable, and
+    the affected ports are reported **closed** by the function whose entire
+    output is the list of open ones.
+
+    An address literal is returned untouched, without consulting the resolver
+    at all. A name that resolves to several addresses keeps all of them, in
+    the order the system prefers: probing each in turn is what
+    ``socket.create_connection`` was already doing inside every single probe,
+    so a dual-stack name still reports a port open on either family. A name
+    that does not resolve yields an empty list -- the scan then finds nothing,
+    which is what it found before, after one lookup instead of thousands.
+    """
+    from . import try_parse
+
+    dst = _dst_argument(host)
+    if try_parse(dst, IPAddress) is not None:
+        return [dst]
+    try:
+        infos = _socket.getaddrinfo(dst, None, 0, _socket.SOCK_STREAM)
+    except OSError:
+        return []
+
+    addresses: "List[str]" = []
+    for info in infos:
+        # Only the INET/INET6 sockaddrs carry a textual address in slot 0, and
+        # a SOCK_STREAM lookup returns nothing else -- the guard is for the
+        # type checker, which types the union of every sockaddr shape.
+        address = info[4][0]
+        if isinstance(address, str) and address not in addresses:
+            addresses.append(address)
+    return addresses
+
+
+def _probe(addresses: "Sequence[str]", port: int, timeout: float) -> bool:
+    """True if any of ``addresses`` accepts a TCP connection on ``port``.
+
+    The scan worker. Takes already-resolved literals so no probe touches the
+    resolver -- see :func:`_probe_addresses`.
+    """
+    from . import tcp_check
+
+    return any(tcp_check(address, port, timeout) for address in addresses)
+
 
 def _resolve_ports(ports) -> "Sequence[int]":
     """Normalise a port specification to a tuple of port numbers.
@@ -95,6 +176,12 @@ def _resolve_ports(ports) -> "Sequence[int]":
 
     Range names win over scheme names where they collide, since a caller
     writing ``"common"`` means the set.
+
+    Every resulting number is validated by :func:`netimps._scheme.coerce_port`,
+    so an out-of-range port raises here rather than reaching the socket layer,
+    which would mask it to 16 bits and scan a different port. An empty
+    iterable stays empty -- it means "nothing to scan", never "the default
+    set".
     """
     from . import get_default_port
 
@@ -103,34 +190,41 @@ def _resolve_ports(ports) -> "Sequence[int]":
             return PORT_RANGES[ports]
         resolved = _port_number(ports, get_default_port)
         if resolved is not None:
-            return (resolved,)
+            return (coerce_port(resolved),)
         raise ValueError(
             "unknown port range or scheme %r (ranges: %s)"
             % (ports, ", ".join(sorted(PORT_RANGES)))
         )
     if isinstance(ports, int):
-        return (ports,)
+        return (coerce_port(ports),)
 
     out = []
     for entry in ports:
         if isinstance(entry, int):
-            out.append(entry)
+            out.append(coerce_port(entry))
             continue
         resolved = _port_number(entry, get_default_port)
         if resolved is None:
             raise ValueError("cannot resolve %r to a port number" % (entry,))
-        out.append(resolved)
+        out.append(coerce_port(resolved))
     return tuple(out)
 
 
 def _port_number(value, get_default_port) -> "Optional[int]":
-    """A single port spec to a number: ``"443"``, ``"https"``, or ``None``."""
+    """A single port spec to a number: ``"443"``, ``"https"``, or ``None``.
+
+    The numeric test is ``int()`` itself, not :meth:`str.isdigit`: that
+    answers ``True`` for characters ``int()`` then rejects -- superscripts and
+    other Unicode digits -- so the intended fall-through to the scheme table
+    became a :class:`ValueError` from inside the conversion instead.
+    """
     if isinstance(value, int):
         return value
     text = str(value).strip()
-    if text.isdigit():
+    try:
         return int(text)
-    return get_default_port(text)
+    except ValueError:
+        return get_default_port(text)
 
 
 def scan_ports(
@@ -156,27 +250,39 @@ def scan_ports(
     :param ports: a :data:`PORT_RANGES` name (``"common"``, ``"well-known"``,
         ``"all"``), a scheme name resolved via :func:`get_default_port`, a port
         number, or any iterable mixing those. A range name wins over a scheme
-        name where the two collide.
+        name where the two collide. Each port must be in ``0-65535``; an empty
+        iterable means "nothing to scan" and returns ``[]``.
     :param timeout: per-port connect timeout. This bounds the whole scan
         (``timeout`` x rounds), so keep it small on a large range -- but not so
-        small that a slow host reads as closed.
+        small that a slow host reads as closed. Floored to 1ms, since
+        ``settimeout(0)`` means *non-blocking* and would report every port
+        closed; a negative value raises.
     :param workers: concurrent connections. These tasks are I/O-bound, so the
         useful number is far above the CPU count; very high values can exhaust
         file descriptors or trip rate limiting.
 
+    ``host`` is resolved **once** for the whole scan rather than once per port
+    -- see :func:`_probe_addresses` for why that is a correctness fix and not
+    only a speed one. A name that does not resolve returns ``[]``.
+
     Open means "the TCP handshake completed" -- not that the service is
     healthy, and not that a filtered port is distinguishable from a closed one
     (both simply fail to connect).
-    """
-    from . import tcp_check
 
+    Raises :class:`ValueError` for a port outside ``0-65535``, an unknown
+    scheme or range name, or a negative ``timeout``.
+    """
     targets = _resolve_ports(ports)
     if not targets:
         return []
+    timeout = _floor_timeout(timeout)
 
-    open_ports = []
+    addresses = _probe_addresses(host)
+    if not addresses:
+        return []
+
     with _ThreadPool(max_workers=min(workers, len(targets))) as pool:
-        results = pool.map(lambda p: (p, tcp_check(host, p, timeout)), targets)
+        results = pool.map(lambda p: (p, _probe(addresses, p, timeout)), targets)
         open_ports = [port for port, is_open in results if is_open]
     return sorted(open_ports)
 
@@ -202,9 +308,13 @@ def scan_hosts(
         are skipped.
     :param port: shorthand for ``ports=[port]``. Accepts a scheme name too, so
         ``port="ssh"`` is ``port=22``.
-    :param ports: ports to probe per host; defaults to the ``"common"`` set.
-        Same forms as :func:`scan_ports`.
-    :param timeout: per-connection timeout.
+    :param ports: ports to probe per host; defaults to the ``"common"`` set
+        when **omitted**. Same forms as :func:`scan_ports`. An explicitly
+        empty ``ports`` means "nothing to scan" and returns ``[]`` -- it does
+        not fall back to the default set, which would sweep 36 ports across
+        the network a caller just said to probe on none.
+    :param timeout: per-connection timeout, floored to 1ms as in
+        :func:`scan_ports`; a negative value raises.
     :param workers: total concurrent connections across all hosts.
 
     Returns ``[(address, [open_ports]), ...]`` sorted by address, including
@@ -220,7 +330,7 @@ def scan_hosts(
     Refuses networks larger than /16 (or IPv6 /112): a /8 sweep is 16 million
     hosts, which is a mistake rather than an intention.
     """
-    from . import IPNetwork, parse, tcp_check
+    from . import IPNetwork, parse
 
     net = parse(network, IPNetwork)
     if net.version == 4 and net.prefixlen < 16:
@@ -232,9 +342,18 @@ def scan_hosts(
 
     if port is not None and ports is not None:
         raise ValueError("pass either port or ports, not both")
-    targets = _resolve_ports([port] if port is not None else (ports or "common"))
+    # `ports or "common"` would read an explicitly empty list as "unset" and
+    # sweep the default 36 ports instead of none, so test for omission.
+    if port is not None:
+        spec: "PortsLike" = [port]
+    elif ports is not None:
+        spec = ports
+    else:
+        spec = "common"
+    targets = _resolve_ports(spec)
     if not targets:
         return []
+    timeout = _floor_timeout(timeout)
 
     # A /31 or /32 has no separate network/broadcast address, and .hosts()
     # already accounts for that.
@@ -244,7 +363,10 @@ def scan_hosts(
     found: "Dict[IPAddress, List[int]]" = {}
     with _ThreadPool(max_workers=min(workers, len(work))) as pool:
         results = pool.map(
-            lambda item: (item[0], item[1], tcp_check(str(item[0]), item[1], timeout)),
+            # Every address here is already a literal from the network, so the
+            # workers never consult the resolver -- same property scan_ports
+            # gets from _probe_addresses.
+            lambda item: (item[0], item[1], _probe([str(item[0])], item[1], timeout)),
             work,
         )
         for address, probe, is_open in results:

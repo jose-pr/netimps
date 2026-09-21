@@ -4,7 +4,14 @@ A small registry mapping scheme names to their conventional ports and back,
 seeded with the entries the system services database gets wrong or omits
 (there is no ``/etc/services`` entry for the socks variants at all).
 
-Re-exported from :mod:`netimps`.
+Also the home of :func:`coerce_port`, the single place a port number is
+validated. It lives here because this is already the module every port-taking
+entry point consults to turn a spec into a number, and an unvalidated port is
+not a loud failure: the socket layer masks it to 16 bits and answers
+confidently about a *different* port.
+
+:func:`get_default_port` and :func:`get_default_scheme` are re-exported from
+:mod:`netimps`; :func:`coerce_port` is internal to the package.
 """
 
 from __future__ import annotations
@@ -70,6 +77,77 @@ def _reindex_ports() -> None:
 
 _reindex_ports()
 
+#: The inclusive bounds of the TCP/UDP port space, as the 16-bit field on the
+#: wire defines them. Named rather than inlined so the error message and the
+#: check cannot drift apart.
+MIN_PORT = 0
+MAX_PORT = 65535
+
+#: Protocols consulted in the system services database, in order. An explicit
+#: protocol is not optional: see :func:`_service_port`.
+_SERVICE_PROTOCOLS = ("tcp", "udp")
+
+
+def coerce_port(port: object, label: str = "port") -> int:
+    """Validate a port number, returning it, or raise.
+
+    The shared gate for every port-taking entry point. Skipping it is not a
+    loud failure: the socket layer masks the value to 16 bits, so a caller
+    asking about ``115823`` -- the obvious ``base + offset`` arithmetic slip
+    in a loop -- is told about ``50287`` instead, with nothing to indicate the
+    question changed.
+
+    ``bool`` is rejected rather than read as its ``0``/``1`` value: ``True``
+    is never a port anyone meant, and letting it through would scan port 1.
+
+    :param label: what the number is, for the message (``"port"``,
+        ``"source port"``); the caller knows and this function does not.
+
+    Raises :class:`TypeError` for a non-``int`` and :class:`ValueError`
+    outside ``0-65535``.
+    """
+    if isinstance(port, bool) or not isinstance(port, int):
+        raise TypeError("%s must be an int, got %r" % (label, type(port).__name__))
+    if not MIN_PORT <= port <= MAX_PORT:
+        raise ValueError(
+            "%s out of range: %r (must be %d-%d)" % (label, port, MIN_PORT, MAX_PORT)
+        )
+    return port
+
+
+def _service_port(scheme: str) -> "Optional[int]":
+    """The services-database port for ``scheme``, TCP first, then UDP.
+
+    ``getservbyname(scheme)`` with no protocol returns whichever entry the
+    platform's database happens to find first, so the same call can answer
+    with the TCP port on one host and the UDP port on another -- a
+    platform-dependent answer from a table documented as stable. Asking in a
+    fixed order removes that: TCP wins where a name has both, and a UDP-only
+    service (``bootpc``, ``syslog``) is still found rather than lost to the
+    stricter lookup.
+    """
+    for protocol in _SERVICE_PROTOCOLS:
+        try:
+            return _socket.getservbyname(scheme, protocol)
+        except OSError:
+            continue
+    return None
+
+
+def _service_name(port: int) -> "Optional[str]":
+    """The services-database name for ``port``, TCP first, then UDP.
+
+    The same fixed order as :func:`_service_port`, and for the same reason --
+    port 514 is ``shell``/``cmd`` over TCP and ``syslog`` over UDP, and a
+    protocol-less lookup picks between them per platform.
+    """
+    for protocol in _SERVICE_PROTOCOLS:
+        try:
+            return _socket.getservbyport(port, protocol)
+        except (OSError, OverflowError, TypeError):
+            continue
+    return None
+
 
 def register_port(scheme: str, port: int, canonical: bool = False) -> None:
     """Register (or override) a scheme's conventional port.
@@ -81,6 +159,16 @@ def register_port(scheme: str, port: int, canonical: bool = False) -> None:
         get_default_port("myproto")     # 9999
         get_default_scheme(9999)        # 'myproto'
 
+    Re-registering a scheme **moves** it: the port it used to occupy no longer
+    maps back to it, or the registry would contradict itself::
+
+        register_port("myproto", 8888)
+        get_default_port("myproto")     # 8888
+        get_default_scheme(9999)        # None, not 'myproto'
+
+    If another scheme is still registered on the vacated port, it inherits the
+    slot (earliest registration first, the same rule the initial index uses).
+
     :param scheme: scheme name; matched case-insensitively.
     :param port: TCP/UDP port number, 0-65535.
     :param canonical: make ``scheme`` the name :func:`get_default_scheme` returns for
@@ -88,17 +176,27 @@ def register_port(scheme: str, port: int, canonical: bool = False) -> None:
         for a port keeps that slot, so adding an alias does not silently change
         what an existing port maps back to.
 
-    Raises :class:`ValueError` on an out-of-range port or empty scheme.
+    Raises :class:`ValueError` on an out-of-range port or empty scheme, and
+    :class:`TypeError` on a non-``int`` port.
     """
     if not scheme or not scheme.strip():
         raise ValueError("scheme must be a non-empty string")
-    if not isinstance(port, int) or isinstance(port, bool):
-        raise TypeError("port must be an int, got %r" % (type(port).__name__,))
-    if not 0 <= port <= 65535:
-        raise ValueError("port out of range: %r" % (port,))
+    port = coerce_port(port)
 
     scheme = scheme.strip().lower()
+    previous = _DEFAULT_PORTS.get(scheme)
     _DEFAULT_PORTS[scheme] = port
+    if previous is not None and previous != port:
+        # The scheme moved. Leaving the old reverse entry in place is how the
+        # registry ends up stating both "myproto is 8888" and "9999 is
+        # myproto" at once; hand the vacated slot to whichever scheme still
+        # claims that port, if any.
+        if _PORT_SCHEMES.get(previous) == scheme:
+            del _PORT_SCHEMES[previous]
+            for name, num in _DEFAULT_PORTS.items():
+                if num == previous:
+                    _PORT_SCHEMES[previous] = name
+                    break
     if canonical or port not in _PORT_SCHEMES:
         _PORT_SCHEMES[port] = scheme
 
@@ -113,15 +211,16 @@ def get_default_port(scheme: str) -> Optional[int]:
         get_default_port("socks5")   # 1080  (absent from /etc/services)
         get_default_port("nope")     # None
 
+    The database is asked for **TCP first, then UDP**, so a name carrying both
+    answers with its TCP port on every platform rather than with whichever
+    entry that host's database lists first.
+
     Case-insensitive. Extend the table with :func:`register_port`.
     """
     scheme = scheme.lower()
     if scheme in _DEFAULT_PORTS:
         return _DEFAULT_PORTS[scheme]
-    try:
-        return _socket.getservbyname(scheme)
-    except OSError:
-        return None
+    return _service_port(scheme)
 
 
 def get_default_scheme(port: int) -> Optional[str]:
@@ -134,12 +233,17 @@ def get_default_scheme(port: int) -> Optional[str]:
         get_default_scheme(9999)    # None
 
     Falls back to the system services database via
-    :func:`socket.getservbyport`. Where several schemes share a port, the
-    canonical one is returned -- see :func:`register_port`.
+    :func:`socket.getservbyport`, asked for **TCP first, then UDP**: port 514
+    is ``shell``/``cmd`` over TCP and ``syslog`` over UDP, and a
+    protocol-less lookup picks between them per platform. Where several
+    schemes share a port, the canonical one is returned -- see
+    :func:`register_port`.
+
+    An out-of-range ``port`` is ``None`` rather than an error: this is a table
+    lookup, not a socket operation, so "no such entry" is the honest answer.
+    The port-taking network helpers validate instead, via
+    :func:`coerce_port`.
     """
     if port in _PORT_SCHEMES:
         return _PORT_SCHEMES[port]
-    try:
-        return _socket.getservbyport(port)
-    except (OSError, OverflowError, TypeError):
-        return None
+    return _service_name(port)

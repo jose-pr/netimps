@@ -50,10 +50,27 @@ def is_multicast(address: "AddressLike") -> bool:
         is_multicast("ff02::fb")      # True
         is_multicast("10.0.0.1")      # False
 
+    Accepts everything :data:`AddressLike` does, including an
+    :class:`IPv4Interface`/:class:`IPv6Interface` -- its ``.ip`` is tested::
+
+        is_multicast(IPv4Interface("239.1.2.3/32"))   # True
+
+    That matters because this is the gatekeeper :func:`join_group` and
+    :func:`leave_group` use. Testing the interface object directly asked
+    whether a *network* was multicast, which it never is, so a real group
+    passed in the form every other function here accepts was rejected as "not
+    a multicast group".
+
     Never raises: anything unparseable is ``False``.
     """
     from . import IPAddress, try_parse
 
+    from ._ip import _dst_argument
+
+    try:
+        address = _dst_argument(address)
+    except (TypeError, ValueError):
+        return False
     parsed = try_parse(address, IPAddress)
     return bool(parsed is not None and parsed.is_multicast)
 

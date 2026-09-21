@@ -3,6 +3,7 @@
 Everything is pointed at loopback -- these never scan anything external.
 """
 
+import ipaddress
 import socket
 
 import pytest
@@ -161,6 +162,328 @@ def test_scan_hosts_results_are_sorted(listener):
 
 
 # --------------------------------------------------------------------------- #
+# port validation                                                              #
+# --------------------------------------------------------------------------- #
+
+
+def test_out_of_range_port_raises_instead_of_wrapping(listener):
+    """A port above 65535 must not be masked to 16 bits and answered about.
+
+    Measured before the fix: with a listener on ``p``, ``p + 65536`` scanned
+    as open -- a confident answer about a port nobody asked about, and an easy
+    ``base + offset`` slip to make in a loop.
+    """
+    with pytest.raises(ValueError, match="out of range"):
+        scan_ports("127.0.0.1", [listener + 65536], timeout=0.5)
+    with pytest.raises(ValueError, match="out of range"):
+        scan_hosts("127.0.0.1/32", port=listener + 65536, timeout=0.5)
+
+
+@pytest.mark.parametrize("port", [-1, 65536, 100000])
+def test_resolve_ports_rejects_out_of_range(port):
+    """Every spelling of a port spec goes through the same gate."""
+    from netimps._scan import _resolve_ports
+
+    for spec in (port, [port], str(port)):
+        with pytest.raises(ValueError, match="out of range"):
+            _resolve_ports(spec)
+
+
+def test_coerce_port_accepts_the_whole_range_and_nothing_else():
+    from netimps._scheme import coerce_port
+
+    assert coerce_port(0) == 0
+    assert coerce_port(65535) == 65535
+    with pytest.raises(ValueError, match="out of range"):
+        coerce_port(65536)
+    with pytest.raises(ValueError, match="source port out of range"):
+        coerce_port(70000, "source port")
+    with pytest.raises(TypeError, match="must be an int"):
+        coerce_port("443")
+    # True is never a port anyone meant; unrejected it would scan port 1.
+    with pytest.raises(TypeError, match="must be an int"):
+        coerce_port(True)
+
+
+def test_unicode_digit_falls_through_to_scheme_lookup():
+    """``str.isdigit()`` admits characters ``int()`` then rejects.
+
+    SUPERSCRIPT TWO is a digit by ``isdigit()`` and not by ``int()``, so the
+    old numeric test crashed inside the conversion instead of trying the value
+    as a scheme name and reporting it unresolvable.
+    """
+    from netimps._scan import _port_number, _resolve_ports
+
+    assert "²".isdigit()  # the premise, pinned
+    assert _port_number("²", netimps.get_default_port) is None
+    with pytest.raises(ValueError, match="unknown port range or scheme"):
+        _resolve_ports("²")
+    with pytest.raises(ValueError, match="cannot resolve"):
+        _resolve_ports([80, "²"])
+
+
+# --------------------------------------------------------------------------- #
+# timeouts                                                                     #
+# --------------------------------------------------------------------------- #
+
+
+def test_zero_timeout_still_finds_an_open_port(listener):
+    """``settimeout(0)`` is *non-blocking*, not "do not wait".
+
+    Unfloored it makes ``connect`` raise ``BlockingIOError`` at once, which
+    reads as closed -- so a scan at ``timeout=0`` reported every port on every
+    host closed, quickly and silently.
+    """
+    assert scan_ports("127.0.0.1", [listener], timeout=0) == [listener]
+    assert scan_hosts("127.0.0.1/32", port=listener, timeout=0) == [
+        (netimps.IPv4Address("127.0.0.1"), [listener])
+    ]
+
+
+def test_floor_timeout_clamps_zero_and_rejects_negative():
+    from netimps._scan import _MIN_TIMEOUT, _floor_timeout
+
+    assert _floor_timeout(0) == _MIN_TIMEOUT
+    assert _floor_timeout(0.5) == 0.5
+    assert _MIN_TIMEOUT > 0
+    with pytest.raises(ValueError, match="must not be negative"):
+        _floor_timeout(-1)
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: scan_ports("127.0.0.1", [80], timeout=-0.5),
+        lambda: scan_hosts("127.0.0.1/32", port=80, timeout=-0.5),
+    ],
+)
+def test_negative_timeout_raises(call):
+    """A negative timeout has no reading -- ``settimeout`` rejects it too."""
+    with pytest.raises(ValueError, match="must not be negative"):
+        call()
+
+
+# --------------------------------------------------------------------------- #
+# resolution happens once per scan, not once per probe                         #
+# --------------------------------------------------------------------------- #
+
+
+def _record_lookups(monkeypatch):
+    """Record every host passed to ``getaddrinfo``, still resolving it.
+
+    Patching the ``socket`` module global covers ``create_connection`` as
+    well, which is where the per-probe resolutions came from.
+    """
+    seen = []
+    real = socket.getaddrinfo
+
+    def counting(host, *args, **kwargs):
+        seen.append(host)
+        return real(host, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", counting)
+    return seen
+
+
+def _names(looked_up):
+    """The lookups that are names rather than address literals."""
+    return [
+        host for host in looked_up if netimps.try_parse(host, netimps.IPAddress) is None
+    ]
+
+
+def test_scan_ports_resolves_a_name_once(listener, monkeypatch):
+    """One lookup for the scan, not one per port.
+
+    Measured before the fix: eight ports meant eight ``getaddrinfo`` calls for
+    the same name. The cost is not only latency -- a rate-limited resolver
+    starts failing those lookups partway through, ``tcp_check`` reads a failed
+    lookup as unreachable, and those ports are reported **closed** by the
+    function whose whole output is the list of open ones.
+    """
+    spare = [netimps.get_free_port() for _ in range(3)]
+    looked_up = _record_lookups(monkeypatch)
+
+    scan_ports("localhost", [listener] + spare, timeout=0.5)
+
+    assert _names(looked_up) == ["localhost"]
+
+
+def test_scan_hosts_never_looks_up_a_name(listener, monkeypatch):
+    """Its targets come from the network, so nothing reaches the resolver.
+
+    Asserted as "no *name* was looked up" rather than a call count, so it
+    still holds if :func:`netimps.tcp_check` later stops resolving literals.
+    """
+    looked_up = _record_lookups(monkeypatch)
+
+    found = scan_hosts("127.0.0.1/32", port=listener, timeout=0.5)
+
+    assert found, "sanity: the scan still ran"
+    assert _names(looked_up) == []
+
+
+def test_probe_tries_every_resolved_address(monkeypatch):
+    """Resolving once must not quietly reduce a name to its first address.
+
+    ``create_connection`` looped over every address inside each probe, so a
+    dual-stack name still has to report a port open on either family.
+    """
+    from netimps._scan import _probe
+
+    tried = []
+
+    def fake_tcp_check(dst, port, timeout):
+        tried.append(dst)
+        return dst == "127.0.0.1"
+
+    monkeypatch.setattr(netimps, "tcp_check", fake_tcp_check)
+
+    assert _probe(["::1", "127.0.0.1"], 80, 1.0) is True
+    assert tried == ["::1", "127.0.0.1"]
+
+
+def test_an_unresolvable_host_scans_as_nothing_open(monkeypatch):
+    """The single point of failure answers [], as the per-probe one did."""
+
+    def refuse(*args, **kwargs):
+        raise socket.gaierror("Name or service not known")
+
+    monkeypatch.setattr(socket, "getaddrinfo", refuse)
+    assert scan_ports("no-such-host.example", [80, 443], timeout=0.5) == []
+
+
+def test_an_address_literal_is_never_sent_to_the_resolver(monkeypatch):
+    from netimps._scan import _probe_addresses
+
+    def refuse(*args, **kwargs):  # pragma: no cover - must never be called
+        raise AssertionError("a literal was passed to getaddrinfo")
+
+    monkeypatch.setattr(socket, "getaddrinfo", refuse)
+    assert _probe_addresses("127.0.0.1") == ["127.0.0.1"]
+    assert _probe_addresses(IPv4Interface("10.0.0.5/24")) == ["10.0.0.5"]
+
+
+# --------------------------------------------------------------------------- #
+# an empty ports list means none, not "the default set"                        #
+# --------------------------------------------------------------------------- #
+
+
+def test_scan_hosts_with_an_empty_ports_list_probes_nothing(monkeypatch):
+    """``ports or "common"`` read an explicit ``[]`` as "unset".
+
+    A caller asking for no ports got the full 36-port common sweep of the
+    whole network instead.
+    """
+    probed = []
+
+    def fake_tcp_check(dst, port, timeout):
+        probed.append(port)
+        return False
+
+    monkeypatch.setattr(netimps, "tcp_check", fake_tcp_check)
+
+    assert scan_hosts("127.0.0.1/32", ports=[], timeout=0.5) == []
+    assert probed == []
+
+    # Omitted -- as opposed to empty -- still means the default set.
+    scan_hosts("127.0.0.1/32", timeout=0.5)
+    assert len(probed) == len(PORT_RANGES["common"])
+
+
+# --------------------------------------------------------------------------- #
+# scheme <-> port registry (_scheme, exercised through the public surface)     #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def clean_ports():
+    """Snapshot/restore the port tables -- registration mutates module state."""
+    from netimps import _scheme
+
+    ports = dict(_scheme._DEFAULT_PORTS)
+    schemes = dict(_scheme._PORT_SCHEMES)
+    yield
+    _scheme._DEFAULT_PORTS.clear()
+    _scheme._DEFAULT_PORTS.update(ports)
+    _scheme._PORT_SCHEMES.clear()
+    _scheme._PORT_SCHEMES.update(schemes)
+
+
+def test_register_port_drops_the_stale_reverse_entry(clean_ports):
+    """Re-registering *moves* a scheme; its old port must stop naming it.
+
+    Measured before the fix: after re-registering on 8888, ``get_default_port``
+    said 8888 while ``get_default_scheme(9999)`` still said ``'zzztest'`` -- a
+    registry contradicting itself.
+    """
+    netimps.register_port("zzztest", 9999)
+    assert netimps.get_default_scheme(9999) == "zzztest"
+
+    netimps.register_port("zzztest", 8888)
+    assert netimps.get_default_port("zzztest") == 8888
+    assert netimps.get_default_scheme(8888) == "zzztest"
+    assert netimps.get_default_scheme(9999) != "zzztest"
+
+
+def test_a_vacated_port_falls_to_a_scheme_still_claiming_it(clean_ports):
+    """Aliases keep the slot warm rather than leaving it unnamed."""
+    netimps.register_port("zzz-first", 9991)
+    netimps.register_port("zzz-second", 9991)
+    assert netimps.get_default_scheme(9991) == "zzz-first"  # earliest wins
+
+    netimps.register_port("zzz-first", 9992)
+    assert netimps.get_default_scheme(9991) == "zzz-second"
+    assert netimps.get_default_scheme(9992) == "zzz-first"
+
+
+def test_re_registering_the_same_port_leaves_the_canonical_rules_alone(clean_ports):
+    netimps.register_port("zzz-alias", 443)
+    assert netimps.get_default_scheme(443) == "https"  # an alias steals nothing
+
+    netimps.register_port("zzz-alias", 443, canonical=True)
+    assert netimps.get_default_scheme(443) == "zzz-alias"  # explicit override
+
+
+def test_services_lookup_names_the_protocol(monkeypatch):
+    """A protocol-less ``getservbyname`` answers per host, not per contract.
+
+    TCP is asked first so the answer is the same everywhere, then UDP so a
+    UDP-only service is still found.
+    """
+    from netimps import _scheme
+
+    asked = []
+
+    def fake_getservbyname(name, protocol=None):
+        asked.append((name, protocol))
+        if protocol != "udp":
+            raise OSError("no such service")
+        return 5555
+
+    monkeypatch.setattr(_scheme._socket, "getservbyname", fake_getservbyname)
+
+    assert netimps.get_default_port("zzz-udp-only") == 5555
+    assert asked == [("zzz-udp-only", "tcp"), ("zzz-udp-only", "udp")]
+
+
+def test_services_reverse_lookup_names_the_protocol(monkeypatch):
+    """Port 514 is shell/cmd over TCP and syslog over UDP -- TCP wins."""
+    from netimps import _scheme
+
+    asked = []
+
+    def fake_getservbyport(port, protocol=None):
+        asked.append((port, protocol))
+        return "zzz-%s" % (protocol,)
+
+    monkeypatch.setattr(_scheme._socket, "getservbyport", fake_getservbyport)
+
+    assert netimps.get_default_scheme(64999) == "zzz-tcp"
+    assert asked == [(64999, "tcp")]
+
+
+# --------------------------------------------------------------------------- #
 # multicast                                                                    #
 # --------------------------------------------------------------------------- #
 
@@ -179,6 +502,28 @@ def test_scan_hosts_results_are_sorted(listener):
     ],
 )
 def test_is_multicast(address, expected):
+    assert is_multicast(address) is expected
+
+
+@pytest.mark.parametrize(
+    "address, expected",
+    [
+        (ipaddress.ip_address("239.1.2.3"), True),
+        (ipaddress.ip_interface("239.1.2.3/32"), True),
+        (ipaddress.ip_interface("ff02::fb/128"), True),
+        (ipaddress.ip_interface("10.0.0.1/24"), False),
+        (ipaddress.ip_network("239.1.2.0/24"), False),  # a network is not an address
+        (12345, False),
+    ],
+)
+def test_is_multicast_accepts_the_same_forms_as_its_callers(address, expected):
+    """It is the gatekeeper for join_group/leave_group, so it must accept what they do.
+
+    Testing an ``IPv4Interface`` directly asked whether a *network* was
+    multicast -- which it never is -- so a real group passed in the form every
+    other function in this package accepts came back "not a multicast group".
+    A network still answers False, and nothing raises.
+    """
     assert is_multicast(address) is expected
 
 

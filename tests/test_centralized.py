@@ -6,7 +6,9 @@ shared interface-spec resolution they all lean on. Loopback only.
 
 import errno
 import ipaddress
+import os
 import socket
+import struct
 
 import pytest
 
@@ -35,9 +37,37 @@ def test_bind_datagram_defaults():
     try:
         host, port = sock.getsockname()
         assert host == "127.0.0.1" and port > 0
-        assert sock.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR)
+        if os.name == "nt":
+            # SO_REUSEADDR does NOT mean the same thing here: on Windows it lets
+            # another process bind a port that is already live, so the default
+            # asks for exclusivity instead. Asserting SO_REUSEADDR on this
+            # platform was asserting that the port could be stolen.
+            assert sock.getsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE)
+        else:
+            assert sock.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR)
     finally:
         sock.close()
+
+
+def test_bind_does_not_leave_a_listener_stealable():
+    """The property the option is there for, asserted directly.
+
+    On Windows a second socket setting SO_REUSEADDR could take a live port out
+    from under a `netimps.bind()` listener; a plain stdlib bind was refused.
+    This is that reproduction, turned into a regression test.
+    """
+    server = bind("127.0.0.1", 0, kind=socket.SOCK_STREAM, listen=1)
+    try:
+        port = server.getsockname()[1]
+        thief = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        thief.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            with pytest.raises(OSError):
+                thief.bind(("127.0.0.1", port))
+        finally:
+            thief.close()
+    finally:
+        server.close()
 
 
 def test_bind_stream_with_listen():
@@ -350,10 +380,32 @@ def test_interface_spec_none_is_none():
 
 
 def test_interface_spec_returns_parsed_addresses():
-    """Addresses come back parsed, not as strings -- the package-wide rule."""
-    result = _iface_spec.interface_address("10.0.0.5")
-    assert result == netimps.parse("10.0.0.5")
+    """Addresses come back parsed, not as strings -- the package-wide rule.
+
+    Uses loopback rather than an arbitrary literal: under ``strict=True`` a bare
+    address must now be one this host actually holds, matching the rule
+    ``interface_index`` has always applied. The point of this test is the return
+    *type*, so it just needs an address that passes that check.
+    """
+    result = _iface_spec.interface_address("127.0.0.1")
+    assert result == netimps.parse("127.0.0.1")
     assert not isinstance(result, str)
+
+
+def test_interface_spec_rejects_an_address_no_interface_holds():
+    """``strict=True`` means "resolve this to one of mine", for every spec form.
+
+    ``interface_address`` used to accept a foreign address while
+    ``interface_index`` rejected it, so the same spec resolved differently
+    depending on which family the caller happened to be using.
+    """
+    with pytest.raises(ValueError, match="no local interface holds address"):
+        _iface_spec.interface_address("10.0.0.5", strict=True)
+    # strict=False still passes it through: ping(src=) and UdpEndpoint.send()
+    # both rely on that, and the OS gives the real error when the bind fails.
+    assert _iface_spec.interface_address("10.0.0.5", strict=False) == netimps.parse(
+        "10.0.0.5"
+    )
 
 
 def test_interface_spec_rejects_a_non_address_string():
@@ -386,18 +438,148 @@ def test_interface_spec_resolves_interface_object():
 # --------------------------------------------------------------------------- #
 
 
-def test_udp_endpoint_round_trip():
+#: Both loopbacks, so every endpoint test runs against each address family.
+#: The v6 half is the regression: ``IP_PKTINFO`` is silently accepted on an
+#: AF_INET6 socket, so a v4-only test suite stays green while v6 reports an
+#: arrival interface it never receives.
+_LOOPBACKS = [
+    pytest.param(socket.AF_INET, "127.0.0.1", id="ipv4"),
+    pytest.param(socket.AF_INET6, "::1", id="ipv6"),
+]
+
+
+def _loopback_endpoint(family, host):
+    """A bound loopback endpoint, skipping where the family is unavailable."""
+    try:
+        sock = bind(host, 0, family=family)
+    except OSError as exc:  # no IPv6 stack, or no ::1 configured
+        pytest.skip("cannot bind %s: %s" % (host, exc))
+    endpoint = UdpEndpoint(sock)
+    endpoint.socket.settimeout(5.0)
+    return endpoint
+
+
+@pytest.mark.parametrize("family, host", _LOOPBACKS)
+def test_udp_endpoint_round_trip(family, host):
+    """The flag and the data must agree, for both address families.
+
+    ``supports_pktinfo`` is the single thing the docs tell a caller to check,
+    so a ``True`` that is followed by an empty ``interface_index`` is worse
+    than an honest ``False``. Asserting only ``data``/``sender`` -- which this
+    test used to do -- leaves the whole pktinfo path free to be dead.
+    """
+    with _loopback_endpoint(family, host) as endpoint:
+        port = endpoint.socket.getsockname()[1]
+        sender = bind(host, 0, family=family)
+        try:
+            sender.sendto(b"payload", (host, port))
+            packet = endpoint.recv(1024)
+        finally:
+            sender.close()
+
+    assert packet.data == b"payload"
+    assert packet.sender[0] == host
+    assert packet.control_truncated is False
+
+    # Degrading to False is honest, but it must not become the escape hatch:
+    # where the kernel exports this family's option, it has to be used.
+    receive_option = _udp._pktinfo_options(family)[1]
+    if receive_option is not None and hasattr(socket.socket, "recvmsg"):
+        assert endpoint.supports_pktinfo
+
+    if not endpoint.supports_pktinfo:
+        assert packet.interface_index == 0 and packet.interface is None
+        return
+    assert packet.interface_index != 0
+    assert packet.interface is not None
+    assert packet.local_address is not None and packet.local_address.is_loopback
+
+
+def test_udp_endpoint_reports_truncated_control_data():
+    """``MSG_CTRUNC`` must reach the caller, not be dropped with the cmsg.
+
+    The buffer is sized for several messages precisely so this is rare, but
+    when it does happen the empty interface fields mean "something was
+    discarded", not "the kernel had nothing to say" -- and nothing else
+    distinguishes the two.
+    """
     with UdpEndpoint(bind("127.0.0.1", 0)) as endpoint:
+        if not endpoint.supports_pktinfo:
+            pytest.skip("no IP_PKTINFO on this platform")
+        # Smaller than any cmsg header, so the kernel truncates our own.
+        endpoint._cmsg_size = 1
         endpoint.socket.settimeout(5.0)
         port = endpoint.socket.getsockname()[1]
         sender = bind("127.0.0.1", 0)
         try:
-            sender.sendto(b"payload", ("127.0.0.1", port))
-            packet = endpoint.recv(1024)
+            sender.sendto(b"squeezed", ("127.0.0.1", port))
+            packet = endpoint.recv(64)
         finally:
             sender.close()
-    assert packet.data == b"payload"
-    assert packet.sender[0] == "127.0.0.1"
+
+    assert packet.data == b"squeezed"
+    assert packet.control_truncated is True
+    assert packet.interface_index == 0
+
+
+def test_udp_endpoint_ancillary_buffer_holds_more_than_one_cmsg():
+    """Room for exactly one cmsg loses the pktinfo to any other option.
+
+    Measured on Linux with ``SO_TIMESTAMP`` and ``IP_PKTINFO`` both enabled:
+    a one-slot buffer kept the timestamp, discarded the pktinfo and set
+    ``MSG_CTRUNC``. The caller owns the raw socket, so a second enabled
+    option is ordinary rather than exotic.
+    """
+    with UdpEndpoint(bind("127.0.0.1", 0)) as endpoint:
+        if not endpoint.supports_pktinfo:
+            pytest.skip("no IP_PKTINFO on this platform")
+        one = socket.CMSG_SPACE(struct.calcsize(_udp._PKTINFO_V4))
+        assert endpoint._cmsg_size >= one * 2
+
+
+@pytest.mark.parametrize("family, host", _LOOPBACKS)
+def test_udp_endpoint_pins_the_source_it_is_given(family, host):
+    """``src`` is honoured where the platform can, and ignored where it cannot.
+
+    Both halves matter: a pinned send that never applies the pin is the
+    silent wrong answer, and a raise on a platform without ``sendmsg`` would
+    break the documented degrade.
+    """
+    with _loopback_endpoint(family, host) as receiver:
+        port = receiver.socket.getsockname()[1]
+        with _loopback_endpoint(family, host) as sender:
+            assert sender.send(b"pinned", host, port, src=host) == 6
+            # The flag may be False (Windows has no sendmsg; macOS has no
+            # IP_PKTINFO), but it must never claim a pin it cannot apply.
+            assert not sender.supports_src_pinning or hasattr(socket.socket, "sendmsg")
+        packet = receiver.recv(64)
+    assert packet.data == b"pinned"
+
+
+def test_udp_endpoint_send_rejects_a_source_of_the_wrong_family():
+    """Linux *accepts* an IPv6 cmsg on an AF_INET socket and ignores it.
+
+    Measured: ``sendmsg`` returns the byte count, and the pin does nothing.
+    So the mismatch has to be caught here -- the kernel will not report it.
+    """
+    with UdpEndpoint(bind("127.0.0.1", 0)) as sender:
+        if not sender.supports_src_pinning:
+            pytest.skip("no IPv4 source pinning on this platform")
+        with pytest.raises(ValueError, match="IPv6 source"):
+            sender.send(b"x", "127.0.0.1", 9, src="::1")
+
+
+def test_udp_endpoint_send_rejects_an_unresolvable_source():
+    """A spec naming no local adapter is a caller error, not a fallback.
+
+    Sending from whatever the routing table picks is exactly the silent
+    wrong answer ``src`` exists to prevent.
+    """
+    with UdpEndpoint(bind("127.0.0.1", 0)) as sender:
+        if not sender.supports_src_pinning:
+            pytest.skip("no IPv4 source pinning on this platform")
+        with pytest.raises(ValueError, match="cannot resolve src"):
+            sender.send(b"x", "127.0.0.1", 9, src="no-such-adapter")
 
 
 def test_udp_endpoint_degrades_without_pktinfo(monkeypatch):
@@ -405,6 +587,8 @@ def test_udp_endpoint_degrades_without_pktinfo(monkeypatch):
     monkeypatch.setattr(_udp, "_IP_PKTINFO", None)
     with UdpEndpoint(bind("127.0.0.1", 0)) as endpoint:
         assert endpoint.supports_pktinfo is False
+        # Same constant serves both directions for IPv4, so neither is claimed.
+        assert endpoint.supports_src_pinning is False
         endpoint.socket.settimeout(5.0)
         port = endpoint.socket.getsockname()[1]
         sender = bind("127.0.0.1", 0)
@@ -415,6 +599,7 @@ def test_udp_endpoint_degrades_without_pktinfo(monkeypatch):
             sender.close()
     assert packet.data == b"x"
     assert packet.interface is None and packet.interface_index == 0
+    assert packet.local_address is None and packet.control_truncated is False
 
 
 def test_udp_endpoint_send_falls_back_without_source():
@@ -428,7 +613,10 @@ def test_udp_endpoint_send_falls_back_without_source():
 
 def test_udp_endpoint_repr_and_close():
     endpoint = UdpEndpoint(bind("127.0.0.1", 0))
+    # Both capability flags belong in the repr: they are what a bug report
+    # about "interface is always None" needs to carry.
     assert "UdpEndpoint(" in repr(endpoint)
+    assert "pktinfo=" in repr(endpoint) and "src_pinning=" in repr(endpoint)
     endpoint.close()
 
 
@@ -437,7 +625,7 @@ def test_udp_endpoint_repr_and_close():
 # --------------------------------------------------------------------------- #
 
 
-def test_host_keeps_the_original_text():
+def test_host_keeps_the_original_text(no_such_host):
     """The whole point: str() is always what was given, even unresolvable."""
     host = Host("db.internal")
     assert str(host) == "db.internal"
@@ -458,11 +646,13 @@ def test_host_literal_needs_no_dns(monkeypatch):
 def test_host_caches_resolution(monkeypatch):
     calls = []
 
-    def counting(_name):
-        calls.append(1)
-        return "93.184.216.34"
+    def counting(name, *args, **kwargs):
+        calls.append(name)
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
 
-    monkeypatch.setattr(netimps._ip._socket, "gethostbyname", counting)
+    # getaddrinfo, not gethostbyname: the latter is IPv4-only and no longer
+    # called, so stubbing it would have quietly let this reach the real network.
+    monkeypatch.setattr(netimps._ip._socket, "getaddrinfo", counting)
     host = Host("example.com")
     assert host.ip() == netimps.parse("93.184.216.34")
     assert host.ip() == netimps.parse("93.184.216.34")
@@ -475,11 +665,11 @@ def test_host_caches_resolution(monkeypatch):
 def test_host_caches_failure_too(monkeypatch):
     calls = []
 
-    def failing(_name):
-        calls.append(1)
+    def failing(name, *args, **kwargs):
+        calls.append(name)
         raise OSError("no such host")
 
-    monkeypatch.setattr(netimps._ip._socket, "gethostbyname", failing)
+    monkeypatch.setattr(netimps._ip._socket, "getaddrinfo", failing)
     host = Host("nope.invalid")
     assert host.ip() is None
     assert host.ip() is None
