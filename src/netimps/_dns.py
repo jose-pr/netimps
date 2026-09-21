@@ -2,7 +2,7 @@
 
 Three independently callable backends, each with the same
 list-of-native-values-or-[]-on-failure contract, plus :func:`resolve` which
-tries them in order and returns the first that produces a definitive answer:
+tries them in order and returns the first **non-empty** answer:
 
 - :func:`resolve_dnspython` -- ``dnspython``, structured records, every
   ``rdtype``, explicit ``ns=``/``port=``/``search=`` control.
@@ -25,9 +25,11 @@ Re-exported from :mod:`netimps`.
 from __future__ import annotations
 
 import socket as _socket
+from functools import partial as _partial
+from subprocess import DEVNULL as _DEVNULL
 from subprocess import TimeoutExpired as _SubprocessTimeout
 from subprocess import run as _run
-from typing import Any, List, Optional, Union
+from typing import Any, Callable, List, Optional, Union
 
 from ._ip import AddressLike, _dst_argument
 
@@ -36,6 +38,7 @@ __all__ = [
     "resolve_dnspython",
     "resolve_system",
     "resolve_nslookup",
+    "ResolutionError",
 ]
 
 #: Backends `resolve()` tries, in order, by name. Each entry is looked up on
@@ -232,6 +235,55 @@ def resolve_dnspython(
     return [_native_record(record) for record in answer]
 
 
+def _bounded_lookup(lookup: "Callable[[], Any]", timeout: Optional[float]) -> "Any":
+    """Run ``lookup`` under a wall-clock deadline (unbounded if ``timeout`` is
+    ``None``), returning its result.
+
+    **One mechanism for every record type.** :func:`socket.getaddrinfo` and
+    :func:`socket.gethostbyaddr` are both blocking C calls with no timeout of
+    their own, so both need this; the ``"ptr"`` branch used to call
+    ``gethostbyaddr`` directly on the calling thread and was measured at 4.6s
+    against a documented 0.1s deadline.
+
+    A *daemon* thread, joined through a queue rather than a
+    ThreadPoolExecutor. The executor looks like the obvious fit and is the
+    wrong one: `__exit__` calls `shutdown(wait=True)` on every supported
+    Python, so raising out of the `with` block joins the worker still stuck
+    inside getaddrinfo() and the caller waits out the whole hang anyway --
+    `timeout` would change *what* is raised but not *when*. Its atexit hook
+    joins pool threads too, so even `shutdown(wait=False)` would move the hang
+    to interpreter exit. A daemon thread is abandoned at both points, which is
+    the contract.
+
+    Whatever ``lookup`` raises is re-raised verbatim in the calling thread, so
+    each caller keeps classifying its own errors (a ``gaierror``/``herror``
+    means "no answer", not a transport failure). Only the deadline itself
+    becomes a :class:`ResolutionError`.
+    """
+    if timeout is None:
+        return lookup()
+
+    import queue as _queue
+    import threading as _threading
+
+    outcome: "_queue.Queue" = _queue.Queue(maxsize=1)
+
+    def _run_lookup() -> None:
+        try:
+            outcome.put(("ok", lookup()))
+        except BaseException as exc:  # relayed to the caller verbatim
+            outcome.put(("error", exc))
+
+    _threading.Thread(target=_run_lookup, daemon=True).start()
+    try:
+        kind, payload = outcome.get(timeout=timeout)
+    except _queue.Empty:
+        raise ResolutionError("resolve_system timed out after %.1fs" % (timeout,))
+    if kind == "error":
+        raise payload
+    return payload
+
+
 def _resolve_system_once(
     query: str, family: int, timeout: Optional[float]
 ) -> "List[Any]":
@@ -240,42 +292,10 @@ def _resolve_system_once(
     def _lookup():
         return _socket.getaddrinfo(query, None, family=family, type=_socket.SOCK_STREAM)
 
-    if timeout is None:
-        try:
-            infos = _lookup()
-        except _socket.gaierror:
-            return []
-    else:
-        import queue as _queue
-        import threading as _threading
-
-        # A *daemon* thread, joined through a queue rather than a
-        # ThreadPoolExecutor. The executor looks like the obvious fit and is
-        # the wrong one: `__exit__` calls `shutdown(wait=True)` on every
-        # supported Python, so raising out of the `with` block joins the
-        # worker still stuck inside getaddrinfo() and the caller waits out the
-        # whole hang anyway -- `timeout` would change *what* is raised but not
-        # *when*. Its atexit hook joins pool threads too, so even
-        # `shutdown(wait=False)` would move the hang to interpreter exit.
-        # A daemon thread is abandoned at both points, which is the contract.
-        outcome: "_queue.Queue" = _queue.Queue(maxsize=1)
-
-        def _run_lookup() -> None:
-            try:
-                outcome.put(("ok", _lookup()))
-            except BaseException as exc:  # relayed to the caller verbatim
-                outcome.put(("error", exc))
-
-        _threading.Thread(target=_run_lookup, daemon=True).start()
-        try:
-            kind, payload = outcome.get(timeout=timeout)
-        except _queue.Empty:
-            raise ResolutionError("resolve_system timed out after %.1fs" % (timeout,))
-        if kind == "error":
-            if isinstance(payload, _socket.gaierror):
-                return []
-            raise payload
-        infos = payload
+    try:
+        infos = _bounded_lookup(_lookup, timeout)
+    except _socket.gaierror:
+        return []
 
     seen = []
     for info in infos:
@@ -361,8 +381,13 @@ def resolve_system(
     rdtype = rdtype.lower()
 
     if rdtype == "ptr":
+        # Bounded by the same daemon-thread helper as the address path:
+        # gethostbyaddr has no timeout of its own either, and calling it
+        # directly (as this branch used to) ignored `timeout` outright.
         try:
-            hostname, _aliases, _addrs = _socket.gethostbyaddr(query)
+            hostname, _aliases, _addrs = _bounded_lookup(
+                _partial(_socket.gethostbyaddr, query), timeout
+            )
         except (_socket.herror, _socket.gaierror):
             # herror: no PTR data for a literal address. gaierror: `query`
             # was treated as a hostname (gethostbyaddr's own behaviour for a
@@ -512,6 +537,39 @@ def _system_search_domains() -> "List[str]":
     return []
 
 
+def _check_nslookup_query(query: str) -> None:
+    """Raise :class:`ValueError` unless ``query`` can only be read as a name.
+
+    ``nslookup`` has **no ``--`` end-of-options separator**, so a ``query``
+    starting with ``-`` cannot be escaped into position: the binary parses it
+    as an option, finds no name argument, and drops into *interactive* mode --
+    where it reads names to look up from **stdin**. Measured: that drained the
+    calling program's stdin and sent each line to the configured nameserver as
+    a DNS query name. The subprocess gets :data:`subprocess.DEVNULL` for stdin
+    now (the right default for anything a library spawns), which closes the
+    exfiltration, but a leading ``-`` is still rejected rather than escaped --
+    there is nowhere safe to put it, and a lookup that silently became an
+    option is not a lookup.
+
+    Whitespace, control characters and an empty query get the same treatment:
+    none can occur in a name any resolver would accept, and an empty argument
+    reaches interactive mode by the same route.
+    """
+    if not query.strip():
+        raise ValueError("query must be a non-empty hostname or address")
+    if query.startswith("-"):
+        raise ValueError(
+            "refusing to look up %r: a leading '-' is read as an nslookup "
+            "option, not a name, and nslookup has no '--' separator to "
+            "escape it with" % (query,)
+        )
+    if any(ch.isspace() or ord(ch) < 0x20 or ord(ch) == 0x7F for ch in query):
+        raise ValueError(
+            "refusing to look up %r: a hostname or address cannot contain "
+            "whitespace or control characters" % (query,)
+        )
+
+
 def _resolve_nslookup_once(
     query: str,
     rdtype: str,
@@ -529,7 +587,13 @@ def _resolve_nslookup_once(
         cmd.append(ns)
 
     try:
-        response = _run(cmd, capture_output=True, timeout=timeout)
+        # stdin=DEVNULL, not the caller's stdin: `capture_output` redirects
+        # only stdout/stderr, so without this the child inherits whatever the
+        # calling program was reading -- and an nslookup that finds no usable
+        # name argument goes interactive and looks *that* up, line by line,
+        # against the configured nameserver. A library never hands its
+        # caller's stdin to a subprocess.
+        response = _run(cmd, capture_output=True, timeout=timeout, stdin=_DEVNULL)
     except (OSError, _SubprocessTimeout) as exc:
         raise ResolutionError("nslookup unavailable or timed out: %s" % (exc,)) from exc
 
@@ -540,10 +604,21 @@ def _resolve_nslookup_once(
     # both, or a genuine "no such name" looks like an unparseable answer.
     lowered = (text + "\n" + stderr_text).lower()
 
-    if response.returncode != 0 or any(
-        marker in lowered for marker in _NSLOOKUP_NO_RECORD_MARKERS
-    ):
+    if any(marker in lowered for marker in _NSLOOKUP_NO_RECORD_MARKERS):
+        # A stated "no such name"/"no records", whatever the exit status --
+        # BIND's nslookup exits 1 on NXDOMAIN, Windows' exits 0.
         return []
+    if response.returncode != 0:
+        # Non-zero with none of those markers: the binary could not complete
+        # the query at all (no reachable server, connection refused, a usage
+        # error). Reporting that as [] would make a transport failure
+        # indistinguishable from NXDOMAIN -- and, in resolve()'s chain, stop
+        # the chain on it.
+        detail = (stderr_text or text).strip().splitlines()
+        raise ResolutionError(
+            "nslookup exited %d for %r: %s"
+            % (response.returncode, query, detail[-1] if detail else "no output")
+        )
 
     results, saw_answer = _parse_nslookup_output(text, rdtype)
     if not results and not saw_answer:
@@ -602,11 +677,24 @@ def resolve_nslookup(
         neither of which a search list applies to.
 
     A genuine lookup failure (NXDOMAIN or equivalent, for every candidate
-    tried) yields ``[]``. A missing ``nslookup`` binary, a timeout, or an
-    unsupported ``rdtype`` raises :class:`ResolutionError` -- there was no
-    definitive DNS answer to report.
+    tried) yields ``[]``. A missing ``nslookup`` binary, a timeout, a
+    **non-zero exit with no "no such name" message** (no reachable server, a
+    refused connection), or an unsupported ``rdtype`` raises
+    :class:`ResolutionError` -- there was no definitive DNS answer to report,
+    so :func:`resolve`'s chain moves on rather than treating it as NXDOMAIN.
+
+    A ``query`` that ``nslookup`` would read as an option (one starting with
+    ``-``) or that cannot be a name at all (empty, whitespace, control
+    characters) raises :class:`ValueError` **before any subprocess is
+    spawned**: ``nslookup`` has no ``--`` end-of-options separator, so such a
+    query cannot be escaped into position -- left to reach the binary it
+    becomes an option, and an ``nslookup`` with no name argument goes
+    *interactive* and reads query names from stdin. The subprocess is given
+    :data:`subprocess.DEVNULL` for stdin as well, so it can never read the
+    caller's.
     """
     query = _dst_argument(query)
+    _check_nslookup_query(query)
     if not rdtype:
         rdtype = _auto_rdtype(query)
     rdtype = rdtype.lower()
@@ -680,17 +768,25 @@ def resolve(
 
     A backend is **skipped**, not tried and failed, when it structurally
     cannot serve the request: :func:`resolve_system` for a ``rdtype`` outside
-    ``"a"``/``"aaaa"``/``"ptr"``, or for an explicit ``ns=``/``port=`` (it has
-    no per-call nameserver override, so running it would silently ignore the
-    caller's choice); :func:`resolve_dnspython` if ``dnspython`` is not
-    installed.
+    ``"a"``/``"aaaa"``/``"ptr"``, or for an explicit ``ns=``/``port=``/
+    ``tcp=`` (the OS resolver takes no per-call nameserver, port or transport,
+    so running it would silently ignore the caller's choice);
+    :func:`resolve_dnspython` if ``dnspython`` is not installed.
 
-    A backend that reaches a resolver and gets a **definitive DNS answer**
-    (records, or a genuine NXDOMAIN/empty) stops the chain there -- including
-    when that answer is ``[]``. Only a backend that could not even attempt the
-    query (missing binary, timeout, transport failure) falls through to the
-    next one. If every applicable backend fails that way, the last such error
-    is raised.
+    **Only a non-empty answer stops the chain.** An empty one does not, and
+    that is deliberate: the backends resolve by structurally different
+    mechanisms, and DNS's "no such name" says nothing about what the OS
+    resolver can still answer. ``dnspython`` gets NXDOMAIN for ``localhost``
+    on Windows and macOS while :func:`resolve_system` answers it from the
+    hosts file; the same holds for ``.local``/mDNS names and anything else
+    only an NSS source knows. A backend that could not even attempt the query
+    (missing binary, timeout, transport failure) falls through as well. If
+    every applicable backend answers empty, the result is ``[]``; if every one
+    of them fails to attempt, the last such error is raised.
+
+    The cost is latency on a genuinely non-existent name: two or three backend
+    calls instead of one, the last of which may spawn ``nslookup``. Narrow
+    ``backends`` to opt out -- ``backends="dnspython"`` keeps the single call.
 
     :param query: the name (or address, for reverse types) to look up. Also
         accepts an address object or an :class:`IPv4Interface`/
@@ -706,8 +802,10 @@ def resolve(
         latter); excludes ``system`` from the chain, since it cannot honour a
         per-call nameserver.
     :param timeout: seconds per backend attempt.
-    :param port: nameserver port; ``dnspython`` only.
-    :param tcp: query over TCP; ``dnspython`` only.
+    :param port: nameserver port; ``dnspython`` only, and excludes ``system``
+        from the chain when it is not 53.
+    :param tcp: query over TCP; ``dnspython`` only, and excludes ``system``
+        from the chain when true.
     :param search: search-list behaviour, honoured by all three backends (see
         :func:`resolve_dnspython`, :func:`resolve_system` and
         :func:`resolve_nslookup` respectively). Only ``dnspython`` has this
@@ -738,31 +836,29 @@ def resolve(
 
     last_error: Optional[Exception] = None
     attempted = False
+    answered = False  # at least one backend gave a definitive (empty) answer
     for name in chain:
+        attempt: "Callable[[], List[Any]]"
         if name == "system":
-            if rdtype not in ("a", "aaaa", "ptr") or ns:
-                continue  # cannot honour a non-address rdtype or a custom ns
-            attempted = True
-            try:
-                return resolve_system(query, rdtype, timeout=timeout, search=search)
-            except ResolutionError as exc:
-                last_error = exc
+            if rdtype not in ("a", "aaaa", "ptr") or ns or port != 53 or tcp:
+                # Cannot honour a non-address rdtype, nor a per-call
+                # nameserver/port/transport -- running it anyway would answer
+                # a different question from the one asked.
                 continue
+            attempt = _partial(
+                resolve_system, query, rdtype, timeout=timeout, search=search
+            )
         elif name == "dnspython":
-            attempted = True
-            try:
-                return resolve_dnspython(
-                    query,
-                    rdtype,
-                    ns=ns,
-                    timeout=timeout,
-                    port=port,
-                    tcp=tcp,
-                    search=search,
-                )
-            except ResolutionError as exc:
-                last_error = exc
-                continue
+            attempt = _partial(
+                resolve_dnspython,
+                query,
+                rdtype,
+                ns=ns,
+                timeout=timeout,
+                port=port,
+                tcp=tcp,
+                search=search,
+            )
         elif name == "nslookup":
             if rdtype not in ("a", "aaaa", "ptr"):
                 continue
@@ -770,19 +866,51 @@ def resolve(
                 single_ns = ns[0] if ns else None
             else:
                 single_ns = ns
-            attempted = True
-            try:
-                return resolve_nslookup(
-                    query, rdtype, ns=single_ns, timeout=timeout, search=search
-                )
-            except ResolutionError as exc:
-                last_error = exc
-                continue
+            attempt = _partial(
+                resolve_nslookup,
+                query,
+                rdtype,
+                ns=single_ns,
+                timeout=timeout,
+                search=search,
+            )
+        else:  # pragma: no cover -- `unknown` above already rejected these
+            continue
+
+        attempted = True
+        try:
+            result = attempt()
+        except ResolutionError as exc:
+            # Could not even ask: try the next backend, keep the error in case
+            # none of them can.
+            last_error = exc
+            continue
+        if result:
+            return result
+        # An empty answer is definitive for *this* backend's mechanism only,
+        # so the chain keeps going; `answered` is what makes the final result
+        # [] rather than a raise.
+        answered = True
 
     if not attempted:
+        # Name what excluded them: with `port=`/`tcp=` now excluding `system`
+        # too, "cannot serve rdtype='a'" on its own would be a puzzle.
+        excluded = []
+        if ns:
+            excluded.append("an explicit ns")
+        if port != 53:
+            excluded.append("port=%r" % (port,))
+        if tcp:
+            excluded.append("tcp=True")
         raise ValueError(
             "no backend in %r can serve rdtype=%r%s"
-            % (chain, rdtype, " with an explicit ns" if ns else "")
+            % (
+                chain,
+                rdtype,
+                " with %s" % (" and ".join(excluded),) if excluded else "",
+            )
         )
+    if answered:
+        return []
     assert last_error is not None
     raise last_error

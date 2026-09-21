@@ -42,9 +42,11 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
+    Mapping,
     Optional,
     TypeVar,
     Union,
+    cast,
     overload,
 )
 from typing import get_origin as _typing_get_origin
@@ -126,6 +128,7 @@ __all__ = [
     "resolve_dnspython",
     "resolve_system",
     "resolve_nslookup",
+    "ResolutionError",
     "ping",
     "PingResult",
     "Interface",
@@ -177,6 +180,22 @@ HOST_DN = _platform.node()
 _T = TypeVar("_T")
 _D = TypeVar("_D")
 
+#: What every entry in ``_ip``'s dispatch tables is: a callable taking the raw
+#: value plus keyword options and returning the built object.
+_Builder = Callable[..., Any]
+
+# ``_ip`` writes those tables as bare dict literals, so a checker infers their
+# value type as the *join* of three different ``ipaddress.ip_*`` functions --
+# which collapses to the opaque ``function`` type, one it then refuses to call
+# ("Cannot call function of unknown type") and refuses to use as a key. The
+# two names below bind the very same dict objects, so ``netimps._BUILDERS``
+# stays the single table everything reads and mutates; they only write down
+# what has always been in them. The permanent fix is to annotate the literals
+# in ``_ip`` -- a function object *is* a ``Callable[..., Any]``; only the join
+# of several is not -- at which point the cast here can go.
+_BUILDER_TABLE = cast("Mapping[Any, _Builder]", _BUILDERS)
+_BUILDER_DEFAULT_TABLE: Mapping[_Builder, Mapping[str, Any]] = _BUILDER_DEFAULTS
+
 
 def _check_parser(type) -> None:
     """Raise TypeError unless ``type`` is something :func:`parse` can build with.
@@ -210,7 +229,21 @@ def _check_parser(type) -> None:
 if TYPE_CHECKING:
     # Runtime keeps one permissive implementation; these signatures preserve
     # the result represented by union type forms and arbitrary builders.
-    @overload
+    #
+    # Checking this file against *itself* raises two structural complaints a
+    # consumer never sees: the overloads have no implementation inside the
+    # ``if TYPE_CHECKING`` block (``no-overload-impl``), and the runtime
+    # ``def`` further down reads as a redefinition of them (``no-redef``).
+    # Both are inherent to declaring overloads this way, so each is silenced
+    # on the exact line that raises it -- never by loosening a signature.
+    #
+    # What consumers actually get is asserted in ``tests/typing/api.py``
+    # (``parse(x, IPNetwork)`` is typed ``IPv4Network | IPv6Network``, and so
+    # on), and was measured from outside the package with ``TypeForm``
+    # disabled and ``python_version = 3.9``. Do not flatten, widen or delete
+    # these overloads to quiet the checker: that trades self-check noise for a
+    # real loss of precision at every call site.
+    @overload  # type: ignore[no-overload-impl]
     def parse(value: object, type: TypeForm[_T], **kwargs: Any) -> _T: ...
 
     @overload
@@ -219,7 +252,7 @@ if TYPE_CHECKING:
     @overload
     def parse(value: object, **kwargs: Any) -> IPAddress: ...
 
-    @overload
+    @overload  # type: ignore[no-overload-impl]
     def try_parse(
         value: object, type: TypeForm[_T], default: None = ..., **kwargs: Any
     ) -> Optional[_T]: ...
@@ -249,7 +282,7 @@ if TYPE_CHECKING:
         value: object, *, default: _D, **kwargs: Any
     ) -> Union[IPAddress, _D]: ...
 
-    @overload
+    @overload  # type: ignore[no-overload-impl]
     def is_valid(value: object, type: TypeForm[_T], **kwargs: Any) -> bool: ...
 
     @overload
@@ -259,7 +292,9 @@ if TYPE_CHECKING:
     def is_valid(value: object, **kwargs: Any) -> bool: ...
 
 
-def parse(value: object, type: "Any" = IPAddress, **kwargs) -> "Any":
+def parse(  # type: ignore[no-redef]  # the overloads above are the signature
+    value: object, type: "Any" = IPAddress, **kwargs
+) -> "Any":
     """Build ``type`` from ``value``, raising on bad input.
 
     The single parsing entry point. ``type`` is a result type -- one of the
@@ -293,7 +328,7 @@ def parse(value: object, type: "Any" = IPAddress, **kwargs) -> "Any":
     # into a silent "invalid value". Fall through to the explicit checks below.
     try:
         wanted = _CONCRETE.get(type)
-        builder = _BUILDERS.get(wanted if wanted is not None else type)
+        builder = _BUILDER_TABLE.get(wanted if wanted is not None else type)
     except TypeError:
         wanted = builder = None
 
@@ -301,7 +336,7 @@ def parse(value: object, type: "Any" = IPAddress, **kwargs) -> "Any":
         _check_parser(type)  # raises for anything unusable
         return type(value, **kwargs)
 
-    options = dict(_BUILDER_DEFAULTS.get(builder, ()))
+    options = dict(_BUILDER_DEFAULT_TABLE.get(builder, {}))
     options.update(kwargs)
     result = builder(value, **options)
 
@@ -315,7 +350,7 @@ def parse(value: object, type: "Any" = IPAddress, **kwargs) -> "Any":
 _MISSING = object()
 
 
-def try_parse(
+def try_parse(  # type: ignore[no-redef]  # the overloads above are the signature
     value: object,
     type: "Any" = IPAddress,
     default: "Any" = None,
@@ -368,7 +403,7 @@ def try_parse(
         return default
 
 
-def is_valid(
+def is_valid(  # type: ignore[no-redef]  # the overloads above are the signature
     value: object,
     type: "Any" = IPAddress,
     **kwargs,
@@ -413,6 +448,7 @@ from ._scheme import (  # noqa: E402
 )
 from ._ifaddrs import Interface, get_interfaces, iter_addresses  # noqa: E402
 from ._dns import (  # noqa: E402
+    ResolutionError,
     resolve,
     resolve_dnspython,
     resolve_system,

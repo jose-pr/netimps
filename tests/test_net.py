@@ -1,5 +1,6 @@
 """Tests for the network-touching helpers -- fully mocked, never hits the network."""
 
+import socket
 import subprocess
 import types
 
@@ -114,6 +115,13 @@ def fake_dns(monkeypatch):
     monkeypatch.setitem(__import__("sys").modules, "dns", dns_pkg)
     monkeypatch.setitem(__import__("sys").modules, "dns.resolver", fake_module)
     monkeypatch.setitem(__import__("sys").modules, "dns.name", _real_dns_name)
+    # The chain no longer stops on an empty answer, so a dnspython-focused
+    # test whose fake returns [] would fall through to the *real* OS resolver
+    # and a *real* nslookup subprocess. These stubs keep this section offline
+    # and about dnspython alone -- the fall-through itself is what the
+    # "backend chain orchestration" section below exercises.
+    monkeypatch.setattr(_dns, "resolve_system", lambda *a, **k: [])
+    monkeypatch.setattr(_dns, "resolve_nslookup", lambda *a, **k: [])
     _FakeResolver.result = None
     _FakeResolver.error = None
     _FakeResolver.last = None
@@ -371,6 +379,35 @@ def test_resolve_chain_moves_on_when_system_backend_hangs(hung_getaddrinfo):
     assert elapsed < 1.0, "the chain waited %.2fs on the hung backend" % elapsed
 
 
+def test_resolve_system_ptr_timeout_bounds_wall_time(monkeypatch):
+    """`timeout=` must bound the ptr branch too -- measured at 4.6s against 0.1s.
+
+    The regression: ``gethostbyaddr`` was called directly on the calling
+    thread, bypassing the daemon-thread bounding the a/aaaa path has had since
+    0.2.2 -- while the docstring named ``gethostbyaddr`` explicitly as one of
+    the calls it bounds. A stub that returns instantly (as the other ptr tests
+    use) cannot see the difference; only a wall-clock assertion can.
+    """
+    import threading
+    import time
+
+    released = threading.Event()
+
+    def _hang(query):
+        released.wait(30.0)
+        return ("never.example.invalid", [], [query])
+
+    monkeypatch.setattr(_dns._socket, "gethostbyaddr", _hang)
+    try:
+        start = time.monotonic()
+        with pytest.raises(_dns.ResolutionError, match="timed out"):
+            resolve_system("192.0.2.77", "ptr", timeout=0.1)
+        elapsed = time.monotonic() - start
+    finally:
+        released.set()
+    assert elapsed < 1.0, "waited %.2fs for a lookup capped at 0.1s" % elapsed
+
+
 def test_resolve_system_rejects_non_address_rdtype():
     """system has no MX/TXT/etc equivalent -- this is a caller bug, not a lookup outcome."""
     with pytest.raises(_dns.ResolutionError):
@@ -500,7 +537,7 @@ _NSLOOKUP_A_WINDOWS_NODATA = (
 
 
 def _fake_run(stdout=b"", stderr=b"", returncode=0):
-    def _impl(cmd, capture_output=True, timeout=None):
+    def _impl(cmd, capture_output=True, timeout=None, stdin=None):
         return subprocess.CompletedProcess(
             cmd, returncode, stdout=stdout, stderr=stderr
         )
@@ -565,6 +602,84 @@ def test_resolve_nslookup_windows_nodata_is_empty_not_a_parse_error(monkeypatch)
     assert resolve_nslookup("nonexistent-xyz-abc.example.com") == []
 
 
+def test_resolve_nslookup_never_reads_the_callers_stdin(monkeypatch):
+    """`capture_output` redirects stdout/stderr only.
+
+    Measured: with stdin inherited, an nslookup that found no usable name
+    argument went interactive, drained the calling program's stdin and sent
+    each line to the configured nameserver as a query name.
+    """
+    captured = {}
+
+    def _impl(cmd, capture_output=True, timeout=None, stdin=None):
+        captured["stdin"] = stdin
+        return subprocess.CompletedProcess(cmd, 0, stdout=_NSLOOKUP_A_BIND)
+
+    monkeypatch.setattr(_dns, "_run", _impl)
+    resolve_nslookup("example.com")
+    assert captured["stdin"] is subprocess.DEVNULL
+
+
+@pytest.mark.parametrize("query", ["-q=any", "-", "--type=a"])
+def test_resolve_nslookup_rejects_an_option_shaped_query(monkeypatch, query):
+    """nslookup has no `--` separator, so this cannot be escaped into place.
+
+    It has to be rejected before argv exists: passed through, it is read as an
+    option, leaving the binary with no name argument and dropping it into
+    interactive mode.
+    """
+
+    def _must_not_run(*a, **k):
+        raise AssertionError("nslookup was spawned for %r" % (query,))
+
+    monkeypatch.setattr(_dns, "_run", _must_not_run)
+    with pytest.raises(ValueError, match="leading '-'"):
+        resolve_nslookup(query, search=False)
+
+
+@pytest.mark.parametrize("query", ["", "   ", "example.com nonsense"])
+def test_resolve_nslookup_rejects_a_query_that_cannot_be_a_name(monkeypatch, query):
+    """An empty or whitespace-bearing query reaches interactive mode too."""
+
+    def _must_not_run(*a, **k):
+        raise AssertionError("nslookup was spawned for %r" % (query,))
+
+    monkeypatch.setattr(_dns, "_run", _must_not_run)
+    with pytest.raises(ValueError):
+        resolve_nslookup(query, search=False)
+
+
+def test_resolve_nslookup_nonzero_exit_without_a_marker_is_not_an_answer(monkeypatch):
+    """Exit 1 and no "can't find" message means it could not ask at all.
+
+    Reported as [] (as it was), an unreachable resolver is indistinguishable
+    from NXDOMAIN -- and in resolve()'s chain, a transport failure then stops
+    the chain as if it were an answer.
+    """
+    monkeypatch.setattr(
+        _dns,
+        "_run",
+        _fake_run(
+            stderr=b";; connection timed out; no servers could be reached\n",
+            returncode=1,
+        ),
+    )
+    with pytest.raises(_dns.ResolutionError, match="exited 1"):
+        resolve_nslookup("example.com", search=False)
+
+
+def test_resolve_nslookup_nxdomain_exit_code_is_still_an_empty_answer(monkeypatch):
+    """BIND's nslookup exits 1 on NXDOMAIN -- the message, not the status, decides."""
+    monkeypatch.setattr(
+        _dns,
+        "_run",
+        _fake_run(
+            stderr=b"** server can't find nope.invalid: NXDOMAIN\n", returncode=1
+        ),
+    )
+    assert resolve_nslookup("nope.invalid", search=False) == []
+
+
 def test_resolve_nslookup_missing_binary_raises_resolution_error(monkeypatch):
     def _raise(*a, **k):
         raise FileNotFoundError("no nslookup")
@@ -582,7 +697,7 @@ def test_resolve_nslookup_rejects_unsupported_rdtype():
 def test_resolve_nslookup_passes_ns_as_trailing_server_arg(monkeypatch):
     captured = {}
 
-    def _impl(cmd, capture_output=True, timeout=None):
+    def _impl(cmd, capture_output=True, timeout=None, stdin=None):
         captured["cmd"] = cmd
         return subprocess.CompletedProcess(cmd, 0, stdout=_NSLOOKUP_A_BIND)
 
@@ -594,7 +709,7 @@ def test_resolve_nslookup_passes_ns_as_trailing_server_arg(monkeypatch):
 def test_resolve_nslookup_search_false_qualifies_with_trailing_dot(monkeypatch):
     captured = {}
 
-    def _impl(cmd, capture_output=True, timeout=None):
+    def _impl(cmd, capture_output=True, timeout=None, stdin=None):
         captured["query"] = cmd[2]
         return subprocess.CompletedProcess(cmd, 0, stdout=_NSLOOKUP_A_BIND)
 
@@ -607,7 +722,7 @@ def test_resolve_nslookup_search_true_tries_search_domains_in_order(monkeypatch)
     """First candidate NXDOMAINs (empty, no error) -> the next suffix is tried."""
     calls = []
 
-    def _impl(cmd, capture_output=True, timeout=None):
+    def _impl(cmd, capture_output=True, timeout=None, stdin=None):
         query = cmd[2]
         calls.append(query)
         if query == "host.eng.example.com":
@@ -631,7 +746,7 @@ def test_resolve_nslookup_search_true_tries_search_domains_in_order(monkeypatch)
 def test_resolve_nslookup_search_list_overrides_system_list(monkeypatch):
     calls = []
 
-    def _impl(cmd, capture_output=True, timeout=None):
+    def _impl(cmd, capture_output=True, timeout=None, stdin=None):
         calls.append(cmd[2])
         return subprocess.CompletedProcess(
             cmd, 1, stdout=b"", stderr=b"** server can't find x: NXDOMAIN\n"
@@ -648,7 +763,7 @@ def test_resolve_nslookup_search_list_overrides_system_list(monkeypatch):
 def test_resolve_nslookup_search_ignores_empty_domain_entries(monkeypatch):
     calls = []
 
-    def _impl(cmd, capture_output=True, timeout=None):
+    def _impl(cmd, capture_output=True, timeout=None, stdin=None):
         query = cmd[2]
         calls.append(query)
         # Every candidate NXDOMAINs, so every one actually gets tried and the
@@ -671,7 +786,7 @@ def test_resolve_nslookup_search_ignores_empty_domain_entries(monkeypatch):
 def test_resolve_nslookup_search_ignored_for_ptr(monkeypatch):
     calls = []
 
-    def _impl(cmd, capture_output=True, timeout=None):
+    def _impl(cmd, capture_output=True, timeout=None, stdin=None):
         calls.append(cmd[2])
         return subprocess.CompletedProcess(cmd, 0, stdout=_NSLOOKUP_PTR)
 
@@ -684,7 +799,7 @@ def test_resolve_nslookup_search_ignored_for_ptr(monkeypatch):
 def test_resolve_nslookup_search_ignored_for_already_qualified_query(monkeypatch):
     calls = []
 
-    def _impl(cmd, capture_output=True, timeout=None):
+    def _impl(cmd, capture_output=True, timeout=None, stdin=None):
         calls.append(cmd[2])
         return subprocess.CompletedProcess(cmd, 0, stdout=_NSLOOKUP_A_BIND)
 
@@ -726,22 +841,87 @@ def test_resolve_chain_falls_through_on_resolution_error(monkeypatch):
     assert resolve("example.com") == [IPv4Address("9.9.9.9")]
 
 
-def test_resolve_chain_stops_at_first_definitive_empty_answer(monkeypatch):
-    """A real NXDOMAIN from the first backend is the answer -- not overridden by trying more."""
+def test_resolve_chain_falls_through_on_an_empty_answer(monkeypatch):
+    """An empty answer is definitive for one mechanism, never for the chain.
+
+    This test pinned the opposite until 0.2.3, and the opposite was wrong:
+    dnspython gets NXDOMAIN for `localhost` on Windows and macOS, so the chain
+    stopped there and `resolve("localhost")` returned [] while the OS resolver
+    had the answer in the hosts file all along. Same for .local/mDNS names and
+    every other NSS-only source.
+    """
     calls = []
 
     def _dnspython_nxdomain(*a, **k):
         calls.append("dnspython")
         return []
 
-    def _system_should_not_run(*a, **k):
+    def _system_has_it(*a, **k):
         calls.append("system")
-        return [IPv4Address("1.2.3.4")]
+        return [IPv4Address("127.0.0.1")]
+
+    def _nslookup_should_not_run(*a, **k):
+        calls.append("nslookup")
+        return [IPv4Address("9.9.9.9")]
 
     monkeypatch.setattr(_dns, "resolve_dnspython", _dnspython_nxdomain)
-    monkeypatch.setattr(_dns, "resolve_system", _system_should_not_run)
+    monkeypatch.setattr(_dns, "resolve_system", _system_has_it)
+    monkeypatch.setattr(_dns, "resolve_nslookup", _nslookup_should_not_run)
+    assert resolve("localhost") == [IPv4Address("127.0.0.1")]
+    # Only a *non-empty* answer stops it, so nslookup is never spawned.
+    assert calls == ["dnspython", "system"]
+
+
+def test_resolve_chain_is_empty_only_when_every_backend_is(monkeypatch):
+    """Nobody has it -> [], the genuine "no such name", after asking each one."""
+    calls = []
+
+    def _empty(name):
+        def _impl(*a, **k):
+            calls.append(name)
+            return []
+
+        return _impl
+
+    monkeypatch.setattr(_dns, "resolve_dnspython", _empty("dnspython"))
+    monkeypatch.setattr(_dns, "resolve_system", _empty("system"))
+    monkeypatch.setattr(_dns, "resolve_nslookup", _empty("nslookup"))
     assert resolve("does-not-exist.invalid") == []
-    assert calls == ["dnspython"]
+    assert calls == ["dnspython", "system", "nslookup"]
+
+
+def test_resolve_empty_answer_outweighs_a_later_backend_failure(monkeypatch):
+    """One backend answered (emptily) and the rest could not ask -> [] wins.
+
+    Raising the transport error instead would report "nslookup is missing" for
+    a name dnspython definitively said does not exist.
+    """
+
+    def _cannot_ask(*a, **k):
+        raise _dns.ResolutionError("nslookup binary not found")
+
+    monkeypatch.setattr(_dns, "resolve_dnspython", lambda *a, **k: [])
+    monkeypatch.setattr(_dns, "resolve_system", _cannot_ask)
+    monkeypatch.setattr(_dns, "resolve_nslookup", _cannot_ask)
+    assert resolve("does-not-exist.invalid") == []
+
+
+def test_resolve_chain_falls_through_when_nslookup_cannot_reach_a_server(monkeypatch):
+    """A non-zero nslookup exit is "could not attempt", so the next backend runs."""
+    monkeypatch.setattr(
+        _dns,
+        "_run",
+        _fake_run(
+            stderr=b";; connection timed out; no servers could be reached\n",
+            returncode=1,
+        ),
+    )
+    monkeypatch.setattr(
+        _dns, "resolve_system", lambda *a, **k: [IPv4Address("1.2.3.4")]
+    )
+    assert resolve("example.com", backends=["nslookup", "system"]) == [
+        IPv4Address("1.2.3.4")
+    ]
 
 
 def test_resolve_chain_skips_system_for_non_address_rdtype(monkeypatch):
@@ -776,6 +956,42 @@ def test_resolve_chain_skips_system_when_ns_given(monkeypatch):
     monkeypatch.setattr(_dns, "resolve_system", _system_should_not_run)
     resolve("example.com", ns="1.1.1.1")
     assert calls == ["dnspython"]
+
+
+def test_resolve_chain_skips_system_for_an_explicit_port_or_tcp(monkeypatch):
+    """The OS resolver takes no per-call port or transport either.
+
+    The docstring already said `ns=`/`port=` excluded it; the code checked
+    `ns` alone, so `port=5353` was quietly answered by whatever port 53 said.
+    """
+    calls = []
+
+    def _dnspython_empty(*a, **k):
+        calls.append("dnspython")
+        return []
+
+    def _system_should_not_run(*a, **k):
+        calls.append("system")
+        return [IPv4Address("1.2.3.4")]
+
+    def _nslookup_empty(*a, **k):
+        calls.append("nslookup")
+        return []
+
+    monkeypatch.setattr(_dns, "resolve_dnspython", _dnspython_empty)
+    monkeypatch.setattr(_dns, "resolve_system", _system_should_not_run)
+    monkeypatch.setattr(_dns, "resolve_nslookup", _nslookup_empty)
+
+    assert resolve("example.com", port=5353) == []
+    assert resolve("example.com", tcp=True) == []
+    assert calls == ["dnspython", "nslookup", "dnspython", "nslookup"]
+
+
+def test_resolution_error_is_part_of_the_public_surface():
+    """Three public functions document raising it, so catching it must not
+    mean importing the private module the repo's own rules forbid."""
+    assert netimps.ResolutionError is _dns.ResolutionError
+    assert "ResolutionError" in netimps.__all__
 
 
 def test_resolve_chain_tries_all_and_raises_last_error_when_all_fail(monkeypatch):
@@ -1056,16 +1272,46 @@ def test_get_ip_parses_literals_without_dns(monkeypatch):
     assert netimps.get_ip("10.0.0.5") == IPv4Address("10.0.0.5")
 
 
+def _stub_name_resolution(monkeypatch, module, address, family=socket.AF_INET):
+    """Stand in for ``getaddrinfo`` with a single answer.
+
+    These used to patch ``gethostbyname``. That call is gone -- it is IPv4-only,
+    which is the defect these functions were fixed for -- and a stub for a
+    function nobody calls does not fail loudly: it just lets the test reach the
+    real resolver and assert against whatever the internet said that day.
+    """
+    calls = []
+
+    def fake(host, *args, **kwargs):
+        calls.append(host)
+        return [(family, socket.SOCK_STREAM, 6, "", (address, 0))]
+
+    monkeypatch.setattr(module._socket, "getaddrinfo", fake)
+    return calls
+
+
 def test_get_ip_falls_back_to_dns(monkeypatch):
-    monkeypatch.setattr(netimps._ip._socket, "gethostbyname", lambda h: "93.184.216.34")
+    _stub_name_resolution(monkeypatch, netimps._ip, "93.184.216.34")
     assert netimps.get_ip("example.com") == IPv4Address("93.184.216.34")
 
 
+def test_get_ip_resolves_a_v6_only_name(monkeypatch):
+    """The whole point of dropping ``gethostbyname``: AAAA-only names resolve.
+
+    It is IPv4-only, so a name with no A record used to come back ``None`` --
+    against the repo's own recorded invariant.
+    """
+    _stub_name_resolution(
+        monkeypatch, netimps._ip, "2606:4700::1111", family=socket.AF_INET6
+    )
+    assert netimps.get_ip("v6only.example") == netimps.parse("2606:4700::1111")
+
+
 def test_get_ip_returns_none_on_failure(monkeypatch):
-    def fail(_):
+    def fail(*args, **kwargs):
         raise OSError("no such host")
 
-    monkeypatch.setattr(netimps._ip._socket, "gethostbyname", fail)
+    monkeypatch.setattr(netimps._ip._socket, "getaddrinfo", fail)
     assert netimps.get_ip("nope.invalid") is None
 
 
@@ -1117,12 +1363,19 @@ def test_get_default_port_unknown_is_none():
 # --------------------------------------------------------------------------- #
 
 
-def _capture_ping(monkeypatch, returncode=0):
+#: A plausible successful reply line, for fakes that are standing in for a ping
+#: that *worked*. An empty stdout used to be the default here, which quietly
+#: modelled "exited 0 and said nothing" as success -- the same reasoning that
+#: let `ping('-?')` come back truthy off the back of a usage message.
+_REPLY_LINE = b"64 bytes from 127.0.0.1: icmp_seq=1 ttl=64 time=0.031 ms\n"
+
+
+def _capture_ping(monkeypatch, returncode=0, stdout=_REPLY_LINE):
     calls = []
 
     def fake_run(cmd, **kwargs):
         calls.append((cmd, kwargs))
-        return subprocess.CompletedProcess(cmd, returncode, stdout=b"")
+        return subprocess.CompletedProcess(cmd, returncode, stdout=stdout)
 
     def no_dns(*args, **kwargs):
         raise OSError("DNS disabled in tests")
@@ -1278,22 +1531,39 @@ def test_ping_hostname_with_several_addresses_accepts_any_of_them(monkeypatch):
     assert result.src == IPv4Address("5.6.7.8")
 
 
-def test_ping_unresolvable_hostname_still_falls_back_to_the_exit_code(monkeypatch):
-    """No expectation to verify against -- a zero exit is all there is."""
+def test_ping_unresolvable_hostname_needs_evidence_of_an_actual_reply(monkeypatch):
+    """With nothing to verify against, a zero exit is NOT enough on its own.
+
+    This used to fall back to the exit code alone, which is how ``ping('-?')``
+    came back truthy: Windows prints usage and exits 0, and with no resolved
+    address there was nothing to contradict it. A reply now has to leave some
+    numeric trace -- an RTT or a hop count -- before it counts.
+    """
 
     def no_dns(*args, **kwargs):
         raise OSError("DNS disabled in tests")
 
     monkeypatch.setattr(netimps._ping._socket, "getaddrinfo", no_dns)
-    monkeypatch.setattr(
-        netimps._ping,
-        "_run",
-        lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, stdout=b"pong\n"),
-    )
+
+    def exits_zero_saying(text):
+        monkeypatch.setattr(
+            netimps._ping,
+            "_run",
+            lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, stdout=text),
+        )
+
+    # Exited 0 but produced no measurement: not a reply.
+    exits_zero_saying(b"pong\n")
+    assert bool(ping("host.invalid")) is False
+
+    # Exited 0 and reported a round trip: a reply, even though the name never
+    # reached getaddrinfo here -- WINS/NetBIOS and hosts-file names can be
+    # resolved by the platform binary without it.
+    exits_zero_saying(_REPLY_LINE)
     assert bool(ping("host.invalid")) is True
 
 
-def test_ping_returns_false_when_binary_missing(monkeypatch):
+def test_ping_returns_false_when_binary_missing(monkeypatch, no_such_host):
     def no_binary(cmd, **kwargs):
         raise FileNotFoundError("ping not installed")
 
@@ -1301,7 +1571,7 @@ def test_ping_returns_false_when_binary_missing(monkeypatch):
     assert bool(netimps.ping("host")) is False
 
 
-def test_ping_returns_false_when_subprocess_hangs(monkeypatch):
+def test_ping_returns_false_when_subprocess_hangs(monkeypatch, no_such_host):
     def hang(cmd, **kwargs):
         raise subprocess.TimeoutExpired(cmd, 1)
 
@@ -1398,3 +1668,179 @@ def test_ping_size_is_the_payload_not_the_wire_packet(monkeypatch):
     assert flag in cmd
     # Passed straight through -- no header arithmetic applied here.
     assert cmd[cmd.index(flag) + 1] == "1472"
+
+
+# --------------------------------------------------------------------------- #
+# Platform-faked ping argv
+#
+# The suite fakes `subprocess.run` everywhere, so it can only ever assert the
+# argv netimps BUILDS. That is worth asserting -- but until these tests, no test
+# ever faked the PLATFORM, so the whole BSD branch was unreachable from CI and
+# macOS shipped broken while every runner stayed green. Faking `_PLATFORM` is
+# what lets a Linux or Windows runner check the BSD grammar.
+#
+# Every expectation below is measured, not guessed. They were captured from a
+# real macOS runner on 2026-09-20, where `ping` answered:
+#
+#     $ ping -c 1 -W 1 -n -6 ::1          -> exit 64, "invalid option -- 6"
+#     $ ping -c 1 -W 1 -n -4 127.0.0.1    -> exit 64, "invalid option -- 4"
+#     $ ping -c 1 -W 1 -n ::1             -> exit 68, "cannot resolve ::1"
+#     $ ping -c 1 -W 1 -n -I 127.0.0.1 127.0.0.1
+#           -> exit 64, "-I, -L, -T flags cannot be used with unicast destination"
+#     $ ping -c 1 -W 1 -n -M do 127.0.0.1 -> exit 64, "invalid message: `d'"
+#     $ ping6 -c 1 -n ::1   -> "16 bytes from ::1, icmp_seq=0 hlim=64 time=0.059 ms"
+#
+# and `-W` proved to be milliseconds there: against an unresponsive address,
+# `-W 1` and `-W 4` both returned in ~1.03s while `-W 4000` took 5.1s. On Linux
+# the same three took 1.00s, 4.00s and (not run) respectively.
+# --------------------------------------------------------------------------- #
+
+
+def _argv_for(monkeypatch, platform, dst="127.0.0.1", **kwargs):
+    """Return the argv netimps would emit for `dst` on `platform`."""
+    calls = _capture_ping(monkeypatch)
+    monkeypatch.setattr(netimps._ping, "_PLATFORM", platform)
+    netimps.ping(dst, **kwargs)
+    return calls[0][0]
+
+
+def test_ping_timeout_flag_and_units_per_platform(monkeypatch):
+    """BSD's -W is MILLISECONDS; Linux's is seconds; Windows uses -w ms.
+
+    Passing the Linux number to BSD gave macOS a 1ms deadline, which is why
+    `timeout=` was measurably inert there (`ping('192.0.2.1', timeout=3)`
+    returned after 1.16s on macOS and 3.00s on Linux).
+    """
+    windows = _argv_for(monkeypatch, "windows", timeout=4.0)
+    assert windows[windows.index("-w") + 1] == "4000"
+
+    linux = _argv_for(monkeypatch, "linux", timeout=4.0)
+    assert linux[linux.index("-W") + 1] == "4"
+
+    bsd = _argv_for(monkeypatch, "bsd", timeout=4.0)
+    assert bsd[bsd.index("-W") + 1] == "4000"
+
+
+def test_ping_ttl_flag_per_platform(monkeypatch):
+    """-i on Windows, -t on Linux, -m on BSD.
+
+    BSD's -t is an overall DEADLINE, and Linux's -m is a firewall mark, so the
+    two platforms disagree in both directions and no flag can be shared.
+    """
+    assert "-i" in _argv_for(monkeypatch, "windows", ttl=5)
+    assert "-t" in _argv_for(monkeypatch, "linux", ttl=5)
+
+    bsd = _argv_for(monkeypatch, "bsd", ttl=5)
+    assert "-m" in bsd and "-t" not in bsd
+
+
+def test_ping_source_flag_per_platform(monkeypatch):
+    """-S on Windows and BSD, -I on Linux.
+
+    BSD rejects -I outright for a unicast destination ("-I, -L, -T flags cannot
+    be used with unicast destination", exit 64), which made every `src=` ping
+    falsy there.
+    """
+    assert "-S" in _argv_for(monkeypatch, "windows", src="127.0.0.1")
+    assert "-I" in _argv_for(monkeypatch, "linux", src="127.0.0.1")
+
+    bsd = _argv_for(monkeypatch, "bsd", src="127.0.0.1")
+    assert "-S" in bsd and "-I" not in bsd
+
+
+def test_ping_dont_fragment_flag_per_platform(monkeypatch):
+    """-f on Windows, -M do on Linux, -D on BSD.
+
+    BSD ping does have a DF flag; the code used to claim it did not and omit it
+    silently, which made discover_mtu return its ceiling instead of the MTU.
+    """
+    assert "-f" in _argv_for(monkeypatch, "windows", dont_fragment=True)
+
+    linux = _argv_for(monkeypatch, "linux", dont_fragment=True)
+    assert linux[linux.index("-M") + 1] == "do"
+
+    bsd = _argv_for(monkeypatch, "bsd", dont_fragment=True)
+    assert "-D" in bsd and "-M" not in bsd
+
+
+def test_ping_family_flags_only_where_they_exist(monkeypatch):
+    """-4/-6 are Windows and Linux only. BSD ping has neither.
+
+    `ping -6 ::1` on macOS is `invalid option -- 6`, exit 64, and `-4` is
+    rejected the same way -- so even asking explicitly for the family a
+    destination already is used to break a working ping.
+    """
+    for platform in ("windows", "linux"):
+        assert "-6" in _argv_for(monkeypatch, platform, dst="::1", ipv6=True)
+        assert "-4" in _argv_for(monkeypatch, platform, ipv6=False)
+
+    bsd_v6 = _argv_for(monkeypatch, "bsd", dst="::1", ipv6=True)
+    bsd_v4 = _argv_for(monkeypatch, "bsd", ipv6=False)
+    assert "-6" not in bsd_v6 and "-4" not in bsd_v6
+    assert "-6" not in bsd_v4 and "-4" not in bsd_v4
+
+
+def test_ping_bsd_selects_the_ping6_binary_for_ipv6(monkeypatch):
+    """On BSD the family selects the BINARY, because there is no flag for it."""
+    assert _argv_for(monkeypatch, "bsd", dst="::1", ipv6=True)[0] == "ping6"
+    assert _argv_for(monkeypatch, "bsd", dst="::1")[0] == "ping6"
+    assert _argv_for(monkeypatch, "bsd", dst="127.0.0.1")[0] == "ping"
+    # Linux and Windows keep one binary for both families.
+    assert _argv_for(monkeypatch, "linux", dst="::1", ipv6=True)[0] == "ping"
+    assert _argv_for(monkeypatch, "windows", dst="::1", ipv6=True)[0] == "ping"
+
+
+def test_ping6_gets_hoplimit_not_ttl_and_no_wait_flag(monkeypatch):
+    """BSD ping6 spells the hop limit -h, and has no -W waittime at all."""
+    argv = _argv_for(monkeypatch, "bsd", dst="::1", ipv6=True, ttl=5, timeout=2.0)
+    assert "-h" in argv and argv[argv.index("-h") + 1] == "5"
+    assert "-W" not in argv and "-m" not in argv
+
+
+def test_ping_refuses_dont_fragment_where_it_cannot_be_set(monkeypatch):
+    """Refuse rather than answer wrongly.
+
+    Without DF the local stack fragments the probe, the peer reassembles and
+    replies, every size "survives", and discover_mtu returns its own ceiling.
+    Returning None is honest; returning 9000 is not.
+    """
+    monkeypatch.setattr(netimps._ping, "_PLATFORM", "bsd")
+    with pytest.raises(ValueError, match="dont_fragment"):
+        netimps.ping("::1", ipv6=True, dont_fragment=True)
+    # The v4 binary on the same platform does have -D, so it is accepted.
+    assert netimps._ping.supports_dont_fragment("127.0.0.1", False) is True
+
+
+def test_ping_never_inherits_the_callers_stdin(monkeypatch):
+    """A library must not hand its caller's stdin to a subprocess."""
+    calls = _capture_ping(monkeypatch)
+    netimps.ping("127.0.0.1")
+    assert calls[0][1]["stdin"] is subprocess.DEVNULL
+
+
+def test_reply_needle_matches_bsd_comma_and_hlim():
+    """The captured BSD ping6 reply line, verbatim from a macOS runner."""
+    line = "16 bytes from ::1, icmp_seq=0 hlim=64 time=0.520 ms"
+    rtt, ttl, src = netimps._ping._parse_ping_output(line, [netimps.parse("::1")])
+    assert (rtt, ttl, str(src)) == (0.520, 64, "::1")
+
+
+def test_reply_needle_does_not_match_an_address_inside_a_longer_one():
+    """`::1` must not be found inside `2001:db8::1` -- the point is WHO replied."""
+    line = "16 bytes from 2001:db8::1, icmp_seq=0 hlim=64 time=1.0 ms"
+    _rtt, _ttl, src = netimps._ping._parse_ping_output(line, [netimps.parse("::1")])
+    assert src is None
+
+
+def test_sub_millisecond_reply_is_recorded_as_zero():
+    """`time<1ms` is an upper bound, not a measurement.
+
+    Windows prints it for every loopback reply; reading the `1` as the RTT
+    over-reports a sub-millisecond round trip by up to 100%, and the documented
+    contract has always said 0.0.
+    """
+    line = "Reply from 127.0.0.1: bytes=32 time<1ms TTL=128"
+    rtt, ttl, _src = netimps._ping._parse_ping_output(
+        line, [netimps.parse("127.0.0.1")]
+    )
+    assert rtt == 0.0 and ttl == 128
