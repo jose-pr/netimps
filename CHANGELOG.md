@@ -7,11 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-Several documented contracts changed in this cycle; each such entry below is
-marked **BREAKING**. Under this project's pre-1.0 rule -- MINOR means "the
-documented API broke" and nothing else -- that makes the next release a minor
-bump. The number and the timing are the maintainer's call and are not chosen
-here.
+## [0.3.0] - 2026-09-21
+
+Entries marked **BREAKING** change a documented contract. See
+`RELEASENOTES.md` for migration detail and validation evidence.
 
 ### Added
 
@@ -223,6 +222,11 @@ here.
   version -- see the docs workflow note below.
 
 ### Fixed
+- **`netimps.__version__` is read from the installed distribution metadata**
+  rather than restated as a literal beside `pyproject.toml`. The literal
+  drifted on the first version bump -- reporting `0.2.2` from a `0.3.0`
+  package -- while the shipped header promised the two always carry the same
+  value. A source tree with no installed metadata reports `0.0.0+unknown`.
 - **Link-local IPv6 multicast joins work on macOS/BSD.** `ff02::/16` has no
   meaning without a scope, and those kernels will not pick one -- so
   `multicast_socket("ff02::fb")` raised `OSError 49 (EADDRNOTAVAIL)` there
@@ -596,7 +600,8 @@ below is simply what the package contains.
 - **`Host`**, **`retry()`/`backoff_delays()`**, and the named networks `APIPA`,
   `LOOPBACK_V4`, `LOOPBACK_V6`, `LINK_LOCAL_V6`.
 
-[Unreleased]: https://github.com/jose-pr/netimps/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/jose-pr/netimps/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/jose-pr/netimps/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/jose-pr/netimps/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/jose-pr/netimps/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/jose-pr/netimps/compare/v0.1.0...v0.2.0
