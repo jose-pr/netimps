@@ -31,6 +31,12 @@ here.
 - **`Datagram.control_truncated`** -- `MSG_CTRUNC`, i.e. the kernel had more
   ancillary data than the buffer held. Appended last with a `False` default, so
   positional construction and unpacking of the first five fields is unaffected.
+- **`ipv6=` on `multicast_socket`** -- forces the address family. The family
+  came from `any(":" in g for g in groups)`, and a send-only socket has no
+  groups, so `any()` over an empty list made it IPv4 unconditionally: the
+  documented `multicast_socket(ttl=32, bind=False)` sender could not be given
+  an IPv6 hop limit or used to reach an IPv6 group. `None` (the default) still
+  infers from `group`.
 - **`ipv6=`** on `get_ip`, `get_source_ip`, `get_route`, `hop_count` and
   `get_pmtu`, matching `ping`'s, and **`allow_address_takeover=`** on `bind`
   (see the Windows entry under Changed).
@@ -42,6 +48,10 @@ here.
   runtime change; a type checker stops rejecting a valid call.
 
 ### Changed
+- **`multicast_socket` rejects groups of mixed address families**, and an
+  `ipv6=` that contradicts `group`. One socket has one family; picking either
+  and letting the other join fail surfaced as an opaque `OSError` from inside
+  `setsockopt` instead of naming the mistake.
 
 - **BREAKING: `MACAddress.__eq__` no longer coerces a `str`.**
   `MACAddress("aa:bb:cc:dd:ee:ff") == "aa:bb:cc:dd:ee:ff"` is now `False` --

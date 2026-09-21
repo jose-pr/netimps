@@ -755,3 +755,65 @@ def test_ipv6_interface_without_an_index_raises_rather_than_defaulting(monkeypat
     monkeypatch.setattr(netimps._ifaddrs, "get_interfaces", lambda **k: [indexless])
     with pytest.raises(ValueError, match="reports no index"):
         netimps._multicast._membership_request("ff02::fb", "fake0", ipv6=True)
+
+
+# --------------------------------------------------------------------------- #
+# multicast_socket address family                                              #
+# --------------------------------------------------------------------------- #
+
+
+def test_send_only_socket_can_be_ipv6():
+    """`any()` over an empty group list is False, so send-only was always IPv4.
+
+    The docstring's own send-only example -- `multicast_socket(ttl=32,
+    bind=False)` -- had no group to infer a family from, so an IPv6 sender was
+    simply unreachable through this function: the hop limit went onto the IPv4
+    option and `sendto` to an IPv6 group could not work.
+    """
+    sender = netimps.multicast_socket(ttl=32, bind=False)
+    try:
+        assert sender.family == socket.AF_INET  # unchanged default
+    finally:
+        sender.close()
+
+    sender6 = netimps.multicast_socket(ttl=32, bind=False, ipv6=True)
+    try:
+        assert sender6.family == socket.AF_INET6
+    finally:
+        sender6.close()
+
+
+def test_family_is_still_inferred_from_the_group():
+    """ipv6=None keeps the old behaviour wherever a group says which family.
+
+    IPv4 only, deliberately. `multicast_socket` *joins* the group it is given,
+    and joining a link-local IPv6 group with no `interface=` fails on macOS
+    with EADDRNOTAVAIL -- which is a real, still-open finding about the join,
+    not about the family inference this test is named for. Asserting inference
+    through a call that has to succeed at joining would make this test fail for
+    an unrelated reason on one platform.
+
+    The IPv6 half of the inference is covered without joining anything by
+    `test_explicit_family_may_not_contradict_the_group`: for that to raise, the
+    code must already have read `ff02::fb` as v6.
+    """
+    sock = netimps.multicast_socket("239.1.2.3", bind=False)
+    try:
+        assert sock.family == socket.AF_INET
+    finally:
+        sock.close()
+
+
+def test_mixed_family_groups_are_rejected():
+    """One socket has one family; picking either and letting the other join
+    fail surfaced as an opaque OSError from inside setsockopt."""
+    with pytest.raises(ValueError, match="all IPv4 or all IPv6"):
+        netimps.multicast_socket(["239.1.2.3", "ff02::fb"], bind=False)
+
+
+def test_explicit_family_may_not_contradict_the_group():
+    """Silently winning over the group would be the worse answer here."""
+    with pytest.raises(ValueError, match="contradicts"):
+        netimps.multicast_socket("239.1.2.3", ipv6=True, bind=False)
+    with pytest.raises(ValueError, match="contradicts"):
+        netimps.multicast_socket("ff02::fb", ipv6=False, bind=False)

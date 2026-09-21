@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import socket as _socket
 import struct as _struct
-from typing import List, Union
+from typing import List, Optional, Union
 
 from ._iface_spec import InterfaceSpec, interface_address as _interface_address
 from ._iface_spec import interface_index as _interface_index
@@ -147,6 +147,7 @@ def multicast_socket(
     loop: bool = True,
     bind: bool = True,
     reuse: bool = True,
+    ipv6: "Optional[bool]" = None,
 ) -> "_socket.socket":
     """Return a UDP socket configured for multicast, joined to ``group``.
 
@@ -178,13 +179,44 @@ def multicast_socket(
         so several listeners can share the port. ``SO_REUSEPORT`` is absent on
         Windows and is skipped there rather than raising.
 
+    :param ipv6: force the address family. ``None`` (the default) takes it from
+        ``group``, which is what you want whenever there is one::
+
+            multicast_socket(ttl=32, bind=False)              # IPv4 sender
+            multicast_socket(ttl=32, bind=False, ipv6=True)   # IPv6 sender
+
+        It exists for the send-only case above, where there is no group to
+        infer from: that socket used to be IPv4 unconditionally, so an IPv6
+        sender was unreachable through this function. Passing a value that
+        contradicts ``group`` raises rather than quietly winning.
+
     The caller owns the socket and should close it; closing drops membership.
-    Raises :class:`ValueError` for a non-multicast group, :class:`OSError` if
-    binding or joining fails.
+    Raises :class:`ValueError` for a non-multicast group, for groups of mixed
+    address families (one socket has one family -- open two), for an ``ipv6``
+    that contradicts ``group``, and :class:`OSError` if binding or joining
+    fails.
     """
     groups = [group] if isinstance(group, str) else list(group or [])
-    ipv6 = any(":" in entry for entry in groups)
+    families = {":" in entry for entry in groups}
+    if len(families) > 1:
+        # One socket has one family. Picking either and letting the other join
+        # fail surfaces as an opaque OSError from deep inside setsockopt, which
+        # says nothing about the real mistake.
+        raise ValueError(
+            "groups must be all IPv4 or all IPv6, got %r -- one socket has one "
+            "address family; open two" % (groups,)
+        )
+    if ipv6 is None:
+        # No groups at all is the send-only case, and `any()` over an empty list
+        # is False -- so a send-only socket was silently always IPv4, and the
+        # documented `multicast_socket(ttl=32, bind=False)` sender could never
+        # be given an IPv6 hop limit or used to reach an IPv6 group.
+        ipv6 = bool(families and families.pop())
     family = _socket.AF_INET6 if ipv6 else _socket.AF_INET
+    if groups and any((":" in entry) != ipv6 for entry in groups):
+        raise ValueError(
+            "ipv6=%r contradicts the address family of %r" % (ipv6, groups)
+        )
 
     sock = _socket.socket(family, _socket.SOCK_DGRAM)
     try:

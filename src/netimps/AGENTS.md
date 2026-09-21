@@ -795,10 +795,16 @@ accepts a scheme name too; passing both raises `ValueError`.
 
 ## Multicast
 
-- **`multicast_socket(group=None, port=0, interface=None, ttl=1, loop=True, bind=True, reuse=True)`**
+- **`multicast_socket(group=None, port=0, interface=None, ttl=1, loop=True, bind=True, reuse=True, ipv6=None)`**
   — a UDP socket configured and joined in one call. `group` is a group address
-  or a list of them; `group=None` gives a send-only socket. Raises `ValueError`
-  for a non-multicast group and `OSError` if binding or joining fails.
+  or a list of them; `group=None` gives a send-only socket.
+  `ipv6=None` takes the family from `group`, which is what you want whenever
+  there is one. Pass it explicitly for the **send-only** case, where there is
+  no group to infer from — that socket is IPv4 unless you say otherwise:
+  `multicast_socket(ttl=32, bind=False, ipv6=True)`.
+  Raises `ValueError` for a non-multicast group, for groups of **mixed address
+  families** (one socket has one family — open two), and for an `ipv6` that
+  contradicts `group`; `OSError` if binding or joining fails.
 - **`join_group(sock, group, interface=None)`** / **`leave_group(...)`** —
   closing the socket drops membership too, so `leave_group` is only needed to
   leave while keeping the socket open.
