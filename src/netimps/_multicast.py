@@ -31,6 +31,7 @@ The parts people get wrong
 from __future__ import annotations
 
 import socket as _socket
+import sys as _sys
 import struct as _struct
 from typing import List, Optional, Union
 
@@ -75,6 +76,53 @@ def is_multicast(address: "AddressLike") -> bool:
     return bool(parsed is not None and parsed.is_multicast)
 
 
+#: Platforms whose kernel will not pick a scope for a link-local IPv6 join.
+_NEEDS_EXPLICIT_V6_SCOPE = not (
+    _sys.platform == "win32" or _sys.platform.startswith("linux")
+)
+
+
+def _default_v6_scope(group: str) -> int:
+    """An interface index for a link-local IPv6 join, where 0 will not do.
+
+    Index ``0`` means "kernel's choice", which is the right default and works
+    on Linux and Windows. macOS/BSD will not make that choice for a
+    **link-local** group -- ``ff02::/16`` has no meaning without a scope, so the
+    join fails with ``EADDRNOTAVAIL`` rather than picking for you. Measured:
+    ``multicast_socket("ff02::fb")`` joins on Linux and Windows (both leaving
+    ``IPV6_MULTICAST_IF`` at 0) and raises ``OSError 49`` on macOS.
+
+    So this supplies a scope only where the kernel refuses to, and only when
+    the caller did not name one -- an explicit ``interface=`` always wins, on
+    every platform. Returning ``0`` leaves the behaviour exactly as it was.
+
+    The pick mirrors what a kernel would do: the first non-loopback adapter
+    that actually carries a link-local address, in enumeration order. That is a
+    guess on a multi-homed host, which is precisely why ``interface=`` is
+    documented as strongly recommended there -- but a guess that joins beats an
+    error that does not, and the caller keeps the override.
+    """
+    if not _NEEDS_EXPLICIT_V6_SCOPE:
+        return 0
+    from . import try_parse
+
+    parsed = try_parse(group)
+    if parsed is None or not parsed.is_link_local:
+        return 0  # a routable group needs no scope
+
+    from . import get_interfaces
+
+    for iface in get_interfaces():
+        if iface.is_loopback or not iface.index:
+            continue
+        if any(
+            address.ip.version == 6 and address.ip.is_link_local
+            for address in iface.ips
+        ):
+            return iface.index
+    return 0
+
+
 def _membership_request(group: str, interface: "InterfaceSpec", ipv6: bool):
     """Build the mreq structure for IP_ADD_MEMBERSHIP / IPV6_JOIN_GROUP.
 
@@ -84,6 +132,8 @@ def _membership_request(group: str, interface: "InterfaceSpec", ipv6: bool):
     """
     if ipv6:
         index = _interface_index(interface) or 0
+        if index == 0:
+            index = _default_v6_scope(group)
         return _socket.inet_pton(_socket.AF_INET6, group) + _struct.pack("@I", index)
 
     address = _interface_address(interface, want_ipv6=False)

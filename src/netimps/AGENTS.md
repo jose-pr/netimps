@@ -805,6 +805,13 @@ accepts a scheme name too; passing both raises `ValueError`.
   Raises `ValueError` for a non-multicast group, for groups of **mixed address
   families** (one socket has one family — open two), and for an `ipv6` that
   contradicts `group`; `OSError` if binding or joining fails.
+- **Link-local IPv6 groups (`ff02::/16`) need a scope**, and only some kernels
+  will pick one. Index `0` means "kernel's choice" and is the right default:
+  Linux and Windows honour it and join happily. macOS/BSD will not choose for a
+  link-local group and fail the join with `EADDRNOTAVAIL`, so this supplies an
+  index there — the first non-loopback adapter carrying a link-local address.
+  An explicit `interface=` always wins, on every platform; the fallback only
+  covers the case where nobody chose and the kernel would not either.
 - **`join_group(sock, group, interface=None)`** / **`leave_group(...)`** —
   closing the socket drops membership too, so `leave_group` is only needed to
   leave while keeping the socket open.

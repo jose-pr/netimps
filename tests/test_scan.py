@@ -5,6 +5,7 @@ Everything is pointed at loopback -- these never scan anything external.
 
 import ipaddress
 import socket
+import struct
 
 import pytest
 
@@ -786,22 +787,42 @@ def test_send_only_socket_can_be_ipv6():
 def test_family_is_still_inferred_from_the_group():
     """ipv6=None keeps the old behaviour wherever a group says which family.
 
-    IPv4 only, deliberately. `multicast_socket` *joins* the group it is given,
-    and joining a link-local IPv6 group with no `interface=` fails on macOS
-    with EADDRNOTAVAIL -- which is a real, still-open finding about the join,
-    not about the family inference this test is named for. Asserting inference
-    through a call that has to succeed at joining would make this test fail for
-    an unrelated reason on one platform.
-
-    The IPv6 half of the inference is covered without joining anything by
-    `test_explicit_family_may_not_contradict_the_group`: for that to raise, the
-    code must already have read `ff02::fb` as v6.
+    Note this joins for real, including the link-local IPv6 group -- which is
+    the case that used to fail on macOS, because `ff02::/16` has no meaning
+    without a scope and that kernel will not pick one. Index 0 ("kernel's
+    choice") is a perfectly good default where the kernel honours it, so the
+    library now supplies a scope only on the platforms that refuse to.
     """
-    sock = netimps.multicast_socket("239.1.2.3", bind=False)
-    try:
-        assert sock.family == socket.AF_INET
-    finally:
-        sock.close()
+    for group, expected in (
+        ("239.1.2.3", socket.AF_INET),
+        ("ff02::fb", socket.AF_INET6),
+    ):
+        sock = netimps.multicast_socket(group, bind=False)
+        try:
+            assert sock.family == expected
+        finally:
+            sock.close()
+
+
+def test_explicit_interface_still_wins_over_the_default_scope():
+    """The scope fallback must never override a caller who named an adapter.
+
+    It exists only for the case where the caller said nothing and the kernel
+    will not choose either -- not to start making adapter decisions generally.
+    """
+    loopback = next((i for i in netimps.get_interfaces() if i.is_loopback), None)
+    assert loopback is not None, "no loopback interface enumerated"
+    chosen = next(
+        (i for i in netimps.get_interfaces() if not i.is_loopback and i.index), None
+    )
+    if chosen is None:
+        pytest.skip("no non-loopback interface with an index on this host")
+
+    from netimps._multicast import _membership_request
+
+    request = _membership_request("ff02::fb", chosen, ipv6=True)
+    index = struct.unpack("@I", request[16:20])[0]
+    assert index == chosen.index
 
 
 def test_mixed_family_groups_are_rejected():

@@ -223,6 +223,13 @@ here.
   version -- see the docs workflow note below.
 
 ### Fixed
+- **Link-local IPv6 multicast joins work on macOS/BSD.** `ff02::/16` has no
+  meaning without a scope, and those kernels will not pick one -- so
+  `multicast_socket("ff02::fb")` raised `OSError 49 (EADDRNOTAVAIL)` there
+  while joining fine on Linux and Windows, which both accept index `0` for
+  "kernel's choice". An index is now supplied only on the platforms that
+  refuse to choose, and only when the caller named no `interface=`, which
+  still wins everywhere.
 
 - **`ping` is no longer a Linux-only implementation.** Five of the six flags it
   emitted mean something different, or nothing at all, on BSD/macOS -- measured
