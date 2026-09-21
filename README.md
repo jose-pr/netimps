@@ -2,7 +2,7 @@
 
 [![Version](https://img.shields.io/pypi/v/netimps.svg)](https://pypi.org/project/netimps/)
 [![Python versions](https://img.shields.io/pypi/pyversions/netimps.svg)](https://pypi.org/project/netimps/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/jose-pr/netimps/blob/main/LICENSE)
 [![Docs](https://img.shields.io/badge/docs-latest-blue.svg)](https://jose-pr.github.io/netimps/)
 [![CI](https://img.shields.io/github/actions/workflow/status/jose-pr/netimps/test.yml)](https://github.com/jose-pr/netimps/actions/workflows/test.yml)
 
@@ -179,14 +179,15 @@ netimps.retry(lambda: netimps.tcp_check("example.com", 443), attempts=3)
 | `HOST_DN` | `platform.node()`, captured at import time |
 
 Full per-export reference, with contracts and gotchas, lives in
-[`src/netimps/AGENTS.md`](src/netimps/AGENTS.md).
+[`src/netimps/AGENTS.md`](https://github.com/jose-pr/netimps/blob/main/src/netimps/AGENTS.md),
+which also ships beside this file inside the installed package.
 
 ## Design notes
 
 A few behaviours are deliberate and worth knowing:
 
-- **`Interface.is_loopback` is computed from addresses, not names** — `lo`,
-  `lo0` and `Loopback Pseudo-Interface 1` share no spelling.
+- **`Interface.is_loopback` is never derived from the name** — `lo`, `lo0` and
+  `Loopback Pseudo-Interface 1` share no spelling.
 - **Concrete types are strict about family.** `parse("::1", IPAddress)` works;
   `parse("::1", IPv4Address)` raises rather than quietly returning v6.
 - **Networks parse non-strict by default**, so `10.0.0.5/24` normalises instead
@@ -196,9 +197,9 @@ A few behaviours are deliberate and worth knowing:
   such as unscoped IPv6 link-local assignments matter.
 - **`resolve` raises on a malformed query** rather than returning `[]` — a
   typo'd record type should not look like "no such record".
-- **`ping(ttl=...)` behaves the same on every OS.** Windows `ping` exits `0`
-  for "TTL expired in transit", so the reply address is verified instead of
-  trusting the exit code.
+- **`ping()` decides success from the reply, not the exit code.** Windows
+  `ping` exits `0` for "TTL expired in transit", so the reply address is
+  verified instead of trusting the exit status.
 - **`hop_count` works unprivileged**, falling back to the system traceroute
   when a raw socket is unavailable.
 - **`discover_mtu` measures; `get_pmtu` only reports what the kernel cached.**
@@ -219,9 +220,10 @@ Tested on Python 3.9 (the floor) and 3.14.
 ### Releasing
 
 This project follows [Semantic Versioning](https://semver.org/) and keeps a
-[`CHANGELOG.md`](CHANGELOG.md). Pushing a tag matching `v*` triggers the release
-workflow: test gate → build → publish → docs deploy.
+[`CHANGELOG.md`](https://github.com/jose-pr/netimps/blob/main/CHANGELOG.md).
+Pushing a tag matching `v*` triggers the release workflow: test gate → build
+→ publish → docs deploy.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](https://github.com/jose-pr/netimps/blob/main/LICENSE).

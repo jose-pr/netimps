@@ -7,6 +7,346 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+Several documented contracts changed in this cycle; each such entry below is
+marked **BREAKING**. Under this project's pre-1.0 rule -- MINOR means "the
+documented API broke" and nothing else -- that makes the next release a minor
+bump. The number and the timing are the maintainer's call and are not chosen
+here.
+
+### Added
+
+- **`ResolutionError` is exported** (`netimps.ResolutionError`, listed in
+  `__all__`). It is the documented raised type of `resolve`, `resolve_system`
+  and `resolve_nslookup`, and catching it by name previously meant importing
+  the private `netimps._dns`.
+- **`Interface.loopback`** -- the kernel's own answer, from `IFF_LOOPBACK`
+  (POSIX) or `IfType == IF_TYPE_SOFTWARE_LOOPBACK` (Windows), and `None` when
+  enumeration reported neither, plus a matching trailing `loopback=`
+  constructor keyword. `Interface.is_loopback` consults it first and falls back
+  to the address heuristic only when it is `None`.
+- **`UdpEndpoint.supports_src_pinning`** -- whether `send(src=...)` can be
+  honoured at all. `False` on Windows (no `sendmsg`) and wherever the socket's
+  family has no pktinfo control message. `repr(UdpEndpoint)` gained a matching
+  `src_pinning=` field.
+- **`Datagram.control_truncated`** -- `MSG_CTRUNC`, i.e. the kernel had more
+  ancillary data than the buffer held. Appended last with a `False` default, so
+  positional construction and unpacking of the first five fields is unaffected.
+- **`ipv6=`** on `get_ip`, `get_source_ip`, `get_route`, `hop_count` and
+  `get_pmtu`, matching `ping`'s, and **`allow_address_takeover=`** on `bind`
+  (see the Windows entry under Changed).
+- **Per-octet dot MAC text** -- `MACAddress("aa.bb.cc.dd.ee.ff")` parses. That
+  spelling is exactly what `as_str(".")` emits, so the round trip through the
+  package's own output format was broken. Cisco triplets (`aabb.ccdd.eeff`)
+  remain accepted on input and are still never produced.
+- `MACLike` includes `bytearray`, which the constructor already accepted. No
+  runtime change; a type checker stops rejecting a valid call.
+
+### Changed
+
+- **BREAKING: `MACAddress.__eq__` no longer coerces a `str`.**
+  `MACAddress("aa:bb:cc:dd:ee:ff") == "aa:bb:cc:dd:ee:ff"` is now `False` --
+  in both directions -- and `mac != text` is `True`; anything that is not a
+  `MACAddress` yields `NotImplemented`.
+  **Migration: `MACAddress.try_parse(text) == mac`.**
+  Every spelling of the text compared equal, while `str.__hash__` -- not ours
+  to change -- hashes each of them differently, so equality and hashing
+  disagreed. That is what broke containers, and it is what this buys:
+  `mac in {MACAddress(other_spelling)}` and
+  `{mac: v}[MACAddress(other_spelling)]` both work now and did not before.
+- **BREAKING (narrow): mixed MAC separators are rejected.**
+  `MACAddress("00-11:22-33:44-55")` raises `ValueError`; a separator form has
+  to be used consistently.
+- **BREAKING (narrow): `MACAddress(True)` / `MACAddress(False)` raise
+  `TypeError`** instead of building `00:00:00:00:00:01` / `...:00` -- `bool` is
+  an `int` subclass, and an unguarded int branch took it. `is_valid(True)` is
+  now `False` and `try_parse(True)` is `None`.
+- **BREAKING: `resolve()` no longer stops on an empty answer.** Only a
+  non-empty answer stops the chain, and `[]` comes back only when every
+  applicable backend was empty. `resolve("localhost")` returns `127.0.0.1` in
+  0.011s where it returned `[]`; the same held for hosts-file, `.local` and
+  NSS-only names on Windows and macOS, where `dnspython` raises NXDOMAIN for
+  them and so stopped the chain before the OS resolver was ever asked. (Linux
+  answered, because systemd-resolved replies -- which is why Linux-only CI
+  never saw this.) The cost: a genuinely non-existent name now takes two or
+  three backend calls instead of one, the last of which may spawn `nslookup`.
+  Pass `backends="dnspython"` for the old single call.
+- **BREAKING: `resolve_nslookup` raises `ResolutionError` on a non-zero exit
+  carrying no "no such name" marker** -- an unreachable server, a refused
+  connection, a usage error. It used to return `[]`, which made a transport
+  failure indistinguishable from NXDOMAIN and, inside `resolve()`'s chain,
+  stopped the chain on it. An exit-1 NXDOMAIN with the marker text is still
+  `[]`.
+- **BREAKING: `resolve_nslookup` validates its query before spawning
+  anything** -- `ValueError` for a query starting with `-` (`nslookup` has no
+  `--` separator to escape one with), for an empty or whitespace-only query,
+  and for one containing whitespace or control characters. Such a query used to
+  reach the binary, which went interactive and drained the **caller's** stdin,
+  sending each line to the nameserver as a query name.
+- **BREAKING in effect: `resolve_system(addr, "ptr", timeout=T)` honours `T`.**
+  The PTR branch called `gethostbyaddr` on the calling thread, bypassing the
+  bounded daemon thread 0.2.2 added for the address path: measured **4.627s
+  against a 0.1s deadline**, and 0.106s now. It raises `ResolutionError` at the
+  deadline rather than blocking and then returning `[]`.
+- `resolve()` also skips the `system` backend for an explicit non-53 `port=` or
+  `tcp=True`, not only for `ns=` -- which is what its docstring already
+  promised. With `backends=["system"]` plus one of those, the resulting
+  `ValueError` now names the reason.
+- **BREAKING: a port outside 0-65535 raises.** `tcp_check`, `wait_for_port`,
+  `scan_ports`, `scan_hosts`, `get_pmtu`, `discover_mtu`, `get_tcp_mss` and
+  `register_port` raise `ValueError("port out of range: 65536 (must be
+  0-65535)")`, and a non-`int` port raises `TypeError`. Ports were masked to 16
+  bits, so `tcp_check(host, p + 65536)` confidently answered about `p`. A
+  service-name string (`tcp_check(host, "http")`) used to reach `getaddrinfo`
+  and now raises; the scanners resolve scheme names to numbers first, so they
+  are unaffected.
+- **BREAKING: a negative `timeout` raises** from `scan_ports` / `scan_hosts`;
+  it used to be swallowed, and every port then read as closed. A `timeout` of
+  `0` is floored rather than taken literally -- 1 ms in the scanners, 0.05s in
+  `tcp_check` -- because `settimeout(0)` means *non-blocking*, so
+  `tcp_check(open_port, timeout=0)` returned `False` for an open port and now
+  returns `True`.
+- **BREAKING: `scan_hosts(network, ports=[])` scans nothing** and returns `[]`.
+  An explicitly empty list used to fall through to the 36-port "common" set --
+  the opposite of what it says.
+- **BREAKING: `register_port(scheme, new_port)` moves the scheme** instead of
+  leaving the old reverse entry behind, so `get_default_scheme(old_port)` no
+  longer names it. The registry used to contradict itself: the scheme's port
+  had changed and the old port still mapped back to that scheme.
+- **BREAKING (Windows): `bind(reuse_address=True)` sets `SO_EXCLUSIVEADDRUSE`,
+  not `SO_REUSEADDR`.** On Windows `SO_REUSEADDR` lets an unrelated process
+  take over a live listener's port; the hijack was reproduced and is now a
+  regression test in which the thief socket is refused with errno 13. Code that
+  relied on rebinding a live Windows port must pass the new
+  `allow_address_takeover=True`. POSIX behaviour is unchanged.
+- **BREAKING: `Route.on_link` is `Optional[bool]`** -- `True` when no router is
+  involved, `False` when one is, and `None` when no next-hop lookup could be
+  made at all. It used to be `gateway is None`, which turned "we never looked"
+  into a confident `True`: on macOS, `get_route("1.1.1.1")` reported
+  `on_link=True` from a `192.168.64.3/24` host. `None` is falsy, so
+  `if route.on_link:` still takes the safe branch; `route.on_link is True` and
+  `== True` are what change. `Route.__eq__` now also compares `on_link`, and
+  `Route` is hashable -- defining `__eq__` with no `__hash__` had set
+  `__hash__` to `None`, so `hash(get_route("127.0.0.1"))` raised.
+- **BREAKING: `normalize_host` raises `ValueError`** for an unbracketed string
+  with two or more colons that is not an IPv6 address. It used to return the
+  whole string as the host.
+- **BREAKING (narrow): `UdpEndpoint.send(src=...)` raises `ValueError`** for a
+  spec naming no local address or interface -- it used to fall back to an
+  unpinned `sendto` and report success, which is the exact failure `src` exists
+  to prevent -- and for an IPv6 source on an `AF_INET` endpoint, which used to
+  raise an uncaught `OSError` from `inet_aton` on Linux. A v6 control message
+  on a v4 socket is accepted-and-ignored by the kernel, so there is no correct
+  silent behaviour to fall back to.
+- **BREAKING (CLI): the positional argument is required** for `ping`,
+  `resolve`, `check` (both of them), `mtu`, `scan`, `addr` and `split`. It used
+  to default to `""`, so `netimps ping` answered about the empty string and
+  printed ` did not answer (icmp)`. It is now argparse's usage error on stderr,
+  exit 2.
+- **BREAKING (CLI): every diagnostic moved to stderr** -- `error: ...`,
+  `no interface named ...`, `no route to ...`. stdout carries the answer alone,
+  so `--json` output stays parseable on failure (it is empty, and the exit code
+  carries the verdict). A `ValueError` out of the library became a usage error
+  at the command boundary -- `error: <message>` on stderr with exit 2, never a
+  traceback -- as in `netimps ping <host> -m tcp` with no `--port`. Exit codes
+  are otherwise unchanged, including the deliberate split between
+  `port <unknown>` = 1 (a lookup that found no mapping, like an empty
+  `resolve`) and `check <host> <unknown>` = 2 (a caller error).
+- `MACAddress.is_valid` is annotated `bool` rather than
+  `TypeGuard[MACAddress]`. No runtime change; the narrowing was unsound -- the
+  object is still a `str` -- so code that relied on it now gets checker errors,
+  correctly.
+- `get_source_ip` is annotated `Optional[IPAddress]` instead of
+  `Optional[Any]`; `tcp_check`'s `timeout` is `Optional[float]` (`None` blocks,
+  which already worked); and `Datagram.sender`, `.local_address` and
+  `.interface` are really typed rather than `Any`, so consumers of this
+  `py.typed` package get checking on them.
+- `get_default_port` / `get_default_scheme` query the system services database
+  with an explicit protocol, **TCP first then UDP**, instead of letting the
+  platform choose. Answers are now identical across platforms; where a name or
+  port differs between TCP and UDP the TCP entry wins. Nothing in the built-in
+  table changes.
+- `scan_ports` resolves its host **once per scan** rather than once per port,
+  so a rate-limited resolver can no longer turn open ports into "closed", and
+  an unresolvable name costs one lookup rather than one per port. A name with
+  several addresses is still probed on each.
+- A port spec holding a Unicode digit that `int()` rejects (`U+00B2`, say)
+  falls through to scheme lookup and raises the intended "unknown port range or
+  scheme" rather than `invalid literal for int()`. The CLI decides "is this a
+  number?" with `int()` rather than `str.isdigit()` for the same reason.
+- `Interface.mac` reports an all-zero hardware address as `None`, so Linux `lo`
+  matches macOS and Windows instead of reporting
+  `MACAddress("00:00:00:00:00:00")`. `Interface` is hashable too, so
+  `set(get_interfaces())` works instead of raising.
+- `iter_addresses(family=)` validates eagerly, at the call rather than at the
+  first `next()`, and its message names the `4`/`6` short form it wants.
+- `UdpEndpoint(pktinfo=False)` governs **receiving** only. `send(src=...)` is
+  honoured on such an endpoint, since pinning a source needs no socket option;
+  the parameter used to disable both. An `OSError` from the kernel on a pinned
+  send (a source address this host cannot send from) now propagates instead of
+  being read as an unsupported platform -- genuine platform incapability still
+  degrades to `sendto`.
+- `get_route` on macOS/BSD spawns a short-lived `route -n get`
+  (`stdin=DEVNULL`, 5s timeout) to learn the next hop; loopback short-circuits
+  without spawning anything. It was subprocess-free there before and returned
+  nothing useful.
+- `netimps route`'s text output gained an `on-link  <True|False|unknown>` line
+  and prints `(unknown)` rather than `(on-link, no router)` for the new `None`.
+  `--json`'s `on_link` can now be `null`; the JSON keys are unchanged.
+- Packaging: `*.local.*` is excluded from **both** the sdist and the wheel --
+  the sdist's existing `/.*` covers dotfiles only, and
+  `fnmatch("AGENTS.local.md", ".*")` is `False` -- and the published metadata
+  now carries an author email, `jose-pr <jose-pr@coqui.dev>`.
+
+### Removed
+
+- **The claim that `ping(ttl=...)` "behaves the same on every OS" is
+  withdrawn** from the README and the docs landing page. It was never true on
+  BSD, where `-t` is an overall deadline and `-m` is the hop limit -- the other
+  way round from Linux, whose `-m` is a firewall mark. What the sentence was
+  really justified by is kept and now stands on its own terms: `ping()` decides
+  success from the reply, not the exit code, because Windows `ping` exits `0`
+  for "TTL expired in transit".
+- **The docs site's "the only runtime dependency is `dnspython`" is
+  withdrawn.** It has been false since 0.2.0 made `dnspython` optional; the
+  package declares `dependencies = []`. It outlived the release that made it
+  wrong because the landing page could only be republished by cutting a
+  version -- see the docs workflow note below.
+
+### Fixed
+
+- **`ping` is no longer a Linux-only implementation.** Five of the six flags it
+  emitted mean something different, or nothing at all, on BSD/macOS -- measured
+  on a real runner, not inferred. `-W` is **milliseconds** there rather than
+  seconds, so the Linux value gave macOS a 1 ms deadline and `timeout=` was
+  inert; `-t` is an overall deadline rather than the TTL (`-m` is the TTL);
+  `-I` is multicast-only and is *rejected* for a unicast destination (`-S` is
+  the source flag); DF is `-D` rather than `-M do`; and `-4`/`-6` do not exist
+  at all -- macOS `ping` exits 64 on them and cannot even take a v6 literal. A
+  three-way `_PLATFORM` (`windows` / `linux` / `bsd`) emits each grammar, and
+  an IPv6 destination selects the separate **`ping6`** binary, which disagrees
+  again (`-h` for the hop limit, no `-W` at all). `ping("::1")`, `ipv6=`, `src=`
+  and `timeout=` therefore work on macOS, where each was silently broken.
+- **A BSD reply is matched despite different punctuation.** `ping6` prints
+  `16 bytes from ::1, icmp_seq=0 hlim=64` -- a comma rather than a colon, and
+  `hlim` rather than `ttl`, so a v6 reply there reported no TTL at all.
+- **`ping("-?")` raises instead of reporting success.** Windows `ping -?`
+  prints usage and exits `0`; nothing resolved, so the reply-address check was
+  skipped entirely and the bare exit code was taken as proof of a reply --
+  `ping("-?")` came back **truthy for a host that was never contacted**. A
+  destination starting with `-` is a `ValueError` now, and success requires
+  positive reply evidence rather than exit status alone. `ping("")` stays
+  falsy, as it always has.
+- **`PingResult.rtt_ms` is `0.0` for a sub-millisecond reply**, which is what
+  its docstring has always said. Windows prints `time<1ms` and the pattern
+  captured the `1`, so every sub-millisecond reply reported `1.0` -- up to 100%
+  error, silently, and the documented caution about `0.0` being falsy guarded
+  nothing.
+- **`get_pmtu` returns a number.** It was unreachable code on every platform
+  for the life of the project: `socket.IP_MTU` is **not exported by CPython
+  anywhere** (re-measured on Windows and Linux), so the first guard returned
+  `None` unconditionally and the rest of the body never ran. Linux now uses the
+  documented literals and reads `IPV6_PATHMTU` as the `ip6_mtuinfo` struct it
+  really returns, rather than as a bare int -- measured 65535 for `127.0.0.1`
+  and 65536 for `::1`. Windows genuinely exposes no cached path MTU and still
+  answers `None`. `discover_mtu(probe=False)` inherited the bug and the fix.
+- **`discover_mtu(method="udp")` sets DF.** No DF option was set on any
+  platform, so an oversized datagram was fragmented locally, reassembled by the
+  peer and answered: every probe "survived" and the binary search returned its
+  own ceiling -- `high`, 9000 by default -- on Linux and Windows as well as
+  BSD. It sets the per-platform option now and returns `None` where it cannot,
+  rather than a number it cannot stand behind. The probe socket was also
+  hardcoded `AF_INET`, so every IPv6 destination failed inside `sendto` and
+  read as "no reply".
+- **An IPv6 `UdpEndpoint` reports the arrival interface.** It advertised
+  `supports_pktinfo=True` and then returned `interface_index=0`,
+  `interface=None` and `local_address=None` for every datagram, because only
+  the IPv4 option was ever requested. `IPV6_RECVPKTINFO` and the `in6_pktinfo`
+  layout are handled now, and `supports_pktinfo` is `False` -- rather than
+  optimistically `True` -- whenever the option for *this socket's family* is
+  missing or refused.
+- **`send(src=...)` pins the interface as well as the address.** The pktinfo
+  structure carried a hardcoded `ipi_ifindex=0` ("kernel's choice"), so it only
+  ever pinned an address despite documenting otherwise. The ancillary buffer is
+  also sized for four control messages rather than exactly one, so an unrelated
+  option enabled on the raw socket no longer silently swallows the pktinfo.
+- **`Interface.is_loopback` comes from the interface flags.** It was derived
+  from the addresses, and WSL2 binds a routable `10.255.255.254/32` to `lo`, so
+  **no** interface reported `is_loopback` there -- and two tests took a skip
+  branch marked `# pragma: no cover` because the author believed it
+  unreachable. `IFF_LOOPBACK` / `IfType` were already being read into `raw` and
+  ignored. WSL2 now reports exactly one loopback interface where it reported
+  none; the same applies to any keepalived/anycast/VIP host.
+- **Zone-qualified IPv6 is recognised.** `is_local_address`, `interface_for`
+  and `interfaces_for` answered falsy for the `%zone` spelling of an address
+  they called local unscoped, and `interface_index()` failed for every scoped
+  literal, because `ipaddress` keeps the zone and `fe80::1%12` matches no
+  enumerated address. A numeric zone is taken as the index (that is the OS's
+  own spelling) and a named one resolves through `get_interfaces()`. A zone
+  naming a *different* adapter still does not match, which is the point.
+- **The IPv4-only `gethostbyname` is gone from `get_ip`, `get_route` and
+  `hop_count`**, replaced by `getaddrinfo` with an explicit family. `get_route`
+  gained real IPv6 next-hop lookups: `GetBestRoute2` on Windows (both
+  families), `/proc/net/ipv6_route` on Linux, `route -n get` on BSD. The Linux
+  parser honours `RTF_UP` / `RTF_REJECT`, because WSL2 carries a `::/0` reject
+  route on `lo` and matching it would have made every global IPv6 address
+  "on-link via loopback".
+- **`get_source_ip` no longer picks the address family with `":" in dst`.** A
+  hostname never contains a colon, so every hostname was probed as IPv4: an
+  IPv6-only name returned `None`, and a dual-stack name returned the v4 source
+  even where traffic would leave over v6.
+- **`tcp_check(timeout=T)` bounds the whole call.** `socket.create_connection`
+  applies `timeout` *per resolved address*, so a name with N addresses cost up
+  to N x T.
+- **No subprocess inherits the caller's stdin.** All three call sites --
+  `nslookup`, `ping` and `traceroute` -- pass `stdin=DEVNULL`.
+  `capture_output` redirects stdout and stderr only, so the child kept the
+  parent's stdin, and `nslookup` in particular *reads* it.
+- **`is_multicast` accepts the interface objects its neighbours do.**
+  `is_multicast(IPv4Interface("239.1.2.3/32"))` was `False`, and it is the
+  gatekeeper `join_group` / `leave_group` consult, so a genuine group passed
+  that way was rejected as "not a multicast group".
+- **`pip install netimps` no longer ships a command that dies with a
+  traceback.** The `netimps` console script installs unconditionally while
+  `duho` lives in the `cli` extra, so the entry point raised `ImportError` at
+  import time. The import moved inside `run()`: the command now prints
+  `netimps: the CLI needs the 'cli' extra -- pip install 'netimps[cli]'` and
+  exits 1, and `import netimps.cli` succeeds without duho installed.
+- **A latent 34-byte over-read.** `_SockaddrDl` declared `sdl_data` at 46 bytes
+  (54 in total) where the real BSD `struct sockaddr_dl` is 20; the read is
+  bounded by `sdl_len` now. It did not fault in practice, because `getifaddrs`
+  returns one contiguous arena, but it was undefined behaviour at a page
+  boundary.
+
+### Documentation
+
+- The shipped API header (`src/netimps/AGENTS.md`), the README, the docs
+  landing page and the repo-root `AGENTS.md` are back in line with the code;
+  several of the contracts above had been documented as something else.
+- **CI runs the gate the repo has always claimed.** A `lint` job runs
+  `black --check src/ tests/`, `mypy src/netimps` (27 errors when this campaign
+  started, 0 now) and `mypy tests/typing/api.py` -- the file that proves the
+  shipped header's static-typing promises, and that until now was executed by
+  nothing at all. Pull requests are gated too, which is the one moment the
+  check is worth having.
+- **Pages deploys moved out of `release.yml` into their own `docs.yml`.** The
+  site could previously change only by cutting a PyPI release, so a wrong
+  sentence on the landing page stayed wrong until the next version. A release
+  now *gates* on a strict docs build and deploys on `release: published`, and a
+  docs-only correction ships on its own. `publish-pypi` also passes
+  `skip-existing: true`, so a release that fails after some files upload can be
+  finished rather than being stuck.
+- **"Tests must never hit the network" is enforced rather than trusted**
+  (`tests/conftest.py`). A review measured eleven off-host lookups, and
+  simulating a wildcard resolver -- the kind many ISP and corporate networks
+  run -- turned the suite red, because several tests assert that a name does
+  *not* resolve. The suite grew from 432 to 640 tests, including
+  `tests/test_platform_smoke.py`, which runs the real platform binaries against
+  loopback: every other ping test fakes `subprocess.run` and asserts the argv
+  the library *builds*, which is exactly how the macOS defects above shipped
+  while CI stayed green.
+- A `benchmarks/` suite (run on demand, deliberately not in CI, results
+  committed per platform) and two runnable `examples/` were added.
+
 ## [0.2.2] - 2026-08-16
 
 ### Fixed

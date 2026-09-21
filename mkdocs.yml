@@ -28,7 +28,6 @@ theme:
 
 nav:
   - Home: index.md
-  # EXECUTOR: add guide pages and one API page per public module.
   - API Reference:
       - Overview: api/reference.md
   - Changelog: changelog.md
