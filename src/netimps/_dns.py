@@ -747,6 +747,7 @@ def resolve(
     tcp: bool = False,
     search: Union[bool, List[str]] = True,
     backends: "Optional[Union[str, List[str]]]" = None,
+    strict: bool = False,
 ) -> "List[Any]":
     """Resolve ``query``, trying each backend in ``backends`` until one gives
     a definitive answer.
@@ -781,8 +782,8 @@ def resolve(
     hosts file; the same holds for ``.local``/mDNS names and anything else
     only an NSS source knows. A backend that could not even attempt the query
     (missing binary, timeout, transport failure) falls through as well. If
-    every applicable backend answers empty, the result is ``[]``; if every one
-    of them fails to attempt, the last such error is raised.
+    every applicable backend answers empty, the result is ``[]`` -- and so it
+    is when every one of them fails to *attempt*, unless ``strict=True``.
 
     The cost is latency on a genuinely non-existent name: two or three backend
     calls instead of one, the last of which may spawn ``nslookup``. Narrow
@@ -814,9 +815,18 @@ def resolve(
         ``"system"``, ``"nslookup"``) or a single name as a plain string.
         ``None`` (default) uses all three in the default order, each filtered
         for applicability as described above.
+    :param strict: raise instead of returning ``[]`` when no backend could
+        *ask* -- every applicable one failed with a :class:`ResolutionError`
+        (resolver unreachable, timeout, ``nslookup`` missing). Off by default,
+        so a resolver outage looks the same to the caller as a name that does
+        not exist. Pass ``strict=True`` when the two must be told apart: the
+        last backend's :class:`ResolutionError` is raised, with the reason in
+        its message. It does **not** turn an empty *answer* into an error --
+        a name that genuinely does not resolve still returns ``[]``.
 
     Contract: always a ``list``, **empty** on a genuine lookup failure, never
-    ``None``. A malformed query or unknown record type raises
+    ``None`` -- unless ``strict=True``, which is the only way this raises for
+    a resolution outcome. A malformed query or unknown record type raises
     :class:`ValueError` immediately, without trying every backend, since that
     is a caller bug rather than a resolution outcome.
     """
@@ -913,4 +923,11 @@ def resolve(
     if answered:
         return []
     assert last_error is not None
-    raise last_error
+    if strict:
+        raise last_error
+    # Every applicable backend failed to *attempt* -- a resolver outage, not an
+    # answer. Returning [] is the default because that is what a caller writing
+    # `if not resolve(host):` has always got, and because the distinction
+    # between "no such name" and "could not ask" is one most callers do not act
+    # on differently. `strict=True` is for the ones that do.
+    return []

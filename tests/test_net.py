@@ -904,6 +904,8 @@ def test_resolve_empty_answer_outweighs_a_later_backend_failure(monkeypatch):
     monkeypatch.setattr(_dns, "resolve_system", _cannot_ask)
     monkeypatch.setattr(_dns, "resolve_nslookup", _cannot_ask)
     assert resolve("does-not-exist.invalid") == []
+    # ...and strict= does not change that: one backend *did* ask and answered.
+    assert resolve("does-not-exist.invalid", strict=True) == []
 
 
 def test_resolve_chain_falls_through_when_nslookup_cannot_reach_a_server(monkeypatch):
@@ -994,21 +996,65 @@ def test_resolution_error_is_part_of_the_public_surface():
     assert "ResolutionError" in netimps.__all__
 
 
-def test_resolve_chain_tries_all_and_raises_last_error_when_all_fail(monkeypatch):
-    def _dnspython_fails(*a, **k):
-        raise _dns.ResolutionError("dnspython is not installed")
+def _every_backend_fails(monkeypatch):
+    """Patch all three backends to "could not even ask" -- a resolver outage."""
+    calls = []
 
-    def _system_fails(*a, **k):
-        raise _dns.ResolutionError("getaddrinfo timed out")
+    def _fails(name, message):
+        def _impl(*a, **k):
+            calls.append(name)
+            raise _dns.ResolutionError(message)
 
-    def _nslookup_fails(*a, **k):
-        raise _dns.ResolutionError("nslookup binary not found")
+        return _impl
 
-    monkeypatch.setattr(_dns, "resolve_dnspython", _dnspython_fails)
-    monkeypatch.setattr(_dns, "resolve_system", _system_fails)
-    monkeypatch.setattr(_dns, "resolve_nslookup", _nslookup_fails)
+    monkeypatch.setattr(
+        _dns, "resolve_dnspython", _fails("dnspython", "dnspython is not installed")
+    )
+    monkeypatch.setattr(
+        _dns, "resolve_system", _fails("system", "getaddrinfo timed out")
+    )
+    monkeypatch.setattr(
+        _dns, "resolve_nslookup", _fails("nslookup", "nslookup binary not found")
+    )
+    return calls
+
+
+def test_resolve_chain_tries_all_and_returns_empty_when_all_fail(monkeypatch):
+    """A total outage is [] by default -- the contract every caller was written to.
+
+    `if not resolve(host):` has always been the idiom, and most callers do not
+    act differently on "no such name" than on "could not ask". The ones that
+    do pass strict=True; see the next test.
+    """
+    calls = _every_backend_fails(monkeypatch)
+    assert resolve("example.com") == []
+    assert calls == ["dnspython", "system", "nslookup"]
+
+
+def test_resolve_strict_raises_the_last_error_when_no_backend_could_ask(monkeypatch):
+    """strict=True is how a caller tells an outage apart from a dead name."""
+    _every_backend_fails(monkeypatch)
     with pytest.raises(_dns.ResolutionError, match="nslookup binary not found"):
-        resolve("example.com")
+        resolve("example.com", strict=True)
+
+
+def test_resolve_strict_does_not_raise_on_a_definitive_empty_answer(monkeypatch):
+    """strict= is about *asking*, not about answering.
+
+    A name that genuinely does not resolve is not an error at any strictness:
+    the backends were reachable and said so.
+    """
+    monkeypatch.setattr(_dns, "resolve_dnspython", lambda *a, **k: [])
+    monkeypatch.setattr(_dns, "resolve_system", lambda *a, **k: [])
+    monkeypatch.setattr(_dns, "resolve_nslookup", lambda *a, **k: [])
+    assert resolve("does-not-exist.invalid", strict=True) == []
+
+
+def test_resolve_strict_still_returns_an_answer(monkeypatch):
+    monkeypatch.setattr(
+        _dns, "resolve_dnspython", lambda *a, **k: [IPv4Address("1.2.3.4")]
+    )
+    assert resolve("example.com", strict=True) == [IPv4Address("1.2.3.4")]
 
 
 def test_resolve_backends_accepts_single_string():

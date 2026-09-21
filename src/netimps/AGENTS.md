@@ -326,7 +326,7 @@ the documented raised type of `resolve`, `resolve_system` and
 `resolve_nslookup`, and it is exported from `netimps`, so catching it no
 longer means importing a private module.
 
-**`resolve(query, rdtype=None, ns=None, timeout=5.0, port=53, tcp=False, search=True, backends=None)`**
+**`resolve(query, rdtype=None, ns=None, timeout=5.0, port=53, tcp=False, search=True, backends=None, strict=False)`**
 
 `query` accepts `AddressLike` (a hostname string, an address string, an
 `IPv4Address`/`IPv6Address`, or an `IPv4Interface`/`IPv6Interface` -- its
@@ -360,8 +360,12 @@ a last resort. `backends` also accepts a single name as a plain string
   missing binary, `dnspython` absent, timeout, transport failure) falls
   through the same way; one that structurally cannot serve the request is
   skipped without being called at all.
-- The result is `[]` when **every applicable backend answered empty**. If
-  every one of them failed to attempt instead, the last such error is raised.
+- The result is `[]` when **every applicable backend answered empty**, and
+  also when every one of them failed to *attempt* — a resolver outage reads
+  the same as a name that does not exist, which is what `if not resolve(h):`
+  has always meant. Pass **`strict=True`** to tell them apart: it re-raises
+  the last backend's `ResolutionError` in that case, and only that case. It
+  does not turn an empty answer into an error.
   If the chain holds no backend that could even be tried, `ValueError` names
   what excluded them.
 

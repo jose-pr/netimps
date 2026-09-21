@@ -7,8 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`resolve(..., strict=True)`** -- raise the last backend's
+  `ResolutionError` when no backend could *ask*, instead of returning `[]`.
+  Off by default. It distinguishes a resolver outage from a name that does
+  not exist; it does **not** turn an empty answer into an error, so a name
+  that genuinely does not resolve still returns `[]` at any strictness.
+
 ### Fixed
 
+- **`resolve()` returns `[]` on a resolver outage again**, restoring the
+  pre-0.3.0 contract. 0.3.0 made the chain re-raise the last backend's
+  `ResolutionError` when every applicable backend failed to attempt the
+  query, which turned `if not resolve(host):` into an uncaught exception
+  wherever DNS was unreachable. The documented contract -- "always a `list`,
+  empty on a lookup failure, never `None`" -- stands, and callers that need
+  the distinction opt in with `strict=True`.
 - **`bind_error_hint` no longer reports a Windows `WSAEACCES` as a privilege
   problem.** Windows has no privileged ports -- any user may bind port 80 --
   and `WSAEACCES` (WinError 10013) on a bind means the address is held
