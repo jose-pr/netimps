@@ -172,13 +172,42 @@ def test_hint_for_address_in_use():
 
 def test_hint_recognises_windows_error_codes():
     """Windows reports WinError 10013/10048, not the POSIX errnos."""
-    denied = OSError("denied")
-    denied.winerror = 10013
-    assert "permission denied" in (netimps.bind_error_hint(denied, 67) or "").lower()
-
     in_use = OSError("in use")
     in_use.winerror = 10048
     assert "already in use" in (netimps.bind_error_hint(in_use, 80) or "")
+
+
+@pytest.mark.parametrize("port", [67, 64514])
+def test_wsaeaccess_is_not_a_privilege_problem(port):
+    """WSAEACCES means the address is taken, not that you need elevation.
+
+    Windows has no privileged-port concept -- any user may bind port 80 -- so
+    reading 10013 as POSIX EACCES sends the reader after an elevation problem
+    that cannot exist there. It actually means another socket holds the
+    address exclusively, or a firewall or excluded port range refuses it.
+
+    Python maps WSAEACCES to PermissionError with errno EACCES, which is why
+    this must be tested before the POSIX branch: reported downstream as
+    "permission denied binding port 64514" -- a privilege message about an
+    unprivileged port -- and worked around by hand in a consuming package.
+    """
+    denied = OSError("denied")
+    denied.winerror = 10013
+    denied.errno = errno.EACCES
+    hint = netimps.bind_error_hint(denied, port) or ""
+
+    assert "in use, not privileged" in hint
+    assert "1024" not in hint, "the privileged-port advice does not apply on Windows"
+    assert "permission denied" not in hint.lower()
+
+
+def test_posix_eacces_keeps_the_privileged_port_advice():
+    """The POSIX reading stays intact -- there the advice is correct."""
+    low = netimps.bind_error_hint(PermissionError(errno.EACCES, "denied"), 67) or ""
+    assert "permission denied" in low.lower() and "1024" in low
+
+    high = netimps.bind_error_hint(PermissionError(errno.EACCES, "denied"), 8080) or ""
+    assert "permission denied" in high.lower() and "1024" not in high
 
 
 def test_hint_returns_none_for_unrecognised():

@@ -241,11 +241,27 @@ def bind_error_hint(
     winerror = getattr(exc, "winerror", None)
     where = "port %d" % port if port is not None else "that port"
 
-    if (
-        isinstance(exc, PermissionError)
-        or exc.errno == _errno.EACCES
-        or winerror == 10013
-    ):
+    if winerror == 10013:
+        # WSAEACCES, and it is NOT a privilege problem. Windows has no
+        # privileged-port concept at all -- any user may bind port 80 -- so the
+        # POSIX reading of this code sends the reader after an elevation
+        # problem that cannot exist here. What it actually means is that
+        # another socket holds the address exclusively (SO_EXCLUSIVEADDRUSE),
+        # or that a firewall or an excluded port range is refusing it.
+        #
+        # Python maps WSAEACCES to PermissionError with errno EACCES, so the
+        # winerror must be tested BEFORE the POSIX branch below or the generic
+        # "permission denied" wins and says the wrong thing. Measured
+        # downstream: binding over an exclusively-held socket reported
+        # "permission denied binding port 64514" -- a privilege message about
+        # an unprivileged port.
+        return (
+            "%s is held exclusively by another socket, or blocked by a "
+            "firewall or an excluded port range (WSAEACCES); it is in use, "
+            "not privileged -- Windows has no privileged ports" % where.capitalize()
+        )
+
+    if isinstance(exc, PermissionError) or exc.errno == _errno.EACCES:
         hint = "permission denied binding %s" % where
         if port is not None and port < 1024:
             hint += "; ports below 1024 need root/Administrator"
