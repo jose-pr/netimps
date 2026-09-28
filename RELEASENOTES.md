@@ -5,6 +5,34 @@ benchmark figures and the validation evidence behind each release. The
 changelog says *what changed*; this says *what it costs you and how it was
 checked*.
 
+## 0.3.2 — 2026-09-28
+
+A dependency-bound release. No source change.
+
+### Nothing to migrate
+
+No documented contract changed. `pip install netimps[cli]` now resolves to a
+`duho` in `>=0.6.0,<0.7` instead of floating unbounded from `>=0.3.3`; an
+existing install that already has a `duho` in range is unaffected.
+
+### What changed, and why
+
+- **The `cli` extra's `duho` dependency is bounded to `>=0.6.0,<0.7`.**
+  Unbounded, a bare install would have floated onto duho 0.6.0 unverified.
+  Every documented 0.6.0 change was checked against `src/netimps/cli.py`
+  before setting the bound, and the full suite is unaffected: 663 passed, 6
+  skipped, both before and after. duho 0.6.0 also adds an opt-in MCP launch
+  feature (`NETIMPS_MCP=stdio`); netimps does not opt out and leaves it at
+  duho's default.
+
+### Benchmarks
+
+Not re-run. Nothing here touches a hot path -- a dependency bound in
+`pyproject.toml`, no source change. The 0.3.0 baseline below still stands.
+
+**Next perf target:** none set. The figure worth watching is
+`get_interfaces`, since every membership lookup pays it (see the table below).
+
 ## 0.3.1 — 2026-09-21
 
 Three patch-level fixes, none found by the test suite. Two of the three were
