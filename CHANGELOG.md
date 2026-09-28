@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **The `cli` extra's `duho` dependency is bounded to `>=0.6.0,<0.7`**
+  (previously unbounded at `>=0.3.3`, so a bare `pip install netimps[cli]`
+  would have floated onto 0.6.0 unverified). No code change was needed --
+  every documented 0.6.0 change was checked against `src/netimps/cli.py`
+  and the full suite is unaffected (663 passed, 6 skipped, before and
+  after). duho 0.6.0 also adds an opt-in MCP launch feature, triggered by
+  setting `NETIMPS_MCP=stdio`; netimps does not opt out and leaves it at
+  duho's default.
+
 ## [0.3.1] - 2026-09-21
 
 A same-day follow-up to 0.3.0, fixing three defects that release introduced or
