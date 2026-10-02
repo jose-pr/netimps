@@ -649,6 +649,193 @@ def test_udp_endpoint_repr_and_close():
     endpoint.close()
 
 
+@pytest.mark.parametrize("family, host", _LOOPBACKS)
+def test_udp_endpoint_claims_pktinfo_whenever_the_platform_delivers_it(family, host):
+    """If a raw socket can get a pktinfo cmsg, the endpoint must not say it cannot.
+
+    This asks the **platform**, not the library. `test_udp_endpoint_round_trip`
+    has a guard for the same thing, but it reads
+    `_udp._pktinfo_options(family)[1]` -- the function under test -- so when that
+    returned None for IPv6 on Windows, the guard switched itself off and the
+    round trip passed through its own degraded branch. Measured on a CI runner:
+    `UdpEndpoint(bind("::", 0)).supports_pktinfo` was False while a raw
+    `recvmsg` on the very same socket delivered the cmsg.
+
+    So: establish the ground truth by hand first, then hold the endpoint to it.
+    """
+    if not netimps.supports_recvmsg():
+        pytest.skip("no recvmsg on this platform at all")
+
+    # Ground truth: set every pktinfo option this platform exports for the
+    # family and see whether a cmsg actually arrives.
+    try:
+        probe = bind(host, 0, family=family)
+    except OSError as exc:
+        pytest.skip("cannot bind %s: %s" % (host, exc))
+    delivered = False
+    try:
+        if family == socket.AF_INET6:
+            candidates = [
+                (socket.IPPROTO_IPV6, getattr(socket, "IPV6_RECVPKTINFO", None)),
+                (socket.IPPROTO_IPV6, getattr(socket, "IPV6_PKTINFO", None)),
+            ]
+        else:
+            candidates = [(socket.IPPROTO_IP, getattr(socket, "IP_PKTINFO", None))]
+        for level, option in candidates:
+            if option is None:
+                continue
+            try:
+                probe.setsockopt(level, option, 1)
+            except OSError:
+                continue
+        port = probe.getsockname()[1]
+        peer = socket.socket(family, socket.SOCK_DGRAM)
+        try:
+            peer.sendto(b"ground-truth", (host, port))
+            probe.settimeout(5.0)
+            _data, ancdata, _flags, _sender = netimps.recvmsg(
+                probe, 512, netimps.CMSG_SPACE(256)
+            )
+        finally:
+            peer.close()
+        delivered = any(
+            _udp._unpack_pktinfo(lvl, ctype, cdata) is not None
+            for lvl, ctype, cdata in ancdata
+        )
+    except OSError as exc:  # pragma: no cover - a stack without this loopback
+        pytest.skip("ground-truth probe failed: %s" % (exc,))
+    finally:
+        probe.close()
+
+    if not delivered:
+        pytest.skip("platform delivers no pktinfo cmsg for family %s" % (family,))
+
+    with _loopback_endpoint(family, host) as endpoint:
+        assert endpoint.supports_pktinfo, (
+            "a raw recvmsg got a pktinfo cmsg for family %s, so UdpEndpoint "
+            "must not report supports_pktinfo=False" % (family,)
+        )
+
+
+def test_udp_endpoint_dual_stack_reports_a_v4_arrival_as_v4_mapped():
+    """`local_address` on an AF_INET6 endpoint is v4-mapped on every platform.
+
+    The platforms genuinely disagree about the wire form: Linux and macOS put
+    the v4-mapped address in the v6 cmsg, while Windows reports a *plain* v4
+    address at level IPPROTO_IP -- and on Windows the same datagram's `sender`
+    is already `::ffff:127.0.0.1`, so the two halves contradict each other.
+    The documented contract is the mapped form, so this pins the normalisation.
+    """
+    # IPV6_V6ONLY has to be cleared **before** the bind -- Windows answers
+    # WSAEINVAL for a change after it, which is why this builds the socket by
+    # hand instead of going through `bind()`.
+    sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+    try:
+        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        sock.bind(("::", 0))
+    except OSError as exc:
+        sock.close()
+        pytest.skip("no dual-stack :: socket here -- %s" % (exc,))
+    with UdpEndpoint(sock) as endpoint:
+        if not endpoint.supports_pktinfo:
+            pytest.skip("no pktinfo on this platform")
+        endpoint.socket.settimeout(5.0)
+        port = endpoint.socket.getsockname()[1]
+        sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sender.sendto(b"v4-arrival", ("127.0.0.1", port))
+            packet = endpoint.recv(1024)
+        except OSError as exc:
+            pytest.skip("no dual-stack v4 delivery here: %s" % (exc,))
+        finally:
+            sender.close()
+
+        assert packet.data == b"v4-arrival"
+        if packet.local_address is None:
+            pytest.skip("this platform reported no arrival address for a v4 arrival")
+        assert (
+            packet.local_address.version == 6
+        ), "an AF_INET6 endpoint must report a v6 address, got %r" % (
+            packet.local_address,
+        )
+        assert packet.local_address == ipaddress.IPv6Address("::ffff:127.0.0.1")
+
+
+def test_udp_endpoint_reports_a_virtual_ip_as_the_arrival_address():
+    """A wildcard socket must say *which* address the datagram was sent to.
+
+    This is the entire reason pktinfo exists: replying from the VIP a client
+    addressed, not from whatever the routing table prefers. 127.0.0.2 is a
+    convenient stand-in for a VIP on Linux and Windows; macOS assigns only
+    127.0.0.1 and rejects it, which the skip records rather than hides.
+    """
+    with _loopback_endpoint(socket.AF_INET, "0.0.0.0") as endpoint:
+        if not endpoint.supports_pktinfo:
+            pytest.skip("no pktinfo on this platform")
+        port = endpoint.socket.getsockname()[1]
+        sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sender.sendto(b"to-the-vip", ("127.0.0.2", port))
+            packet = endpoint.recv(1024)
+        except OSError as exc:
+            pytest.skip("127.0.0.2 is not reachable on this host: %s" % (exc,))
+        finally:
+            sender.close()
+        if packet.local_address is None:
+            pytest.skip("no arrival address reported")
+        assert str(packet.local_address) == "127.0.0.2", (
+            "the wildcard socket reported %r, losing which address the client "
+            "actually addressed" % (packet.local_address,)
+        )
+
+
+def _force_index_only_spec(monkeypatch):
+    """Make any src resolve to an interface index but no address.
+
+    The public API cannot express that state -- every spec it accepts either
+    names an address or resolves to one -- so the resolver is faked. What is
+    being tested is our own branch, not the resolver.
+    """
+    from netimps import _iface_spec
+
+    monkeypatch.setattr(_iface_spec, "interface_address", lambda *a, **k: None)
+    monkeypatch.setattr(_iface_spec, "interface_index", lambda *a, **k: 1)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="the zero-address rule is Windows-only")
+def test_windows_refuses_an_index_only_source_rather_than_sending_from_zero(
+    monkeypatch,
+):
+    """Windows sends a zero source address literally, so it must refuse instead.
+
+    Measured: a pin of 0.0.0.0 arrives *from* 0.0.0.0, where Linux reads zero as
+    "kernel chooses". Silently sending from an unintended address is the exact
+    failure `src=` exists to prevent, so this raises rather than degrading.
+    """
+    _force_index_only_spec(monkeypatch)
+    with _loopback_endpoint(socket.AF_INET, "127.0.0.1") as endpoint:
+        with pytest.raises(ValueError, match="index alone"):
+            endpoint._pktinfo_control("any-spec")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the POSIX half of the zero-address rule")
+def test_posix_packs_a_zero_source_for_an_index_only_pin(monkeypatch):
+    """The counterpart: on POSIX a zero address *is* "kernel chooses".
+
+    Paired with the Windows test deliberately. The two platforms read identical
+    bytes in opposite ways, so pinning one without the other would let a future
+    change make them agree -- which would be wrong on one of them.
+    """
+    _force_index_only_spec(monkeypatch)
+    with _loopback_endpoint(socket.AF_INET, "127.0.0.1") as endpoint:
+        control = endpoint._pktinfo_control("any-spec")
+        assert control is not None
+        _level, _ctype, data = control
+        index, _spec_dst, address = struct.unpack(_udp._PKTINFO_V4, data)
+        assert index == 1
+        assert address == b"\x00\x00\x00\x00", "a zero address is the POSIX idiom"
+
+
 # --------------------------------------------------------------------------- #
 # Host                                                                         #
 # --------------------------------------------------------------------------- #

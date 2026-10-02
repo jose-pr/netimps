@@ -925,13 +925,26 @@ patch below is installed.
   `CMSG_SPACE` either, and the usual idiom is detect → size → receive; patching
   only the method would let the detection succeed and fail on the next line.
 - **Payloads are the platform's own bytes — they are *not* normalised to
-  Linux's layouts**, because the layouts genuinely differ. Measured on loopback:
-  a v4 `IP_PKTINFO` cmsg is type `8`, 12 bytes, `{ifindex; spec_dst; addr}` on
-  Linux and type `19`, 8 bytes, `{addr; ifindex}` on Windows. Faking one as the
-  other would make correct-looking code read a *plausible wrong address* rather
-  than fail honestly. Use `UdpEndpoint` if you want that difference handled for
-  you. The v6 `in6_pktinfo` layout does agree (`{addr; ifindex}`), though the
-  cmsg type does not (`50` vs `19`).
+  Linux's layouts**, because the layouts genuinely differ. Measured on CI
+  runners, one loopback datagram each:
+
+  | platform | `cmsg_type` | bytes | v4 `in_pktinfo` layout |
+  | --- | --- | --- | --- |
+  | Linux | 8 | 12 | `{ifindex; spec_dst; addr}` |
+  | macOS | 26 | 12 | `{ifindex; spec_dst; addr}` (same as Linux) |
+  | Windows | 19 | 8 | `{addr; ifindex}` — **no `spec_dst`** |
+
+  Faking one as the other would make correct-looking code read a *plausible
+  wrong address* rather than fail honestly. Use `UdpEndpoint` if you want the
+  difference handled for you. The v6 `in6_pktinfo` layout the three do agree on
+  (`{addr; ifindex}`, 20 bytes), though the cmsg type does not — 50 on Linux, 46
+  on macOS, 19 on Windows.
+- **Do not probe `socket` for these constants and conclude a platform cannot.**
+  CPython 3.9 on Windows exports no `IP_PKTINFO` at all, though Winsock supports
+  it perfectly well at the documented value 19. macOS *does* export
+  `IP_PKTINFO` (26), contrary to the usual "BSD needs `IP_RECVDSTADDR`" advice.
+  `UdpEndpoint` uses the literal where the value is documented and stable and
+  lets `OSError` from `setsockopt` be the real "unsupported" signal.
 - Errors are CPython's: `BlockingIOError` on an empty non-blocking socket (on
   Windows too), and `OSError(ENOTSUP)` only where neither backend can serve it.
 - A datagram too large for `bufsize` sets `MSG_TRUNC` in `msg_flags` rather than
@@ -969,11 +982,19 @@ the wrapped socket, and the endpoint is a **context manager**
   `False` where there is no pktinfo cmsg for the family (macOS has no
   `IP_PKTINFO`).
 - **Windows is supported, as of the Winsock backend.** Both flags are `True`
-  there for v4 and v6, via `WSARecvMsg`/`WSASendMsg` — see **Ancillary data**
-  above. `UdpEndpoint` calls that backend *directly* rather than the patched
-  stdlib method, so `NETIMPS_NO_SOCKET_PATCH=1` does not cost it pktinfo.
-  The per-platform `in_pktinfo` layout difference is handled internally; this is
-  the wrapper that exists so callers need not know it.
+  there for v4, v6 **and** dual-stack `::`, on 3.9 through 3.14, via
+  `WSARecvMsg`/`WSASendMsg` — see **Ancillary data** above. `UdpEndpoint` calls
+  that backend *directly* rather than the patched stdlib method, so
+  `NETIMPS_NO_SOCKET_PATCH=1` does not cost it pktinfo. The per-platform
+  `in_pktinfo` layout difference is handled internally; this is the wrapper that
+  exists so callers need not know it.
+- **A v4 arrival on an `AF_INET6` endpoint always reports the v4-mapped form**
+  (`::ffff:127.0.0.1`), on every platform. That takes work, because the
+  platforms disagree: Linux and macOS carry the mapped address in the v6 cmsg,
+  while Windows reports a *plain* v4 address at level `IPPROTO_IP` and is the
+  only one that reports it at all — its v6 option delivers no cmsg for a v4
+  arrival. On Windows the same datagram's `sender` is already mapped while its
+  cmsg is not, so the two halves contradict each other until normalised.
 - **One thing Windows cannot do: pin by interface index alone.** It sends a zero
   source address *literally* — measured, a pin of `0.0.0.0` arrives from
   `0.0.0.0` — where Linux reads zero as "kernel chooses". An index-only `src`

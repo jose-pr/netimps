@@ -17,14 +17,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   address families -- an `AF_INET6` sender comes back as the usual
   `(host, port, flowinfo, scope_id)` 4-tuple, and a v6 destination accepts a
   2-, 3- or 4-tuple with an optional `%zone` suffix.
-- **`UdpEndpoint` reports the arrival interface on Windows**, v4 and v6:
-  `supports_pktinfo` and `supports_src_pinning` are no longer always `False`
-  there. It calls the Winsock backend directly rather than the patched stdlib
-  method, so disabling the patch below does not cost it pktinfo. One gap is
-  deliberate: pinning by interface index *alone* raises `ValueError` on Windows,
-  because that platform sends a zero source address literally -- a pin of
-  `0.0.0.0` arrives from `0.0.0.0` -- where Linux reads zero as "kernel
-  chooses". Pass an address-bearing `src`.
+- **`UdpEndpoint` reports the arrival interface on Windows** -- v4, v6 **and**
+  dual-stack `::`, on 3.9 through 3.14. `supports_pktinfo` and
+  `supports_src_pinning` are no longer always `False` there. It calls the
+  Winsock backend directly rather than the patched stdlib method, so disabling
+  the patch below does not cost it pktinfo. One gap is deliberate: pinning by
+  interface index *alone* raises `ValueError` on Windows, because that platform
+  sends a zero source address literally -- a pin of `0.0.0.0` arrives from
+  `0.0.0.0` -- where Linux reads zero as "kernel chooses". Pass an
+  address-bearing `src`.
+- **A v4 arrival on an `AF_INET6` endpoint now reports the documented v4-mapped
+  address on every platform.** Linux and macOS carry it in the v6 cmsg; Windows
+  reports a *plain* v4 address at `IPPROTO_IP` and is the only platform that
+  reports it at all, since its v6 option delivers no cmsg for a v4 arrival. That
+  needed `IP_PKTINFO` set on the `AF_INET6` socket as well, which macOS refuses
+  outright and Linux accepts and does not need -- so it is set with the error
+  ignored.
+
+### Fixed
+
+- **IPv6 `UdpEndpoint` was silently degraded on Windows.** The receive option
+  was looked up as `IPV6_RECVPKTINFO`, which Windows does not export at all;
+  there `IPV6_PKTINFO` (19) is both the request and the carrier. The result was
+  `supports_pktinfo == False` for every `AF_INET6` endpoint on that platform
+  while a raw `recvmsg` on the same socket delivered the cmsg perfectly well.
+  The round-trip test passed throughout, because it took its own
+  "no pktinfo here" early-exit branch, and its guard against exactly this
+  consulted the same function that was wrong.
+- **v4 pktinfo was silently off on Python 3.9 for Windows**, which exports no
+  `socket.IP_PKTINFO` even though Winsock supports it at the documented value
+  19. Measured: 3.14 ran the v4 tests while 3.9 skipped nine of them and still
+  reported a green suite. The documented literal is now used, with `OSError`
+  from `setsockopt` as the real capability signal.
 - **`patch_socket_module()` / `socket_patched()`**, and netimps installs the
   patch **on import by default**: `recvmsg`/`sendmsg` onto `socket.socket` and
   `CMSG_LEN`/`CMSG_SPACE` onto the `socket` module, so POSIX-shaped code runs

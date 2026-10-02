@@ -20,33 +20,75 @@ arrives, because an IPv6 datagram carries ``IPV6_PKTINFO`` instead. The family
 therefore selects the option, the cmsg type **and** the struct layout, and all
 three differ:
 
-- ``AF_INET``: set ``IP_PKTINFO``, match ``IP_PKTINFO``, unpack ``=I4s4s``
-  (``struct in_pktinfo``: interface index first, then the addresses).
-- ``AF_INET6``: set ``IPV6_RECVPKTINFO`` (Linux 49), match ``IPV6_PKTINFO``
-  (Linux 50), unpack ``=16sI`` (``struct in6_pktinfo``: the 16-byte **address
-  first**, then the index).
+- ``AF_INET``: set ``IP_PKTINFO``, match ``IP_PKTINFO``, unpack
+  ``struct in_pktinfo`` -- **whose layout is not the same everywhere**; see
+  below.
+- ``AF_INET6``: set ``IPV6_RECVPKTINFO`` (Linux 49, macOS 61) or, where that
+  does not exist, ``IPV6_PKTINFO`` itself; match ``IPV6_PKTINFO`` (Linux 50,
+  macOS 46, Windows 19); unpack ``=16sI`` (``struct in6_pktinfo``: the 16-byte
+  **address first**, then the index). This layout the three platforms agree on.
 
 Note the v6 asymmetry -- the option you *set* is not the cmsg type you
 *match* -- and the reversed field order. Neither is a detail you can guess.
+**Windows has no ``IPV6_RECVPKTINFO`` at all**, and setting ``IPV6_PKTINFO``
+is what enables receipt there; asking only for the former silently disabled
+IPv6 pktinfo on that platform until it was measured on CI.
 
-A dual-stack ``AF_INET6`` socket needs only its own option. Measured on Linux:
-with ``IPV6_RECVPKTINFO`` alone, an IPv4-mapped arrival reports
-``::ffff:127.0.0.1`` with the correct interface index, so enabling
-``IP_PKTINFO`` as well would only add a second, redundant cmsg to every
-packet. :meth:`UdpEndpoint.recv` still dispatches on the received
-``cmsg_level``, so a caller who enables further options on the raw socket gets
-handled rather than misread.
+The v4 struct, which is three different things
+----------------------------------------------
+Measured on CI runners, one datagram to ``127.0.0.1`` on each:
+
+=========  ====  =====  ==========================================
+platform   type  bytes  layout
+=========  ====  =====  ==========================================
+Linux         8     12  ``{ifindex; spec_dst; addr}`` -- ``=I4s4s``
+macOS        26     12  ``{ifindex; spec_dst; addr}`` -- same as Linux
+Windows      19      8  ``{addr; ifindex}`` -- ``=4sI``, no ``spec_dst``
+=========  ====  =====  ==========================================
+
+So macOS **does** have ``IP_PKTINFO`` (26) and needs no ``IP_RECVDSTADDR``/
+``IP_RECVIF`` fallback, contrary to the usual "BSD has no IP_PKTINFO" advice.
+Windows is the odd one, and reversing its two fields does not raise -- it
+yields a plausible wrong address and index ``0``, which is why the layout is a
+table rather than a literal.
+
+Dual stack
+----------
+A v4 arrival on an ``AF_INET6`` socket is reported differently again:
+
+- **Linux** accepts ``IP_PKTINFO`` here and sends *both* cmsgs; the v6 one
+  already carries the v4-mapped address, so it needs nothing extra.
+- **macOS** refuses ``IP_PKTINFO`` on an ``AF_INET6`` socket (``EINVAL``) and
+  reports the v4-mapped address in the v6 cmsg anyway.
+- **Windows** accepts it, and it is the *only* way the arrival is visible: the
+  v6 option delivers no cmsg for a v4 arrival. It then carries the **plain**
+  v4 address, while the same datagram's ``sender`` is already
+  ``::ffff:127.0.0.1`` -- the two halves disagree.
+
+Hence the option is set with the error ignored, and a plain v4 address decoded
+on an ``AF_INET6`` socket is normalised to ``::ffff:`` form, so
+``local_address`` means one thing everywhere. A v6-only socket (``IPV6_V6ONLY``)
+refuses ``IP_PKTINFO`` on both macOS and Windows, which the same ignore covers.
 
 Platform reality
 ----------------
-These options and ``socket.recvmsg`` are **not universally available** --
-``recvmsg`` and ``sendmsg`` are absent on Windows entirely, whatever the
-constants say. Rather than failing, this degrades to plain ``recvfrom``/
-``sendto`` and reports ``interface=None``, the same policy
-:func:`netimps.get_pmtu` uses for the missing ``IP_MTU``. Check
+``recvmsg``/``sendmsg`` do not exist in CPython on Windows, so this module goes
+through :mod:`netimps._msg`, which supplies them from Winsock there and
+delegates to CPython elsewhere. It calls that module **directly** rather than
+the ``socket.socket`` methods ``_msg`` can patch in, so declining the patch
+(``NETIMPS_NO_SOCKET_PATCH=1``) does not cost this module anything.
+
+Where a platform still cannot serve a request, this degrades to plain
+``recvfrom``/``sendto`` and reports ``interface=None`` rather than failing --
+the same policy :func:`netimps.get_pmtu` uses for the missing ``IP_MTU``. Check
 :attr:`UdpEndpoint.supports_pktinfo` (receiving) and
 :attr:`UdpEndpoint.supports_src_pinning` (sending) to know which mode you are
 in -- both are decided once, at construction, from the socket's own family.
+
+One asymmetry has no degrade available: **Windows sends a zero source address
+literally**, where POSIX reads zero as "kernel chooses". Pinning by interface
+index alone therefore raises :class:`ValueError` there instead of quietly
+sending from ``0.0.0.0``.
 """
 
 from __future__ import annotations
@@ -66,17 +108,31 @@ from ._msg import supports_recvmsg as _supports_recvmsg
 
 __all__ = ["UdpEndpoint", "Datagram"]
 
-#: The options, where they exist. Probed rather than assumed -- and probed
-#: separately per family, because a platform can have one and not the other:
-#: Windows exports ``IP_PKTINFO`` and ``IPV6_PKTINFO`` as numbers, has no
-#: ``IPV6_RECVPKTINFO`` at all, and supports neither ``recvmsg`` nor
-#: ``sendmsg``, which is what actually decides the matter there.
-_IP_PKTINFO = getattr(_socket, "IP_PKTINFO", None)
-_IPV6_PKTINFO = getattr(_socket, "IPV6_PKTINFO", None)
-_IPV6_RECVPKTINFO = getattr(_socket, "IPV6_RECVPKTINFO", None)
-_MSG_CTRUNC = getattr(_socket, "MSG_CTRUNC", 0)
-
 _IS_WINDOWS = _sys.platform == "win32"
+
+#: On Windows both of these are 19, and **CPython 3.9 exports neither**, so a
+#: pure ``getattr`` probe left v4 pktinfo silently off on the oldest supported
+#: interpreter -- measured: 3.14 ran the v4 tests and 3.9 skipped nine of them
+#: while reporting a green suite. Winsock's values are documented and stable, so
+#: the literal is the right fallback and an ``OSError`` from ``setsockopt`` is
+#: the real "unsupported" signal (the repo rule for exactly this situation).
+#: Elsewhere the constant is trusted: Linux and macOS both export theirs, with
+#: *different* values (``IP_PKTINFO`` is 8 and 26 respectively), so there is no
+#: single literal to fall back to and no need for one.
+_WINDOWS_PKTINFO = 19
+
+#: Probed per family, because a platform can have one and not the other:
+#: Windows has no ``IPV6_RECVPKTINFO`` at all and uses ``IPV6_PKTINFO`` as both
+#: the request and the carrier.
+_IP_PKTINFO = getattr(_socket, "IP_PKTINFO", _WINDOWS_PKTINFO if _IS_WINDOWS else None)
+_IPV6_PKTINFO = getattr(
+    _socket, "IPV6_PKTINFO", _WINDOWS_PKTINFO if _IS_WINDOWS else None
+)
+_IPV6_RECVPKTINFO = getattr(_socket, "IPV6_RECVPKTINFO", None)
+
+#: Windows reports 512, Linux 8, macOS 32 -- there is no portable literal, and
+#: a missing constant means the flag can never be set, so 0 is the safe default.
+_MSG_CTRUNC = getattr(_socket, "MSG_CTRUNC", 0)
 
 #: ``struct in_pktinfo``, and it is **not one layout across platforms** -- the
 #: field order differs, not merely the size, so a single string cannot serve
@@ -133,15 +189,26 @@ def _pktinfo_options(family: int) -> "Tuple[int, Optional[int], Optional[int], s
     """``(level, receive option, send cmsg type, struct layout)`` for *family*.
 
     The receive option and the send cmsg type are the *same* constant for
-    IPv4 and two *different* ones for IPv6 (``IPV6_RECVPKTINFO`` requests the
-    data, ``IPV6_PKTINFO`` carries it), so they are returned separately rather
-    than collapsed into one "the option" value.
+    IPv4 and two *different* ones for IPv6 on POSIX (``IPV6_RECVPKTINFO``
+    requests the data, ``IPV6_PKTINFO`` carries it), so they are returned
+    separately rather than collapsed into one "the option" value.
 
-    Either may be ``None`` where the platform does not export it; the caller
+    **Windows has no ``IPV6_RECVPKTINFO`` at all**: there ``IPV6_PKTINFO`` (19)
+    is both the request and the carrier, and setting it is what enables receipt.
+    Asking only for ``IPV6_RECVPKTINFO`` therefore found ``None`` and silently
+    turned IPv6 pktinfo off on Windows -- measured on a CI runner, where
+    ``UdpEndpoint(bind("::", 0)).supports_pktinfo`` was ``False`` while a raw
+    ``recvmsg`` on the same socket delivered the cmsg perfectly well. The
+    round-trip test passed anyway, by taking its own `not supports_pktinfo`
+    early-exit branch, which is why the fallback below is explicit rather than
+    left to a reader to infer.
+
+    Either may be ``None`` where the platform exports neither; the caller
     turns that into a ``supports_*`` flag rather than an error.
     """
     if family == _socket.AF_INET6:
-        return _socket.IPPROTO_IPV6, _IPV6_RECVPKTINFO, _IPV6_PKTINFO, _PKTINFO_V6
+        receive = _IPV6_RECVPKTINFO if _IPV6_RECVPKTINFO is not None else _IPV6_PKTINFO
+        return _socket.IPPROTO_IPV6, receive, _IPV6_PKTINFO, _PKTINFO_V6
     return _socket.IPPROTO_IP, _IP_PKTINFO, _IP_PKTINFO, _PKTINFO_V4
 
 
@@ -239,9 +306,8 @@ class UdpEndpoint:
         is ``False`` -- not an optimistic ``True`` -- whenever the option for
         *this socket's family* is missing or refused.
     :ivar supports_src_pinning: :meth:`send` can honour ``src``. ``False``
-        where the platform has no ``sendmsg`` (Windows) or no pktinfo cmsg for
-        this family (macOS has no ``IP_PKTINFO``); ``src`` is then ignored,
-        and the kernel picks the source as it always would.
+        where the platform exports no pktinfo cmsg for this family; ``src`` is
+        then ignored, and the kernel picks the source as it always would.
     """
 
     __slots__ = ("socket", "supports_pktinfo", "supports_src_pinning", "_cmsg_size")
@@ -266,6 +332,25 @@ class UdpEndpoint:
             sock.setsockopt(level, receive_option, 1)
         except OSError:
             return  # option exists but this socket/family refuses it
+
+        if family == _socket.AF_INET6 and _IP_PKTINFO is not None:
+            # Dual-stack, and the three platforms disagree about who reports a
+            # v4 arrival on an AF_INET6 socket. Measured on CI runners:
+            #   Linux   -- accepts IP_PKTINFO here and sends BOTH cmsgs; the v6
+            #              one already carries the v4-mapped address.
+            #   macOS   -- REFUSES it (EINVAL), and the v6 cmsg carries the
+            #              v4-mapped address anyway.
+            #   Windows -- accepts it, and it is the ONLY way a v4 arrival is
+            #              visible: the v6 option delivers no cmsg at all for
+            #              one, so without this the arrival address is lost.
+            # Hence try-and-ignore rather than a platform test: the two that do
+            # not need it either tolerate it or refuse it harmlessly, and a
+            # v6-only socket refuses it on both macOS and Windows.
+            try:
+                sock.setsockopt(_socket.IPPROTO_IP, _IP_PKTINFO, 1)
+            except OSError:
+                pass
+
         self.supports_pktinfo = True
         self._cmsg_size = _cmsg_space(_CMSG_SLOT_BYTES) * _CMSG_SLOTS
 
@@ -308,6 +393,16 @@ class UdpEndpoint:
                 continue
             index, local = decoded
             break
+
+        if self.socket.family == _socket.AF_INET6 and isinstance(local, IPv4Address):
+            # A v4 arrival on a dual-stack socket. Windows reports it at level
+            # IPPROTO_IP carrying the **plain** v4 address, while Linux and macOS
+            # report the v4-mapped form in the v6 cmsg -- measured on CI, and the
+            # two halves of the same Windows datagram even disagree, since its
+            # `sender` is already ::ffff:127.0.0.1. `local_address` is documented
+            # as v4-mapped on an AF_INET6 endpoint, so normalise rather than let
+            # the platform show through.
+            local = IPv6Address("::ffff:%s" % (local,))
 
         interface = None
         if resolve_interface and index:
