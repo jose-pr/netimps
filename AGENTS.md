@@ -114,12 +114,14 @@ map:
 | `get_ip`, `is_link_scoped` | address resolution and scope classification |
 | `collapse`, `subtract` | CIDR set maths |
 | `normalize_host` | `host:port` splitting, IPv6-aware |
+| `join_host`, `unmap`, `is_wildcard` | build `host:port` (IPv6-bracketed), collapse a v4-mapped address, test for the bind-anything form |
 | `get_default_port`, `get_default_scheme`, `register_port` | scheme ↔ port registry |
 | `resolve`, `resolve_dnspython`, `resolve_system`, `resolve_nslookup` | DNS lookup → native records; `resolve` chains the three backends, each independently callable, and returns `[]` only when every applicable backend answered empty |
 | `ResolutionError` | raised by the three resolvers when a backend could not even ask (missing binary, unreachable server, deadline) — as opposed to an empty answer |
 | `ping`, `PingResult` | reachability with RTT and TTL |
 | `bind`, `bind_error_hint`, `interface_for`, `interfaces_for`, `is_local_address` | socket creation and local membership |
 | `get_source_ip`, `get_free_port`, `tcp_check`, `wait_for_port` | socket helpers |
+| `SocketOption`, `disable_connreset`, `set_buffer_size` | named option triple; the Windows `SIO_UDP_CONNRESET` switch (no stdlib route); buffer growth reporting what was *granted* |
 | `UdpEndpoint`, `Datagram` | UDP receive with arrival interface (`IP_PKTINFO` / `IPV6_RECVPKTINFO`, per family) |
 | `recvmsg`, `sendmsg`, `CMSG_LEN`, `CMSG_SPACE`, `supports_recvmsg` | ancillary-data messaging on **every** platform, Windows included (via `WSARecvMsg`/`WSASendMsg`) |
 | `patch_socket_module`, `socket_patched` | install/remove the default-on `socket` patch that gives Windows the stdlib method names |
@@ -337,6 +339,7 @@ Tests live in `tests/` and run via `pytest -q` from a checkout;
 | `test_scan.py` | `scan_ports` / `scan_hosts` and the multicast helpers, loopback only |
 | `test_centralized.py` | the helpers centralised from sibling repos: `bind`, `interface_for`, `UdpEndpoint`, `Host`, `retry` |
 | `test_fqdn.py` | `Fqdn` — the label algebra, the pathlib inversion, limits, the hash/eq law |
+| `test_sweep_gaps.py` | the gaps the 2026-10-03 consumer sweep found; each test pins the *difference* from the hand-rolled version |
 | `test_msg.py` | `recvmsg`/`sendmsg` on every platform, and the `socket` patch (install, reverse, no-op on POSIX) |
 | `test_cli.py` | the CLI; skips itself when the `cli` extra is absent |
 | `test_platform_smoke.py` | the **only** non-mocked tests — the real `ping`/`ping6` binary and real loopback sockets |

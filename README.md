@@ -171,6 +171,7 @@ netimps.retry(lambda: netimps.tcp_check("example.com", 443), attempts=3)
 | `get_ip`, `is_link_scoped` | address resolution and scope classification |
 | `collapse`, `subtract` | CIDR set maths |
 | `normalize_host` | `host:port` splitting, IPv6-aware |
+| `join_host`, `unmap`, `is_wildcard` | build `host:port` (IPv6-bracketed), collapse a v4-mapped address, test for the bind-anything form |
 | `get_default_port`, `get_default_scheme`, `register_port` | scheme ↔ port registry |
 | `resolve` | DNS lookup → native records (`[]` on failure) |
 | `resolve_wire`, `resolve_doh` | DNS straight to a nameserver (UDP/TCP, chosen source) / over HTTPS |
