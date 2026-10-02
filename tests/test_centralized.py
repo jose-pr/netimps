@@ -674,13 +674,19 @@ def test_udp_endpoint_claims_pktinfo_whenever_the_platform_delivers_it(family, h
         pytest.skip("cannot bind %s: %s" % (host, exc))
     delivered = False
     try:
+        # The *constants* come from `_udp`, the *decision* does not -- that
+        # distinction is the whole design of this test. Reading them from
+        # `socket` instead gave this check the same blind spot as the code it
+        # was meant to police: `socket.IP_PKTINFO` only exists from CPython
+        # 3.12, so on 3.9-3.11 it found None, enabled nothing, saw no cmsg and
+        # skipped -- passing while v4 pktinfo was broken on every platform.
         if family == socket.AF_INET6:
             candidates = [
-                (socket.IPPROTO_IPV6, getattr(socket, "IPV6_RECVPKTINFO", None)),
-                (socket.IPPROTO_IPV6, getattr(socket, "IPV6_PKTINFO", None)),
+                (socket.IPPROTO_IPV6, _udp._IPV6_RECVPKTINFO),
+                (socket.IPPROTO_IPV6, _udp._IPV6_PKTINFO),
             ]
         else:
-            candidates = [(socket.IPPROTO_IP, getattr(socket, "IP_PKTINFO", None))]
+            candidates = [(socket.IPPROTO_IP, _udp._IP_PKTINFO)]
         for level, option in candidates:
             if option is None:
                 continue

@@ -43,7 +43,12 @@ def test_cmsg_space_leaves_room_for_a_following_header():
     """
     for length in (0, 1, 4, 8, 12, 20, 64):
         assert netimps.CMSG_SPACE(length) >= netimps.CMSG_LEN(length)
-    assert netimps.CMSG_SPACE(8) % struct.calcsize("P") == 0
+    # No assertion about *which* alignment: it is not the same everywhere.
+    # Linux and Windows pad to pointer width, macOS to 4 -- measured, where
+    # CMSG_SPACE(8) is 20 there and 24 on the other two. Asserting pointer
+    # alignment here encoded a Linux/Windows assumption as a universal law and
+    # failed on macOS, which is the mistake this file exists to catch.
+    assert netimps.CMSG_SPACE(1) >= netimps.CMSG_LEN(1)
 
 
 def test_cmsg_helpers_reject_a_negative_length():

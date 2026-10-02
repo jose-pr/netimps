@@ -110,25 +110,45 @@ __all__ = ["UdpEndpoint", "Datagram"]
 
 _IS_WINDOWS = _sys.platform == "win32"
 
-#: On Windows both of these are 19, and **CPython 3.9 exports neither**, so a
-#: pure ``getattr`` probe left v4 pktinfo silently off on the oldest supported
-#: interpreter -- measured: 3.14 ran the v4 tests and 3.9 skipped nine of them
-#: while reporting a green suite. Winsock's values are documented and stable, so
-#: the literal is the right fallback and an ``OSError`` from ``setsockopt`` is
-#: the real "unsupported" signal (the repo rule for exactly this situation).
-#: Elsewhere the constant is trusted: Linux and macOS both export theirs, with
-#: *different* values (``IP_PKTINFO`` is 8 and 26 respectively), so there is no
-#: single literal to fall back to and no need for one.
-_WINDOWS_PKTINFO = 19
+#: Documented kernel ABI values, used when CPython does not export the name.
+#:
+#: **``socket.IP_PKTINFO`` only arrived in CPython 3.12.** On 3.9, 3.10 and 3.11
+#: it is absent on *every* platform, so a bare ``getattr`` left IPv4 pktinfo --
+#: the arrival-interface feature this module exists for -- silently off for half
+#: the supported interpreter range, on Linux and macOS as well as Windows.
+#: Measured on the CI matrix: 3.9/3.10/3.11 failed the pinning test while
+#: 3.12/3.13/3.14 passed, with the platform held constant.
+#:
+#: These are stable parts of each kernel's ABI, not guesses -- every value here
+#: was read back from a live socket by `.github/probe/capture.py` -- and the repo
+#: rule for exactly this case is to use the literal and let ``OSError`` from
+#: ``setsockopt`` be the real "unsupported" signal. There is no single literal
+#: because the three platforms genuinely disagree.
+#:
+#: ``(IP_PKTINFO, IPV6_PKTINFO, IPV6_RECVPKTINFO)``; ``None`` where the platform
+#: has no such option at all.
+#: Declared before the branches so mypy does not type the tuple from whichever
+#: platform it happens to be checking as the target.
+_PKTINFO_FALLBACK: "Tuple[Optional[int], Optional[int], Optional[int]]"
 
-#: Probed per family, because a platform can have one and not the other:
-#: Windows has no ``IPV6_RECVPKTINFO`` at all and uses ``IPV6_PKTINFO`` as both
-#: the request and the carrier.
-_IP_PKTINFO = getattr(_socket, "IP_PKTINFO", _WINDOWS_PKTINFO if _IS_WINDOWS else None)
-_IPV6_PKTINFO = getattr(
-    _socket, "IPV6_PKTINFO", _WINDOWS_PKTINFO if _IS_WINDOWS else None
-)
-_IPV6_RECVPKTINFO = getattr(_socket, "IPV6_RECVPKTINFO", None)
+if _IS_WINDOWS:
+    # IPV6_PKTINFO is both the request and the carrier here; there is no
+    # IPV6_RECVPKTINFO.
+    _PKTINFO_FALLBACK = (19, 19, None)
+elif _sys.platform.startswith("linux"):
+    _PKTINFO_FALLBACK = (8, 50, 49)
+elif _sys.platform == "darwin" or "bsd" in _sys.platform:
+    # macOS really does have IP_PKTINFO (26), with Linux's exact 12-byte layout.
+    # The widespread "BSD has no IP_PKTINFO, use IP_RECVDSTADDR + IP_RECVIF"
+    # advice is out of date for Darwin, and was measured wrong on a runner.
+    _PKTINFO_FALLBACK = (26, 46, 61)
+else:  # pragma: no cover - an unmeasured platform gets no guesses
+    _PKTINFO_FALLBACK = (None, None, None)
+
+#: Probed per family, because a platform can have one and not the other.
+_IP_PKTINFO = getattr(_socket, "IP_PKTINFO", None) or _PKTINFO_FALLBACK[0]
+_IPV6_PKTINFO = getattr(_socket, "IPV6_PKTINFO", None) or _PKTINFO_FALLBACK[1]
+_IPV6_RECVPKTINFO = getattr(_socket, "IPV6_RECVPKTINFO", None) or _PKTINFO_FALLBACK[2]
 
 #: Windows reports 512, Linux 8, macOS 32 -- there is no portable literal, and
 #: a missing constant means the flag can never be set, so 0 is the safe default.
