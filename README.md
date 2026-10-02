@@ -46,7 +46,9 @@ nothing to compile and no wheel to miss for your platform.
 - **Multicast** — `multicast_socket` handling the join dance whose failure
   modes are otherwise silent.
 - **DNS and ping** — `resolve()` chaining `dnspython`/OS resolver/`nslookup`
-  backends and returning native types, accepting an IP/interface object
+  backends (plus a standard-library DNS client for an explicit nameserver or
+  source address) and returning native types; `resolve_doh()` for DNS over
+  HTTPS; accepting an IP/interface object
   directly and auto-selecting a reverse lookup for an address query; `ping()`
   returning round-trip time and TTL, not just a boolean.
 
@@ -165,6 +167,7 @@ netimps.retry(lambda: netimps.tcp_check("example.com", 443), attempts=3)
 | `normalize_host` | `host:port` splitting, IPv6-aware |
 | `get_default_port`, `get_default_scheme`, `register_port` | scheme ↔ port registry |
 | `resolve` | DNS lookup → native records (`[]` on failure) |
+| `resolve_wire`, `resolve_doh` | DNS straight to a nameserver (UDP/TCP, chosen source) / over HTTPS |
 | `ping`, `PingResult` | reachability with RTT and TTL |
 | `bind`, `bind_error_hint`, `interface_for`, `interfaces_for`, `is_local_address` | socket creation and local membership |
 | `get_source_ip`, `get_free_port`, `tcp_check`, `wait_for_port` | socket helpers |

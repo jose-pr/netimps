@@ -326,7 +326,7 @@ the documented raised type of `resolve`, `resolve_system` and
 `resolve_nslookup`, and it is exported from `netimps`, so catching it no
 longer means importing a private module.
 
-**`resolve(query, rdtype=None, ns=None, timeout=5.0, port=53, tcp=False, search=True, backends=None, strict=False)`**
+**`resolve(query, rdtype=None, ns=None, timeout=5.0, port=53, tcp=False, search=True, backends=None, strict=False, source=None)`**
 
 `query` accepts `AddressLike` (a hostname string, an address string, an
 `IPv4Address`/`IPv6Address`, or an `IPv4Interface`/`IPv6Interface` -- its
@@ -343,10 +343,12 @@ Pass an explicit `rdtype` to opt out -- `rdtype="a"` on an address still
 attempts a literal (and empty) A lookup rather than being silently
 overridden.
 
-Backends are tried in order, default `["dnspython", "system", "nslookup"]`:
+Backends are tried in order, default `["dnspython", "wire", "system", "nslookup"]`:
 dnspython first (structured records, every `rdtype`, explicit `ns=`/`search=`
-control), then the OS resolver (hosts file, NSS, OS cache), then `nslookup` as
-a last resort. `backends` also accepts a single name as a plain string
+control), then `wire` -- the standard-library DNS client, **only for an
+explicit `ns=` or `source=`**, so a named nameserver works without dnspython --
+then the OS resolver (hosts file, NSS, OS cache), then `nslookup` as a last
+resort. `backends` also accepts a single name as a plain string
 (`backends="system"`), or a custom order/subset
 (`backends=["nslookup", "dnspython"]`).
 
@@ -379,7 +381,12 @@ calls instead of one, the last of which may spawn `nslookup`. Narrow
   transport, so running it would answer a different question from the one
   asked. With `backends=["system"]` plus one of those, the resulting
   `ValueError` names the reason.
-- **`nslookup` is skipped** only for a `rdtype` outside `"a"`/`"aaaa"`/`"ptr"`.
+- **`source=`** (an address, or one per family as a list) is the local address
+  the queries leave from. `wire` honours either form; `dnspython` one address
+  only (skipped for a list); `system` and `nslookup` are skipped, since neither
+  can choose it.
+- **`nslookup` is skipped** for a `rdtype` outside `"a"`/`"aaaa"`/`"ptr"`, and
+  for `source=`.
   It has no `port=`/`tcp=` parameters, so a `resolve(q, port=5353)` that falls
   through to it is answered against port 53 over UDP — a known gap; pin
   `backends="dnspython"` when the port or transport matters.
@@ -387,7 +394,7 @@ calls instead of one, the last of which may spawn `nslookup`. Narrow
   without trying every backend — that's a caller bug, not a resolution
   outcome.
 
-**`resolve_dnspython(query, rdtype=None, ns=None, timeout=5.0, port=53, tcp=False, search=True)`**
+**`resolve_dnspython(query, rdtype=None, ns=None, timeout=5.0, port=53, tcp=False, search=True, source=None)`**
 
 The original backend: `dnspython`, structured records, every `rdtype`. Same
 `AddressLike` `query` and auto-`rdtype` behavior as `resolve()`. A `"ptr"`
@@ -483,6 +490,41 @@ path is usable. Address records only: `rdtype` must be `"a"`, `"aaaa"` or
   That last case used to return `[]`, which made a transport failure look like
   NXDOMAIN and stopped `resolve()`'s chain. A genuine "no such name" — exit 1
   *with* the marker text — is still `[]`.
+
+**`resolve_wire(query, rdtype=None, ns=None, timeout=5.0, port=53, tcp=False, search=True, source=None)`**
+
+The DNS protocol itself, standard library only: one question over UDP to each
+nameserver in turn, asked again over TCP when the reply is truncated (TCP
+throughout with `tcp=True`). Same `AddressLike` `query`, auto-`rdtype` and
+native-value contract as the other backends.
+
+- **`ns`**: `host`, `host:port`, a bare IPv6 address, `[v6]` or `[v6]:port`
+  (an address, not a name; `port` fills in a missing one). `None` reads
+  `/etc/resolv.conf` on POSIX; elsewhere it raises `ResolutionError`.
+- **`rdtype`**: `a`, `aaaa`, `cname`, `ptr`, `mx`, `txt`, `ns`, `srv` --
+  another raises `ResolutionError`, so `resolve()`'s chain moves on. A CNAME
+  chain inside the reply is followed.
+- **`source`**: the local address to send from, or a list with one per family;
+  a server whose family has none is skipped (and named in the error).
+- **`timeout`** bounds the whole resolution; each server gets its share of
+  what is left, so a dead first server cannot starve the next.
+- **`search`**: a list of domains tries an unqualified `query` under each, then
+  as given; `True`/`False` ask for `query` as given (no system search list).
+- NXDOMAIN and "no record of this type" are `[]`; no server answering (or only
+  SERVFAIL/REFUSED) is `ResolutionError`.
+
+**`resolve_doh(query, url, rdtype=None, timeout=5.0, fetch=None)`**
+
+DNS over HTTPS (RFC 8484): the same DNS message POSTed to `url` as
+`application/dns-message`. **Not part of `resolve()`'s chain** -- a caller that
+names a DoH endpoint wants that answer alone.
+
+- **`fetch(url, body, headers, timeout) -> bytes`** sends the request, so a
+  caller with its own HTTP stack (a proxy, a CA bundle) routes DoH through it;
+  `None` uses `urllib.request`. An `OSError`/`ValueError` from it, an HTTP
+  error, or a reply that is not `application/dns-message` is `ResolutionError`.
+- `rdtype` as `resolve_wire`; NXDOMAIN is `[]`, another error rcode
+  `ResolutionError`.
 
 ## Reachability
 

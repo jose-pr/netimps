@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`resolve_wire()`** -- a DNS client on the standard library alone: one
+  question over UDP to each nameserver in turn, asked again over TCP when the
+  reply is truncated, CNAME chains followed, records returned as native types
+  like the other backends. It joins `resolve()`'s chain after `dnspython`,
+  for an explicit `ns=` or `source=` only -- so a named nameserver now works
+  without `dnspython` installed.
+- **`source=`** on `resolve()`, `resolve_dnspython()` and `resolve_wire()`: the
+  local address the queries leave from (one per address family as a list).
+  `system` and `nslookup` are skipped when it is set, as for `ns=`.
+- **`resolve_doh()`** -- DNS over HTTPS (RFC 8484), with an injectable `fetch`
+  so a caller's own HTTP stack (proxy, CA bundle) carries the request.
+
 ## [0.3.2] - 2026-09-28
 
 ### Changed
