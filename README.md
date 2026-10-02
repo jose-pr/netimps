@@ -29,6 +29,11 @@ nothing to compile and no wheel to miss for your platform.
 - **`MACAddress`** — colon/hyphen/dot/bare plus `int`/`bytes`, hashable and
   ordered, with `.oui`, `.is_multicast`, `.is_local` and case-selectable
   rendering.
+- **`Fqdn`** — a domain name as a value type: `.labels`, `.hostname`, `.domain`,
+  `.tld`, `/` to compose, plus `.resolve()`/`.ping()`. Path-like, but **inverted
+  from `pathlib`** because DNS puts the significant label last — `.name` is the
+  leftmost label and `/` *prepends*. Refuses an address literal; `Host.fqdn`
+  bridges the two.
 - **The socket helpers everyone rewrites** — `get_source_ip`, `get_free_port`,
   `tcp_check`, `wait_for_port`.
 - **Local membership lookups** — `interface_for()` gives the first adapter for
@@ -171,8 +176,10 @@ netimps.retry(lambda: netimps.tcp_check("example.com", 443), attempts=3)
 | `ping`, `PingResult` | reachability with RTT and TTL |
 | `bind`, `bind_error_hint`, `interface_for`, `interfaces_for`, `is_local_address` | socket creation and local membership |
 | `get_source_ip`, `get_free_port`, `tcp_check`, `wait_for_port` | socket helpers |
-| `UdpEndpoint`, `Datagram` | UDP receive with arrival interface (`IP_PKTINFO`) |
-| `Host` | hostname-or-address value type |
+| `UdpEndpoint`, `Datagram` | UDP receive with arrival interface (`IP_PKTINFO`), every platform |
+| `recvmsg`, `sendmsg`, `CMSG_LEN`, `CMSG_SPACE` | ancillary-data messaging, Windows included |
+| `Host` | hostname-or-address value type; `.fqdn` narrows a name |
+| `Fqdn`, `FqdnLike` | domain name value type with label algebra (inverted from `pathlib`) |
 | `retry`, `backoff_delays` | bounded retry with exponential backoff |
 | `APIPA`, `LOOPBACK_V4`, `LOOPBACK_V6`, `LINK_LOCAL_V6` | named networks |
 | `get_route`, `Route`, `hop_count` | routing and distance |

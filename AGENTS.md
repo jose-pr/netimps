@@ -76,6 +76,7 @@ src/netimps/
 ├── _ping.py       # private: ping() over the platform binary
 ├── _retry.py      # private: bounded retry with exponential backoff
 ├── _udp.py        # private: UDP receive with arrival interface (pktinfo)
+├── _fqdn.py       # private: Fqdn domain-name value type (label algebra)
 ├── _msg.py        # private: cross-platform recvmsg/sendmsg + the socket patch
 ├── _winsock.py    # private: ctypes WSARecvMsg/WSASendMsg (Windows only, never imported elsewhere)
 ├── _iface_spec.py # private: shared InterfaceSpec coercion (MAC/name/Interface -> address)
@@ -122,7 +123,8 @@ map:
 | `UdpEndpoint`, `Datagram` | UDP receive with arrival interface (`IP_PKTINFO` / `IPV6_RECVPKTINFO`, per family) |
 | `recvmsg`, `sendmsg`, `CMSG_LEN`, `CMSG_SPACE`, `supports_recvmsg` | ancillary-data messaging on **every** platform, Windows included (via `WSARecvMsg`/`WSASendMsg`) |
 | `patch_socket_module`, `socket_patched` | install/remove the default-on `socket` patch that gives Windows the stdlib method names |
-| `Host` | hostname-or-address value type |
+| `Host` | hostname-or-address value type; `.fqdn` narrows a name to `Fqdn` |
+| `Fqdn`, `FqdnLike` | domain name as a value type: labels, `.domain`, `.tld`, `/` prepends (**inverted from `pathlib`**), `.resolve()`/`.ping()` |
 | `retry`, `backoff_delays` | bounded retry with exponential backoff |
 | `APIPA`, `LOOPBACK_V4`, `LOOPBACK_V6`, `LINK_LOCAL_V6` | named networks |
 | `get_route`, `Route`, `hop_count` | routing and distance |
@@ -334,6 +336,8 @@ Tests live in `tests/` and run via `pytest -q` from a checkout;
 | `test_sockets.py` | bind / `tcp_check` / route / MTU; loopback, or assertions about shape |
 | `test_scan.py` | `scan_ports` / `scan_hosts` and the multicast helpers, loopback only |
 | `test_centralized.py` | the helpers centralised from sibling repos: `bind`, `interface_for`, `UdpEndpoint`, `Host`, `retry` |
+| `test_fqdn.py` | `Fqdn` — the label algebra, the pathlib inversion, limits, the hash/eq law |
+| `test_msg.py` | `recvmsg`/`sendmsg` on every platform, and the `socket` patch (install, reverse, no-op on POSIX) |
 | `test_cli.py` | the CLI; skips itself when the `cli` extra is absent |
 | `test_platform_smoke.py` | the **only** non-mocked tests — the real `ping`/`ping6` binary and real loopback sockets |
 | `typing/api.py` | the static-typing contract; never executed, checked by mypy with `typing/consumer.ini` |
