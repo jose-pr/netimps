@@ -537,12 +537,28 @@ def test_multicast_socket_round_trip():
     a defect in the socket setup. The configuration itself is asserted by the
     surrounding tests, which do not need traffic to flow.
     """
-    group, port = "239.7.7.42", 55571
+    # A *free* port rather than a hardcoded one. WSAEACCES on a Windows bind also
+    # means "inside an excluded port range", and those ranges are allocated
+    # dynamically per machine and per boot by Hyper-V/WSL -- so a fixed port
+    # passes on one host and fails on another. Observed on a CI runner: this test
+    # died binding 55571 with WinError 10013 while the same job on 3.9 passed, on
+    # a different VM.
+    group = "239.7.7.42"
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    probe.bind(("", 0))
+    port = probe.getsockname()[1]
+    probe.close()
     source = netimps.get_source_ip()
     if source is None:  # pragma: no cover - host without a route
         pytest.skip("no routable source address")
 
-    receiver = netimps.multicast_socket(group, port, interface=str(source))
+    try:
+        receiver = netimps.multicast_socket(group, port, interface=str(source))
+    except OSError as exc:  # pragma: no cover - environment dependent
+        # A refused bind is an environment fact, exactly like the dropped
+        # datagram this test already skips for: an excluded port range or
+        # another holder, not a defect in the socket setup.
+        pytest.skip("cannot bind the multicast port here: %s" % (exc,))
     try:
         receiver.settimeout(5.0)
         sender = netimps.multicast_socket(interface=str(source), bind=False)

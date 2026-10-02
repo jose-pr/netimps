@@ -14,6 +14,7 @@ import sys
 import pytest
 
 import netimps
+from netimps import _udp as _udp_module
 
 IS_WINDOWS = os.name == "nt"
 
@@ -158,7 +159,13 @@ def test_a_tiny_control_buffer_truncates_instead_of_reading_out_of_bounds():
     buffer), not the size it wrote, so believing it indexed past the ctypes
     allocation. The flag must be reported and the parse must stay in bounds.
     """
-    ip_pktinfo = getattr(socket, "IP_PKTINFO", None)
+    # From `_udp`, not from `socket`: `socket.IP_PKTINFO` only exists from
+    # CPython 3.12, so probing it here skipped this test on 3.9 -- the same blind
+    # spot that let the constant bug reach main in the first place. The literal
+    # table in `_udp` is the platform fact; `socket` is just one source for it.
+    from netimps import _udp
+
+    ip_pktinfo = _udp._IP_PKTINFO
     if ip_pktinfo is None:
         pytest.skip("no IP_PKTINFO on this platform")
     server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -191,7 +198,7 @@ def test_two_cmsgs_in_one_buffer_are_both_parsed():
     and skips.
     """
     options = [
-        (socket.IPPROTO_IP, getattr(socket, "IP_PKTINFO", None)),
+        (socket.IPPROTO_IP, _udp_module._IP_PKTINFO),
         (socket.IPPROTO_IP, getattr(socket, "IP_RECVDSTADDR", None)),
     ]
     options = [(lvl, opt) for lvl, opt in options if opt is not None]

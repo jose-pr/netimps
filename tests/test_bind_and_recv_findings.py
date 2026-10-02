@@ -345,30 +345,40 @@ def test_a_stream_socket_still_gets_so_reuseaddr_on_posix():
         pytest.skip("Windows gets SO_EXCLUSIVEADDRUSE instead; covered above")
     sock = bind("127.0.0.1", 0, kind=socket.SOCK_STREAM)
     try:
-        assert sock.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR) == 1
+        # Truthiness, not `== 1`: getsockopt returns an implementation-defined
+        # nonzero for a boolean option, and macOS returns **4** here. Asserting
+        # the literal 1 passed on Linux and Windows and failed on macOS CI.
+        assert sock.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR)
     finally:
         sock.close()
 
 
-def test_sharing_a_udp_port_is_still_reachable_by_the_explicit_names():
+def test_sharing_a_udp_port_is_still_reachable_by_an_explicit_name():
     """Taking the default away must not take the capability away.
 
-    `reuse_port` is the option actually designed for sharing, and
-    `allow_address_takeover` already says what it does in its name.
+    **Which name works is a platform fact**, and asserting both everywhere was
+    wrong -- it failed on macOS CI. `SO_REUSEADDR` alone does not permit an exact
+    duplicate UDP bind on BSD/Darwin; there `SO_REUSEPORT` is the one that does.
+    `SO_REUSEPORT` in turn does not exist on Windows, where
+    `allow_address_takeover` is the route. So the law worth pinning is that **at
+    least one** explicit name still shares, not that a particular one does.
     """
-    for kwargs in ({"reuse_port": True}, {"allow_address_takeover": True}):
+    candidates = [{"reuse_port": True}, {"allow_address_takeover": True}]
+    outcomes = {}
+    for kwargs in candidates:
         try:
             holder = bind("127.0.0.1", 0, **kwargs)
         except OSError as exc:  # pragma: no cover - option absent on this platform
-            pytest.skip("%s unavailable here: %s" % (kwargs, exc))
+            outcomes[str(kwargs)] = "unavailable: %s" % (exc,)
+            continue
         try:
             port = holder.getsockname()[1]
-            shared = _second_bind_succeeds(port, **kwargs)
+            outcomes[str(kwargs)] = _second_bind_succeeds(port, **kwargs)
         finally:
             holder.close()
-        if not shared and IS_WINDOWS and "reuse_port" in kwargs:
-            continue  # SO_REUSEPORT does not exist on Windows; a documented no-op
-        assert shared, "%s must still permit sharing" % (kwargs,)
+    assert any(
+        value is True for value in outcomes.values()
+    ), "no explicit name can share a UDP port any more: %r" % (outcomes,)
 
 
 def test_multicast_socket_does_not_depend_on_the_old_default():
@@ -385,6 +395,7 @@ def test_multicast_socket_does_not_depend_on_the_old_default():
     ), "multicast_socket must set SO_REUSEADDR itself, not inherit it from bind()"
     sock = netimps.multicast_socket("239.1.2.3", 0)
     try:
-        assert sock.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR) == 1
+        # Truthiness, not `== 1` -- macOS returns 4. See the note above.
+        assert sock.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR)
     finally:
         sock.close()
