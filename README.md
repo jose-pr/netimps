@@ -32,8 +32,9 @@ nothing to compile and no wheel to miss for your platform.
 - **`Fqdn`** — a domain name as a value type: `.labels`, `.hostname`, `.domain`,
   `.tld`, `/` to compose, plus `.resolve()`/`.ping()`. Path-like, but **inverted
   from `pathlib`** because DNS puts the significant label last — `.name` is the
-  leftmost label and `/` *prepends*. Refuses an address literal; `Host.fqdn`
-  bridges the two.
+  leftmost label and `/` *prepends*. **`name in domain`** works like the stdlib's
+  `address in network`, and `f + "/path"` gives a plain string. Refuses an address
+  literal; `Host.fqdn` bridges the two.
 - **The socket helpers everyone rewrites** — `get_source_ip`, `get_free_port`,
   `tcp_check`, `wait_for_port`.
 - **Local membership lookups** — `interface_for()` gives the first adapter for
