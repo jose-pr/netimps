@@ -9,6 +9,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`join_host(host, port=None)`** -- the inverse of `normalize_host`, and the
+  direction everyone writes by hand and gets wrong on IPv6: `join_host("::1",
+  8080)` is `'[::1]:8080'`, not `'::1:8080'`. Accepts a string, an address, an
+  `IPv4Interface`/`IPv6Interface` or an `Fqdn`. **Only an IPv6 *literal* is
+  bracketed** -- a hostname never is, because brackets in a URI authority assert
+  that the inside is an address. A port-less v6 comes back bare, which is what
+  makes `normalize_host(join_host(h, p)) == (h, p)` hold in every case. Three
+  consuming projects were writing this themselves.
+- **`unmap(value)`** -- collapse an IPv4-mapped IPv6 address (`::ffff:10.0.0.5`)
+  to plain IPv4; anything else passes through. Built on
+  `IPv6Address.ipv4_mapped`, **not** a `"::ffff:"` prefix test. Measured: all of
+  `::FFFF:10.0.0.5`, `::ffff:0:1` and `0:0:0:0:0:ffff:0a00:0005` *are* mapped
+  addresses that a `startswith("::ffff:") and "." in text` check leaves
+  untouched. One address has many spellings; only the parsed form sees through
+  them.
+- **`is_wildcard(value)`** -- whether a value means "every local address":
+  `""`, `None`, `"0.0.0.0"`, `"::"`, and any other unspecified spelling. Strips
+  a `%zone`. Never raises, so it stays usable in a branch without a guard.
+- **`disable_connreset(sock)`** and **`bind(..., connreset=False)`** -- stop
+  Windows reporting an ICMP port-unreachable provoked by an earlier send as
+  `ConnectionResetError` on a *later, unrelated* receive, which kills a server's
+  receive loop over a packet some other host did not want.
+
+  **There is no stdlib route to this**, which is why it belongs here. Measured on
+  3.14: CPython exports no `socket.SIO_UDP_CONNRESET` on any version, and even
+  given the documented value (`0x9800000C`) `socket.ioctl` whitelists commands
+  and answers `ValueError: invalid ioctl command`. It goes through `WSAIoctl` by
+  `ctypes` instead. The obvious `getattr(socket, "SIO_UDP_CONNRESET", None)`
+  version is a silent no-op on every platform. Off by default, since the report
+  is sometimes wanted -- a client talking to one peer learns the peer is gone.
+- **`set_buffer_size(sock, receive=None, send=None)`** -- grow
+  `SO_RCVBUF`/`SO_SNDBUF` and return what was **granted**, read back with
+  `getsockopt` rather than echoed from the request. The kernel is not obliged to
+  agree and does not say so: `setsockopt` succeeds and then grants less, capped
+  by `net.core.rmem_max` on Linux -- which also *doubles* the request, so a
+  read-back above it is normal there. The silent partial grant is the failure
+  mode. Only grows, so it cannot undo earlier tuning.
+- **`SocketOption(level, name, value)`** -- a named triple for `bind`'s
+  `options=`. A `NamedTuple`, so bare tuples keep working; purely so a list of
+  them reads better than `Iterable[Tuple[int, int, Any]]`.
+- **`MACAddress.hex(sep=None, bytes_per_sep=1)`** -- exactly `bytes.hex`, as a
+  passthrough to `.packed.hex`. Present because this is a value object rather
+  than a `bytes` subclass, so the method is not inherited -- and a downstream
+  project was subclassing the type partly to add it back.
+
+### Fixed
+
+- **`UdpEndpoint` reported nothing when a datagram was too large for
+  `bufsize`.** `Datagram` now carries **`truncated`**, from `MSG_TRUNC`, beside
+  the existing `control_truncated`. The flag was always in `msg_flags` and was
+  being dropped, so a caller had no way to tell a complete datagram from the
+  leading fragment of a longer one -- and a protocol parser handed a message cut
+  mid-field reports a malformed packet rather than a short read. Measured on
+  Linux with `bufsize=576`: a 1102-octet datagram arrived cut to 576 with the
+  flag set and discarded. Reported, not raised: deciding that a short datagram is
+  fatal belongs to the protocol.
+
+  It is reported on the no-pktinfo path too, which now goes through `recvmsg`
+  with a zero-length control buffer rather than `recvfrom`, because `recvfrom`
+  cannot report it. Losing the arrival interface is a documented degrade; losing
+  this is silent data loss, and the two no longer have to be given up together.
+
+### Added
+
 - **`Fqdn`** -- a domain name as a value type, with label algebra: `.labels`,
   `.hostname`, `.domain`, `.domains`, `.tld`, `.is_fully_qualified()`,
   `.with_hostname()`, `.is_subdomain_of()`, `.relative_to()`, `.reverse()`,

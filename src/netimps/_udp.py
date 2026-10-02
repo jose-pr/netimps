@@ -154,6 +154,13 @@ _IPV6_RECVPKTINFO = getattr(_socket, "IPV6_RECVPKTINFO", None) or _PKTINFO_FALLB
 #: a missing constant means the flag can never be set, so 0 is the safe default.
 _MSG_CTRUNC = getattr(_socket, "MSG_CTRUNC", 0)
 
+#: ``MSG_TRUNC``: the *payload* did not fit. Values differ per platform -- 32 on
+#: Linux, 16 on macOS, 256 on Windows -- so there is no portable literal to fall
+#: back to, and a missing constant means the flag can never be set, which makes
+#: 0 the only safe default. Separate from ``MSG_CTRUNC`` deliberately: the two
+#: answer different questions and a caller acts differently on each.
+_MSG_TRUNC = getattr(_socket, "MSG_TRUNC", 0)
+
 #: ``struct in_pktinfo``, and it is **not one layout across platforms** -- the
 #: field order differs, not merely the size, so a single string cannot serve
 #: both. Native byte order; this never leaves the host.
@@ -287,6 +294,15 @@ class Datagram(NamedTuple):
             held (``MSG_CTRUNC``). When this is ``True`` and the interface
             fields are empty, they are empty because something was dropped --
             not because the kernel had nothing to say.
+        truncated: the **payload** did not fit ``bufsize`` and ``data`` is the
+            leading part of a longer datagram (``MSG_TRUNC``). A different
+            question from ``control_truncated``, and the one that silently
+            corrupts a decode: a protocol parser handed a message cut
+            mid-field reports a malformed packet rather than a short read.
+            Measured on Linux with ``bufsize=576``: a 1102-octet datagram
+            arrived with ``MSG_TRUNC`` set and the flag discarded, leaving the
+            caller nothing to check. Reported, not raised -- deciding that a
+            short datagram is fatal belongs to the protocol, not here.
     """
 
     data: bytes
@@ -295,6 +311,7 @@ class Datagram(NamedTuple):
     interface_index: int = 0
     interface: "Optional[Interface]" = None
     control_truncated: bool = False
+    truncated: bool = False
 
 
 class UdpEndpoint:
@@ -389,6 +406,19 @@ class UdpEndpoint:
         buffer space.
         """
         if not self.supports_pktinfo:
+            # No interface information here, but `recvmsg` still reports
+            # `MSG_TRUNC`, and `recvfrom` cannot -- so the degraded path goes
+            # through it anyway, with a zero-length control buffer. Losing
+            # pktinfo is a documented degrade; losing the only signal that the
+            # payload was cut short is silent data corruption, and the two do
+            # not have to be given up together.
+            if _supports_recvmsg():
+                data, _anc, flags, raw = _recvmsg(self.socket, bufsize, 0)
+                return Datagram(
+                    data=data,
+                    sender=cast("SocketAddress", raw),
+                    truncated=bool(flags & _MSG_TRUNC),
+                )
             data, sender = self.socket.recvfrom(bufsize)
             return Datagram(data=data, sender=sender)
 
@@ -437,6 +467,7 @@ class UdpEndpoint:
             interface_index=int(index),
             interface=interface,
             control_truncated=bool(flags & _MSG_CTRUNC),
+            truncated=bool(flags & _MSG_TRUNC),
         )
 
     def _pktinfo_control(

@@ -51,6 +51,9 @@ __all__ = [
     "collapse",
     "subtract",
     "normalize_host",
+    "join_host",
+    "unmap",
+    "is_wildcard",
     "is_link_scoped",
 ]
 
@@ -572,3 +575,144 @@ class Host:
 
     def __hash__(self) -> int:
         return hash(self.value)
+
+
+def join_host(host: "Union[str, IPAddress, Any]", port: "Optional[int]" = None) -> str:
+    """Build ``"host:port"`` from its parts -- the inverse of :func:`normalize_host`.
+
+    The direction everyone writes by hand and gets wrong on IPv6, because a bare
+    v6 address is full of colons and must be bracketed before a port can be
+    appended::
+
+        join_host("example.com", 8080)     # 'example.com:8080'
+        join_host("10.0.0.5", 8080)        # '10.0.0.5:8080'
+        join_host("::1", 8080)             # '[::1]:8080'     -- not '::1:8080'
+        join_host("fe80::1%eth0", 80)      # '[fe80::1%eth0]:80'
+        join_host("::1")                   # '::1'            -- no port, no brackets
+        join_host("example.com")           # 'example.com'
+
+    ``host`` accepts a string, an :class:`IPv4Address`/:class:`IPv6Address`, an
+    :class:`IPv4Interface`/:class:`IPv6Interface` (its ``.ip`` is used) or an
+    :class:`Fqdn`. An already-bracketed string is accepted and not
+    double-bracketed.
+
+    **Only an IPv6 *literal* is bracketed.** A hostname never is, however many
+    colons someone has put in it -- brackets in a URI authority mean "the thing
+    inside is an address", so bracketing a name would produce something no
+    resolver will accept.
+
+    Brackets are added when a port is present **or** absent, following the same
+    rule: a lone ``"::1"`` needs none, since there is no colon to disambiguate
+    from. That is what makes ``normalize_host(join_host(h, p)) == (h, p)`` hold.
+
+    :raises ValueError: for an empty host, or a port outside 0-65535.
+    """
+    if host is None:
+        raise ValueError("host must not be None")
+
+    # An interface carries an address plus a prefix; the address is the part a
+    # socket address wants.
+    inner = getattr(host, "ip", None)
+    if inner is not None and isinstance(host, (IPv4Interface, IPv6Interface)):
+        host = inner
+
+    text = str(host).strip()
+    if not text:
+        raise ValueError("host must not be empty")
+
+    if text.startswith("[") or text.endswith("]"):
+        # A mismatched bracket has to raise, not fall through: `"[::1"` is not an
+        # IPv6 literal, so it would otherwise emerge unbracketed as `"[::1:80"`,
+        # which is garbage the caller cannot detect. `normalize_host` rejects the
+        # same input, and the pair must agree.
+        if not (text.startswith("[") and text.endswith("]")):
+            raise ValueError("mismatched brackets in %r" % (text,))
+        # Already bracketed: validate the inside rather than trusting it, so a
+        # malformed literal is caught here and not by the caller's resolver.
+        if not _is_ipv6_literal(text[1:-1]):
+            raise ValueError("%r is bracketed but not an IPv6 address" % (text,))
+        text = text[1:-1]
+
+    if _is_ipv6_literal(text):
+        text = "[%s]" % (text,)
+
+    if port is None:
+        # Strip the brackets back off: with no port there is nothing to
+        # disambiguate, and `normalize_host` returns the bare form, so keeping
+        # them would break the round trip.
+        return text[1:-1] if text.startswith("[") else text
+
+    port = int(port)
+    if not 0 <= port <= 65535:
+        raise ValueError("port must be in 0-65535, got %r" % (port,))
+    return "%s:%d" % (text, port)
+
+
+def unmap(value: "Union[str, IPAddress]") -> "IPAddress":
+    """Collapse an IPv4-mapped IPv6 address to plain IPv4; pass anything else through.
+
+    ``::ffff:10.0.0.5`` is how a dual-stack socket reports an IPv4 peer, and
+    almost nothing downstream wants it in that form -- an ACL comparing against
+    ``10.0.0.0/8``, a log line, a config lookup::
+
+        unmap("::ffff:10.0.0.5")    # IPv4Address('10.0.0.5')
+        unmap("10.0.0.5")           # IPv4Address('10.0.0.5')   -- unchanged
+        unmap("2001:db8::1")        # IPv6Address('2001:db8::1') -- unchanged
+
+    Built on :attr:`ipaddress.IPv6Address.ipv4_mapped` rather than stripping a
+    ``"::ffff:"`` prefix from the text. The string version looks equivalent and
+    is not -- measured, these are all genuinely mapped addresses that a
+    ``startswith("::ffff:") and "." in text`` test leaves untouched:
+
+    ===========================  ==========  ============================
+    input                        this gives  the string test gives
+    ===========================  ==========  ============================
+    ``::FFFF:10.0.0.5``          ``10.0.0.5``  unchanged (wrong case)
+    ``::ffff:0:1``               ``0.0.0.1``   unchanged (no dot)
+    ``0:0:0:0:0:ffff:0a00:0005`` ``10.0.0.5``  unchanged (expanded form)
+    ===========================  ==========  ============================
+
+    One address has many spellings, and only the parsed form sees through them.
+
+    :raises ValueError: if ``value`` is not an address at all.
+    """
+    from . import parse
+
+    address = (
+        value
+        if isinstance(value, (IPv4Address, IPv6Address))
+        else parse(str(value), IPAddress)
+    )
+    if isinstance(address, IPv6Address):
+        mapped = address.ipv4_mapped
+        if mapped is not None:
+            return mapped
+    return address
+
+
+def is_wildcard(value: "Union[str, IPAddress, None]") -> bool:
+    """Whether ``value`` means "every local address" -- the bind-anything form.
+
+    True for ``""``, ``None``, ``"0.0.0.0"``, ``"::"`` and any other spelling
+    whose address form is unspecified (``"::0"``, ``"0000::0"``)::
+
+        is_wildcard("")           # True -- what bind("") means
+        is_wildcard("0.0.0.0")    # True
+        is_wildcard("::")         # True
+        is_wildcard("127.0.0.1")  # False
+
+    A ``%zone`` suffix is stripped first, since a zone does not change whether
+    the address is unspecified. Never raises: anything unparseable is simply not
+    a wildcard, which keeps this usable in a branch without a guard.
+    """
+    if value is None:
+        return True
+    if isinstance(value, (IPv4Address, IPv6Address)):
+        return value.is_unspecified
+    text = str(value).strip()
+    if not text:
+        return True
+    try:
+        return _ipaddress.ip_address(text.split("%", 1)[0]).is_unspecified
+    except ValueError:
+        return False

@@ -146,6 +146,7 @@ only in the case or separator they were parsed from are equal.
 | Member | Meaning |
 | --- | --- |
 | `.as_str(sep=":", upper=False)` | render with any separator; `sep=""` for bare form |
+| `.hex(sep=None, bytes_per_sep=1)` | exactly `bytes.hex` — `'aabbccddeeff'`, `hex(":")`, `hex("-", 2)` → `'aabb-ccdd-eeff'` |
 | `.packed` | the 6 raw bytes |
 | `.oui` | the first three octets, **verbatim** (see below) |
 | `.is_multicast` | group bit (low bit of octet 0) |
@@ -271,6 +272,41 @@ so nothing is lost. Pass an existing enumeration in a loop; it is a syscall.
 - **`subtract(networks, remove) -> List[IPNetwork]`** — set difference, which
   `ipaddress` omits (it ships `collapse_addresses` but nothing to punch holes).
   Result is collapsed.
+- **`join_host(host, port=None) -> str`** — the **inverse** of
+  `normalize_host`, and the direction everyone writes by hand and gets wrong on
+  IPv6:
+
+  ```python
+  join_host("example.com", 8080)   # 'example.com:8080'
+  join_host("::1", 8080)           # '[::1]:8080'   -- not '::1:8080'
+  join_host("fe80::1%eth0", 80)    # '[fe80::1%eth0]:80'
+  join_host("::1")                 # '::1'          -- no port, no brackets
+  ```
+
+  Accepts a `str`, an address, an `IPv4Interface`/`IPv6Interface` (its `.ip` is
+  used) or an `Fqdn`; an already-bracketed string is not double-bracketed.
+  **Only an IPv6 *literal* is bracketed** — a hostname never is, however many
+  colons it has, because brackets in a URI authority assert "the inside is an
+  address". A port-less v6 comes back bare, which is what makes
+  `normalize_host(join_host(h, p)) == (h, p)` hold in every case. Raises
+  `ValueError` for an empty host, a port outside 0–65535, or a mismatched
+  bracket (`"[::1"` would otherwise emerge as `"[::1:80"`).
+- **`unmap(value) -> IPAddress`** — collapse an IPv4-mapped IPv6 address
+  (`::ffff:10.0.0.5`) to plain IPv4; anything else passes through. The form a
+  dual-stack socket reports an IPv4 peer in, and almost nothing downstream wants
+  it — an ACL comparing against `10.0.0.0/8`, a log line, a config lookup.
+
+  Built on `IPv6Address.ipv4_mapped`, **not** a `"::ffff:"` prefix test, which
+  looks equivalent and is not. Measured — all three of these *are* mapped, and a
+  `startswith("::ffff:") and "." in text` check leaves every one untouched:
+  `::FFFF:10.0.0.5` (case), `::ffff:0:1` (no dot), `0:0:0:0:0:ffff:0a00:0005`
+  (expanded). One address has many spellings; only the parsed form sees through
+  them. Raises `ValueError` if the input is not an address.
+- **`is_wildcard(value) -> bool`** — whether a value means "every local
+  address": `""`, `None`, `"0.0.0.0"`, `"::"`, and any other spelling whose
+  address form is unspecified. A `%zone` is stripped first. **Never raises** —
+  anything unparseable is simply not a wildcard, so it stays usable in a branch
+  without a guard. Agrees with what `bind("")` treats as the wildcard.
 - **`normalize_host(text, default_port=None) -> (host, port)`** — split
   `host:port`, handling IPv6 brackets. **`"::1"` stays an address**, never host
   `"::"` port `1` — the mistake hand-rolled splitters make. Only a bracketed v6
@@ -601,7 +637,7 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
 
 ## Socket helpers
 
-- **`bind(address="", port=0, *, family=AF_INET, kind=SOCK_DGRAM, reuse_address=True, allow_address_takeover=False, reuse_port=False, broadcast=False, interface=None, options=(), listen=None)`**
+- **`bind(address="", port=0, *, family=AF_INET, kind=SOCK_DGRAM, reuse_address=True, allow_address_takeover=False, reuse_port=False, broadcast=False, connreset=True, interface=None, options=(), listen=None)`**
   — create, configure and bind in one call. `interface` accepts the usual union
   (`Interface`, MAC, adapter name, address) and **raises `ValueError`** if
   unresolvable rather than silently binding the wildcard. `reuse_port` is a
@@ -623,6 +659,42 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
   > reachable, but only by asking for it by its consequence:
   > `allow_address_takeover=True`. On POSIX that flag adds nothing, since
   > `reuse_address` already sets exactly that option.
+- **`SocketOption(level, name, value)`** — a named triple for `bind`'s
+  `options=`. A `NamedTuple`, so it *is* a tuple: bare `(level, name, value)`
+  tuples keep working and code that unpacks these does too. Purely so a list of
+  them reads as something better than `Iterable[Tuple[int, int, Any]]`.
+- **`disable_connreset(sock) -> bool`** — stop Windows reporting an ICMP
+  port-unreachable provoked by an earlier send as `ConnectionResetError` on a
+  *later, unrelated* receive, which kills a server's receive loop over a packet
+  some other host did not want. Returns whether anything changed (`False` off
+  Windows). Also reachable as `bind(..., connreset=False)`.
+
+  This is the inverse face of a rule documented under `discover_mtu`: POSIX
+  delivers asynchronous ICMP errors only to *connected* sockets, so the surprise
+  does not arise there.
+
+  **There is no stdlib route to it**, which is why it lives here. Measured on
+  3.14: CPython exports no `socket.SIO_UDP_CONNRESET` on any version, and even
+  given the documented value (`0x9800000C`) `socket.ioctl` **whitelists**
+  commands and answers `ValueError: invalid ioctl command`. So this goes through
+  `WSAIoctl` by `ctypes`. A `getattr(socket, "SIO_UDP_CONNRESET", None)` version
+  — the obvious one — is a silent no-op on every platform.
+
+  **Not on by default.** The report is sometimes wanted: a client talking to one
+  peer learns the peer is gone. A server loop almost always wants it off.
+- **`set_buffer_size(sock, receive=None, send=None) -> (receive, send)`** — grow
+  `SO_RCVBUF`/`SO_SNDBUF` and report what was **granted**, read back with
+  `getsockopt` rather than echoed from the request. Default UDP buffers are small
+  (64 KiB on Windows), so a burst of large datagrams overruns them and the tail
+  is dropped, which at the protocol level looks like loss and costs a timeout.
+
+  **The kernel is not obliged to agree and does not say so**: `setsockopt`
+  succeeds and then grants less, capped by `net.core.rmem_max` on Linux — which
+  also *doubles* what is asked, so a read-back above the request is normal there
+  and not a bug. The silent partial grant is the failure mode, hence the return
+  value. Only ever grows, so it cannot undo earlier tuning; `None` skips a
+  direction, and both `None` is a pure query.
+
 - **`bind_error_hint(exc, port=None) -> str | None`** — an actionable sentence
   for a bind failure, recognising POSIX errnos *and* Windows `10013`/`10048`.
   Returns `None` for anything unrecognised, so the caller keeps the original
@@ -1076,8 +1148,8 @@ protocols, where a wildcard-bound server otherwise cannot tell which network a
 request came from.
 
 `recv(bufsize=65535, resolve_interface=True) -> Datagram`, a `NamedTuple` of
-`.data`, `.sender`, `.local_address`, `.interface_index`, `.interface` and
-`.control_truncated`. `send(data, address, port, src=None) -> int` pins the
+`.data`, `.sender`, `.local_address`, `.interface_index`, `.interface`,
+`.control_truncated` and `.truncated`. `send(data, address, port, src=None) -> int` pins the
 outgoing interface; `address` accepts `AddressLike` and `src` the usual loose
 interface spec (`Interface`, MAC, adapter name or address). `close()` closes
 the wrapped socket, and the endpoint is a **context manager**
@@ -1131,6 +1203,17 @@ the wrapped socket, and the endpoint is a **context manager**
   ignores* a v6 cmsg on a v4 socket, so there is no correct silent behaviour
   available. An `OSError` from the kernel, meaning a source this host cannot
   send from, propagates; only platform incapability degrades to `sendto`.
+- **`truncated`** reports `MSG_TRUNC`: the **payload** did not fit `bufsize`
+  and `.data` is the leading part of a longer datagram. A different question
+  from `control_truncated`, and the one that silently corrupts a decode — a
+  protocol parser handed a message cut mid-field reports a malformed packet
+  rather than a short read. Measured on Linux with `bufsize=576`: a 1102-octet
+  datagram arrived with the flag set and the flag discarded, leaving the caller
+  nothing to check. **Reported, not raised**: deciding that a short datagram is
+  fatal belongs to the protocol, not here. It is reported on the no-pktinfo path
+  too, which goes through `recvmsg` with a zero-length control buffer rather than
+  `recvfrom` precisely because `recvfrom` cannot report it — losing the interface
+  is a documented degrade, losing this is silent data loss.
 - **`control_truncated`** reports `MSG_CTRUNC`: the kernel had more ancillary
   data than the buffer held. When it is `True` and the interface fields are
   empty, they are empty because something was dropped. The buffer is sized for

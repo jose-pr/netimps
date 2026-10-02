@@ -87,6 +87,9 @@ from ._ip import (
     get_ip,
     is_link_scoped,
     normalize_host,
+    join_host,
+    unmap,
+    is_wildcard,
     subtract,
 )
 
@@ -121,6 +124,9 @@ __all__ = [
     "collapse",
     "subtract",
     "normalize_host",
+    "join_host",
+    "unmap",
+    "is_wildcard",
     "get_default_port",
     "get_default_scheme",
     "register_port",
@@ -143,6 +149,9 @@ __all__ = [
     "wait_for_port",
     "get_route",
     "bind",
+    "SocketOption",
+    "disable_connreset",
+    "set_buffer_size",
     "bind_error_hint",
     "interface_for",
     "interfaces_for",
@@ -530,6 +539,9 @@ if _msg_patch_requested():
 from ._udp import Datagram, UdpEndpoint  # noqa: E402
 from ._sockets import (  # noqa: E402
     bind,
+    SocketOption,
+    disable_connreset,
+    set_buffer_size,
     discover_mtu,
     get_pmtu,
     get_tcp_mss,

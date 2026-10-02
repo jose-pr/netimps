@@ -39,7 +39,7 @@ from ._ip import (
 )
 from ._mac import MACAddress
 from ._scheme import coerce_port as _coerce_port
-from typing import Any, Iterable, Iterator, List, Optional, Tuple, Union
+from typing import Any, Iterable, Iterator, List, NamedTuple, Optional, Tuple, Union
 
 _InterfaceQuery = Union[
     Interface,
@@ -51,6 +51,9 @@ _InterfaceQuery = Union[
 
 __all__ = [
     "bind",
+    "SocketOption",
+    "disable_connreset",
+    "set_buffer_size",
     "bind_error_hint",
     "interface_for",
     "interfaces_for",
@@ -113,6 +116,24 @@ _BSD_IP_DONTFRAG = (
 _BSD_IPV6_DONTFRAG = 62  # <netinet6/in6.h>
 
 
+class SocketOption(NamedTuple):
+    """One ``setsockopt`` triple, for :func:`bind`'s ``options=``.
+
+    ``bind`` has always accepted bare ``(level, name, value)`` tuples and still
+    does -- this only gives the triple a name, so a caller building a list of
+    them reads as something other than ``Iterable[Tuple[int, int, Any]]``::
+
+        bind("", 67, options=[SocketOption(SOL_SOCKET, SO_RCVBUF, 1 << 20)])
+
+    A :class:`typing.NamedTuple`, so it *is* a tuple: existing code that passes
+    plain tuples, and code that unpacks these, both keep working.
+    """
+
+    level: int
+    name: int
+    value: Any
+
+
 def bind(
     address: str = "",
     port: int = 0,
@@ -123,6 +144,7 @@ def bind(
     allow_address_takeover: bool = False,
     reuse_port: bool = False,
     broadcast: bool = False,
+    connreset: bool = True,
     interface: "InterfaceSpec" = None,
     options: "Iterable[Tuple[int, int, Any]]" = (),
     listen: "Optional[int]" = None,
@@ -153,8 +175,15 @@ def bind(
     :param reuse_port: sets ``SO_REUSEPORT``. **A no-op where the option does
         not exist** (Windows) rather than an error, so the same call works
         everywhere.
-    :param options: extra ``(level, name, value)`` triples for anything not
-        covered by the named arguments.
+    :param connreset: Windows only, and only for UDP. Pass ``False`` to turn
+        ``SIO_UDP_CONNRESET`` off, so that an ICMP port-unreachable provoked by
+        an earlier send stops being reported as
+        :class:`ConnectionResetError` on a *later*, unrelated receive. A no-op
+        everywhere else. See :func:`disable_connreset` for why the default is
+        to leave it alone.
+    :param options: extra ``(level, name, value)`` triples -- or
+        :class:`SocketOption` values -- for anything not covered by the named
+        arguments.
     :param listen: call ``listen(backlog)`` after binding. Ignored for
         datagram sockets, where it is meaningless.
 
@@ -203,6 +232,8 @@ def bind(
                     pass  # present but refused by this kernel -- not fatal
         if broadcast:
             sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_BROADCAST, 1)
+        if not connreset and kind == _socket.SOCK_DGRAM:
+            disable_connreset(sock)
         for level, name, value in options:
             sock.setsockopt(level, name, value)
 
@@ -1838,3 +1869,107 @@ def _ip_header_bytes(dst) -> int:
 def _tcp_header_overhead(dst) -> int:
     """IP + TCP header bytes for ``dst``: 40 (IPv4) or 60 (IPv6)."""
     return _ip_header_bytes(dst) + 20
+
+
+def disable_connreset(sock: "_socket.socket") -> bool:
+    """Stop Windows reporting an ICMP port-unreachable on a *later* receive.
+
+    Returns whether anything was changed -- ``False`` off Windows, where there
+    is nothing to change.
+
+    **The behaviour this turns off.** On Windows an unconnected UDP socket that
+    provoked an ICMP port-unreachable gets it delivered as
+    :class:`ConnectionResetError` from a subsequent ``recvfrom`` -- one that may
+    have nothing to do with the peer that refused. A receive loop then dies on a
+    packet some unrelated host did not want. POSIX reports asynchronous ICMP
+    errors only on *connected* sockets, so this whole class of surprise does not
+    arise there.
+
+    This is the inverse face of a rule this package documents from the other
+    side: an unconnected POSIX probe never *sees* a port-unreachable, which is
+    why :class:`netimps.UdpEndpoint`'s MTU probing connects. The knowledge was
+    here; the switch was not.
+
+    **Not on by default**, in :func:`bind` or anywhere else. The report is
+    occasionally what a caller wants -- a client talking to one peer learns the
+    peer is gone -- and turning it off silently would remove information from
+    code that never asked. A *server* loop almost always wants it off; pass
+    ``bind(..., connreset=False)`` or call this.
+
+    **There is no stdlib route to this.** Measured on 3.14: CPython exports no
+    ``socket.SIO_UDP_CONNRESET`` on any version, and even given the documented
+    value (``0x9800000C``) ``socket.ioctl`` refuses it -- that method whitelists
+    a handful of commands and answers ``ValueError: invalid ioctl command`` for
+    the rest. So this goes through ``WSAIoctl`` by ``ctypes``. A downstream
+    project's own copy of this helper used the ``getattr`` route and was
+    therefore a **silent no-op on every platform**, which is the kind of thing
+    worth owning here once.
+
+    Best effort: a kernel or socket type that refuses the request leaves the
+    socket as it was rather than raising, since this is an adjustment to
+    behaviour and never a correctness requirement.
+    """
+    if _sys.platform != "win32":
+        return False
+    try:
+        from . import _winsock
+    except Exception:  # pragma: no cover - a Windows without ws2_32
+        return False
+    try:
+        _winsock.set_udp_connreset(sock, False)
+    except (OSError, AttributeError, ValueError):
+        return False
+    return True
+
+
+def set_buffer_size(
+    sock: "_socket.socket",
+    receive: "Optional[int]" = None,
+    send: "Optional[int]" = None,
+) -> "Tuple[int, int]":
+    """Grow ``SO_RCVBUF``/``SO_SNDBUF``, and report what was actually granted.
+
+    Returns ``(receive, send)`` as **read back** from the socket, never as
+    requested::
+
+        got_rx, got_tx = set_buffer_size(sock, receive=4 << 20)
+        if got_rx < 4 << 20:
+            log.warning("kernel granted %d of 4 MiB", got_rx)
+
+    The default UDP buffers are small -- 64 KiB on Windows -- so a burst of
+    large datagrams overruns them and the tail is dropped, which at the protocol
+    level looks like loss and costs a timeout per window. Raising them is the
+    fix; knowing whether the raise *took* is the part that gets skipped.
+
+    **The kernel is not obliged to agree, and does not say so.** ``setsockopt``
+    succeeds and then grants less, capped by ``net.core.rmem_max`` on Linux, and
+    Linux also *doubles* what is asked for its own bookkeeping, so a read-back
+    larger than the request is normal there and not a bug. Returning the
+    read-back is the whole point: a silent partial grant is the failure mode.
+
+    Only grows, never shrinks: a value already at or above the request is left
+    alone, so this cannot undo a caller's earlier tuning. ``None`` skips a
+    direction. A refused option is skipped rather than raised, and the
+    corresponding return value is whatever the socket reports.
+    """
+    for option, wanted in (
+        (_socket.SO_RCVBUF, receive),
+        (_socket.SO_SNDBUF, send),
+    ):
+        if wanted is None:
+            continue
+        if wanted < 0:
+            raise ValueError("buffer size must not be negative, got %r" % (wanted,))
+        try:
+            if sock.getsockopt(_socket.SOL_SOCKET, option) < wanted:
+                sock.setsockopt(_socket.SOL_SOCKET, option, wanted)
+        except OSError:
+            pass  # refused by this kernel or socket type -- report what it has
+
+    def _current(option: int) -> int:
+        try:
+            return int(sock.getsockopt(_socket.SOL_SOCKET, option))
+        except OSError:  # pragma: no cover - a socket that reports neither
+            return 0
+
+    return _current(_socket.SO_RCVBUF), _current(_socket.SO_SNDBUF)

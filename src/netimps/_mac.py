@@ -137,6 +137,32 @@ class MACAddress:
         except (ValueError, TypeError):
             return None
 
+    def hex(
+        self, sep: "Optional[Union[str, bytes]]" = None, bytes_per_sep: int = 1
+    ) -> str:
+        """The octets as hex, exactly like :meth:`bytes.hex`.
+
+        ``sep`` and ``bytes_per_sep`` mean what they do there; omitting ``sep``
+        gives the unseparated form::
+
+            MACAddress("aa:bb:cc:dd:ee:ff").hex()        # 'aabbccddeeff'
+            MACAddress("aa:bb:cc:dd:ee:ff").hex(":")     # 'aa:bb:cc:dd:ee:ff'
+            MACAddress("aa:bb:cc:dd:ee:ff").hex("-", 2)  # 'aabb-ccdd-eeff'
+
+        A pure passthrough to ``self.packed.hex``, which exists because this is
+        a value object rather than a ``bytes`` subclass, so the method is not
+        inherited -- and callers reasonably expect it. (A downstream project was
+        subclassing this type partly to add it back.)
+
+        For the conventional colon- or hyphen-separated forms prefer
+        :meth:`as_str`, which also offers the uppercase rendering; this is the
+        one to reach for when the target wants ``bytes.hex`` semantics
+        specifically, such as ``bytes_per_sep`` grouping.
+        """
+        if sep is None:
+            return self.packed.hex()
+        return self.packed.hex(sep, bytes_per_sep)  # type: ignore[arg-type]
+
     def as_str(self, sep: str = ":", upper: bool = False) -> str:
         """Return the MAC as a string with ``sep`` between octets.
 

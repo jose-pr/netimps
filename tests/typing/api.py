@@ -36,6 +36,7 @@ from typing_extensions import assert_type
 from netimps import (
     Fqdn,
     Host,
+    SocketOption,
     IPAddress,
     IPAddressLike,
     IPInterface,
@@ -54,8 +55,11 @@ from netimps import (
     interfaces_for,
     is_local_address,
     is_valid,
+    is_wildcard,
+    join_host,
     parse,
     try_parse,
+    unmap,
 )
 
 
@@ -242,3 +246,18 @@ assert_type(fqdn.is_hostname(), bool)
 assert_type(fqdn.common_ancestor("example.com"), Optional[Fqdn])
 assert_type(fqdn.wire, bytes)
 assert_type(fqdn.wire_length, int)
+
+
+# ---------------------------------------------------------------------------
+# The consumer-sweep additions. `unmap` returning the union matters: a caller
+# that assumed IPv4Address would be wrong for an unmapped v6 input.
+# ---------------------------------------------------------------------------
+
+assert_type(join_host("example.com", 8080), str)
+assert_type(join_host("::1"), str)
+assert_type(unmap("::ffff:10.0.0.5"), IPAddress)
+assert_type(is_wildcard("0.0.0.0"), bool)
+
+option = SocketOption(1, 2, 3)
+assert_type(option.level, int)
+assert_type(option.name, int)
