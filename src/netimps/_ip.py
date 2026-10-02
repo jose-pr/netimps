@@ -11,7 +11,13 @@ from __future__ import annotations
 
 import ipaddress as _ipaddress
 import socket as _socket
-from typing import Iterable, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Iterable, List, Optional, Tuple, Union
+
+if TYPE_CHECKING:
+    # Type-only, to keep `Host.fqdn` precisely annotated without a runtime
+    # cycle: `_fqdn` imports this module's `IPAddress` to reject an address
+    # literal, so a module-level import here would be circular.
+    from ._fqdn import Fqdn
 
 from ipaddress import (
     IPv4Address,
@@ -501,6 +507,27 @@ class Host:
         from . import is_valid
 
         return is_valid(self.value, IPAddress)
+
+    @property
+    def fqdn(self) -> "Optional[Fqdn]":
+        """This host as an :class:`Fqdn`, or ``None`` if it is an address.
+
+        The bridge between the two types. :class:`Host` is the union -- "an
+        address *or* a name" -- while :class:`Fqdn` is a name algebra that
+        refuses an address outright, so this is the narrowing::
+
+            Host("www.example.com").fqdn.domain   # Fqdn('example.com')
+            Host("10.0.0.5").fqdn                 # None
+
+        ``None`` is also the answer for a name that is syntactically not one
+        (over-long, an empty inner label), since the alternative would be
+        raising from a property.
+        """
+        if self.is_address:
+            return None
+        from ._fqdn import Fqdn
+
+        return Fqdn.try_parse(self.value)
 
     def ip(self, refresh: bool = False) -> "Optional[IPAddress]":
         """Resolve to an address, or ``None``.

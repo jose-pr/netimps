@@ -149,6 +149,9 @@ __all__ = [
     "is_local_address",
     "UdpEndpoint",
     "Datagram",
+    # Domain names as a value type. Note the pathlib inversion -- see Fqdn.
+    "Fqdn",
+    "FqdnLike",
     # Ancillary-data messaging, available on every platform (Windows included).
     "recvmsg",
     "sendmsg",
@@ -496,6 +499,7 @@ from ._multicast import (  # noqa: E402
     leave_group,
     multicast_socket,
 )
+from ._fqdn import Fqdn, FqdnLike  # noqa: E402
 from ._retry import backoff_delays, retry  # noqa: E402
 from ._msg import (  # noqa: E402
     CMSG_LEN,

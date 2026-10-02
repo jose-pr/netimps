@@ -882,6 +882,82 @@ receives nothing, and looks fine:
   raises for an IPv6 group, because index `0` means "kernel's choice" — the
   default `interface=` was passed to override.
 
+## `Fqdn` — domain names as a value type
+
+**`Fqdn(*parts)`** — a domain name with label algebra. Immutable, hashable,
+ordered. Built from a dotted string or from separate labels, **leftmost first**:
+`Fqdn("www.example.com")`, `Fqdn("www", "example", "com")`,
+`Fqdn("www", Fqdn("example.com"))`.
+
+- **The algebra is inverted from `pathlib`, and that is the one thing to get
+  right.** DNS puts the *most* significant label last, so every borrowed name
+  points the other way:
+
+  | | `Fqdn` | `pathlib.PurePath` |
+  | --- | --- | --- |
+  | `.name` | **leftmost** label (`www`) | rightmost component |
+  | `.parent` | strips the **leftmost** (`example.com`) | strips the rightmost |
+  | `/` | **prepends** (`Fqdn("example.com") / "www"` → `www.example.com`) | appends |
+
+  Assume pathlib semantics and you get all three backwards.
+- **DNS vocabulary is primary; the pathlib spelling is an alias on the same
+  value.** `.labels`/`.parts`, `.hostname`/`.name`, `.domain`/`.parent`,
+  `.domains`/`.parents`, `.is_fully_qualified()`/`.is_absolute()`,
+  `.with_hostname()`/`.with_name()`. `.tld` has **no** `.suffix` alias, on
+  purpose: a filesystem suffix is part of a name (`.txt`) while a TLD is a whole
+  label, so that analogy misleads.
+- **The trailing dot is absoluteness, and it is part of identity.**
+  `example.com.` is fully qualified; bare `example.com` is relative to the
+  resolver's search list and can mean different things on different hosts — so
+  `Fqdn("example.com") != Fqdn("example.com.")`, exactly as
+  `Path("a") != Path("/a")`. Compare `.labels` when qualification is not what
+  you mean. `as_fully_qualified()` and `relative()` convert.
+- **An address literal is refused**: `Fqdn("10.0.0.1")` and `Fqdn("::1")` raise
+  `ValueError`. This is a *name* algebra — labels, a parent domain, a TLD are
+  things an IP does not have. Use **`Host`** for a value that may be either, and
+  **`Host.fqdn`** to narrow (an `Fqdn`, or `None` when it is an address).
+  Digit-heavy real names are fine: `4.3.2.1.in-addr.arpa` and `0.pool.ntp.org`
+  both parse.
+- **`.domain` is not the registrable domain.** `Fqdn("example.com").domain` is
+  `Fqdn('com')`, a public suffix. Telling `example.co.uk` (registrable) from
+  `co.uk` (not) needs the Public Suffix List, a sizeable data file with its own
+  update cadence, and this package has **no hard runtime dependencies**. The gap
+  is documented rather than papered over with a heuristic that handles `.com`
+  and mishandles `.co.uk`.
+- `.domain` returns **`None`** at the top rather than itself. `Path("/").parent`
+  is `Path("/")`, which is right for a filesystem root and would make
+  `while f.domain:` loop forever here. `.domains` gives the whole chain,
+  nearest first.
+- **Ordered on *reversed* labels**, so `sorted()` groups by TLD then registrant
+  — `['a.com', 'b.com', 'a.org']`, not the text order `['a.com', 'a.org',
+  'b.com']`.
+- **Equality is case-insensitive** (RFC 4343) and `__hash__` agrees. It does
+  **not** coerce a `str`, for the same reason `MACAddress` does not; use
+  `Fqdn.try_parse(text) == name`.
+- Other members: `.tld`, `len()` (label count, not characters), iteration and
+  indexing over labels (a *slice* gives a plain tuple, since an arbitrary slice
+  of a name usually is not one), `in` (tests a **label**, case-insensitively),
+  `.child(*labels)` as the spelled-out `/`, `.is_subdomain_of()` (a name is
+  **not** a subdomain of itself; qualification is ignored), `.relative_to()`
+  (raises `ValueError` if not under, and the result is never qualified),
+  `.reverse()` (flips label order — **not** a reverse DNS pointer, which is
+  built from an address and so is absent here), and
+  `is_valid`/`try_parse` classmethods matching `MACAddress`'s shape.
+- **Network helpers are pass-throughs, not new behaviour**: `.resolve(**kw)` →
+  `resolve()`, `.ping(**kw)` → `ping()`, `.ip(**kw)` → the first address or
+  `None`. A trailing dot survives the delegation, so a fully-qualified name
+  still bypasses the search list. Unlike `Host.ip()`, `.ip()` does **not**
+  cache: this type is immutable, and a cache on it would be a lie about
+  freshness.
+- **Validation**: 253 printable octets for the name (not the oft-quoted 255 —
+  the wire form spends an octet per label length prefix and one on the root) and
+  63 per label; an empty name or an empty inner label (`a..b`) raises. Non-ASCII
+  is IDNA-encoded via the standard library, which is **IDNA 2003**, not the
+  IDNA 2008 of the third-party `idna` package.
+
+**`FqdnLike`** — `Union[Fqdn, str]`, the accepted-input union wherever a method
+takes "another name".
+
 ## Ancillary data: `recvmsg` / `sendmsg` on every platform
 
 CPython ships no `recvmsg`/`sendmsg` on Windows — not a missing constant but a
@@ -1059,6 +1135,11 @@ resolution fails — the case a bare `get_ip()` handles badly, since it returns
 `None` and loses the name.
 
 - `.is_address` — already a literal, no DNS needed.
+- `.fqdn` — this host as an **`Fqdn`**, or `None` when it is an address (or not
+  a syntactically possible name). The bridge between the two types: `Host` is
+  the union "address *or* name", while `Fqdn` is the name algebra that refuses
+  an address outright. `Host("www.example.com").fqdn.domain` →
+  `Fqdn('example.com')`; `Host("10.0.0.5").fqdn` → `None`.
 - `.ip(refresh=False)` — resolve to an address or `None`. **Cached, including
   failure**, since the common use is several lookups on one object; pass
   `refresh=True` to retry.

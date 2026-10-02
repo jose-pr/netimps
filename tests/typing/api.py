@@ -29,11 +29,13 @@ name from its own bundled typeshed, and this file never runs.
 
 from __future__ import annotations
 
-from typing import Iterator, Optional, Union
+from typing import Iterator, Optional, Tuple, Union
 
 from typing_extensions import assert_type
 
 from netimps import (
+    Fqdn,
+    Host,
     IPAddress,
     IPAddressLike,
     IPInterface,
@@ -186,3 +188,47 @@ for matched in interfaces_for(IPv4Network("127.0.0.0/8")):
     assert_type(matched, Interface)
 
 assert_type(is_local_address("127.0.0.1"), bool)
+
+# ---------------------------------------------------------------------------
+# Fqdn -- the name algebra. The properties that return Optional are the point:
+# a checker must force the `is None` branch at the top of a name, because the
+# natural `while f.domain:` walk depends on it terminating.
+# ---------------------------------------------------------------------------
+
+fqdn = Fqdn("www.example.com")
+assert_type(fqdn.labels, Tuple[str, ...])
+assert_type(fqdn.parts, Tuple[str, ...])
+assert_type(fqdn.hostname, str)
+assert_type(fqdn.name, str)
+assert_type(fqdn.tld, str)
+assert_type(fqdn.domain, Optional[Fqdn])
+assert_type(fqdn.parent, Optional[Fqdn])
+assert_type(fqdn.domains, Tuple[Fqdn, ...])
+assert_type(fqdn.parents, Tuple[Fqdn, ...])
+assert_type(fqdn.is_fully_qualified(), bool)
+assert_type(fqdn.is_absolute(), bool)
+
+# The algebra returns Fqdn, never Optional -- only `.domain` can run out.
+assert_type(fqdn / "deep", Fqdn)
+assert_type(fqdn / Fqdn("deep"), Fqdn)
+assert_type(fqdn.child("a", "b"), Fqdn)
+assert_type(fqdn.with_hostname("mail"), Fqdn)
+assert_type(fqdn.with_name("mail"), Fqdn)
+assert_type(fqdn.relative_to("example.com"), Fqdn)
+assert_type(fqdn.reverse(), Fqdn)
+assert_type(fqdn.as_fully_qualified(), Fqdn)
+assert_type(fqdn.relative(), Fqdn)
+assert_type(fqdn.is_subdomain_of("example.com"), bool)
+assert_type(fqdn.is_subdomain_of(Fqdn("example.com")), bool)
+
+assert_type(Fqdn.try_parse("example.com"), Optional[Fqdn])
+assert_type(Fqdn.is_valid("example.com"), bool)
+
+# Walking up terminates, and the checker knows it can.
+current: Optional[Fqdn] = fqdn
+while current is not None:
+    assert_type(current.hostname, str)
+    current = current.domain
+
+# Host narrows to a name, or None for an address.
+assert_type(Host("www.example.com").fqdn, Optional[Fqdn])

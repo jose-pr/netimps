@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`Fqdn`** -- a domain name as a value type, with label algebra: `.labels`,
+  `.hostname`, `.domain`, `.domains`, `.tld`, `.is_fully_qualified()`,
+  `.with_hostname()`, `.is_subdomain_of()`, `.relative_to()`, `.reverse()`, and
+  `/` to compose. Immutable, hashable, ordered on *reversed* labels so sorting
+  groups by TLD. Case-insensitive equality per RFC 4343, with `__hash__`
+  agreeing. `.resolve()`, `.ping()` and `.ip()` delegate to the existing module
+  functions. `is_valid`/`try_parse` classmethods match `MACAddress`'s shape, and
+  `FqdnLike` is the accepted-input union.
+
+  **The algebra is deliberately inverted from `pathlib`**, because DNS puts the
+  most significant label last: `.name` is the *leftmost* label, `.parent` strips
+  the *leftmost*, and `/` **prepends** -- `Fqdn("example.com") / "www"` is
+  `www.example.com`. DNS vocabulary is primary and the pathlib spelling is an
+  alias on the same value (`.domain`/`.parent`, `.hostname`/`.name`,
+  `.labels`/`.parts`). There is no `.suffix` alias for `.tld`: a filesystem
+  suffix is part of a name while a TLD is a whole label.
+
+  An **address literal is refused** -- `Fqdn("10.0.0.1")` raises -- because this
+  is a name algebra and an IP has no labels, parent or TLD. The trailing dot is
+  absoluteness and is part of identity, so `Fqdn("example.com") !=
+  Fqdn("example.com.")`, as `Path("a") != Path("/a")`. `.domain` is **not** the
+  registrable domain (`example.com`'s is `com`): that needs the Public Suffix
+  List, which would be a hard dependency, so the gap is documented instead.
+- **`Host.fqdn`** -- the bridge: an `Fqdn` when the host is a name, `None` when
+  it is an address. `Host` stays the union type and is otherwise unchanged.
 - **`recvmsg()` / `sendmsg()` now work on Windows**, and are public on every
   platform, along with `CMSG_LEN()`, `CMSG_SPACE()` and `supports_recvmsg()`.
   CPython ships neither method on Windows, so this binds `WSARecvMsg` and
