@@ -934,15 +934,57 @@ ordered. Built from a dotted string or from separate labels, **leftmost first**:
 - **Equality is case-insensitive** (RFC 4343) and `__hash__` agrees. It does
   **not** coerce a `str`, for the same reason `MACAddress` does not; use
   `Fqdn.try_parse(text) == name`.
+- **`name in domain` is containment, the DNS reading of `address in network`** —
+  the stdlib idiom this package layers over:
+
+  ```python
+  Fqdn("www.example.com") in Fqdn("example.com")   # True
+  "mail.example.com" in Fqdn("example.com")         # True — str accepted
+  Fqdn("example.com") in Fqdn("example.com")        # True — "at or under"
+  ```
+
+  **Inclusive**, where `.is_subdomain_of()` is strict: the pair mirrors `<=`
+  against `<`, and a zone contains its own apex just as a `/24` contains its
+  network address. Qualification is ignored, and anything unparseable answers
+  `False` rather than raising, so it stays safe in a filter. It is **not** a
+  label test — that is `"com" in f.labels`.
+- **Text interop**: `str(f)` is the name (with its trailing dot if it has one),
+  and `f + str` / `str + f` give a **plain `str`**, for building a URL or a log
+  line without reaching for `str()` first. `Fqdn + Fqdn` raises and points at
+  `/`, since concatenating two names as text yields
+  `'www.example.comexample.com'`.
+- **`.unicode`** — the display form, decoding punycode back:
+  `Fqdn("münchen.de").unicode` is `'münchen.de'` while `str()` is
+  `'xn--mnchen-3ya.de'`. Labels are stored ASCII because that is what goes on the
+  wire and what comparisons use. An undecodable label passes through unchanged.
+- **`.wire`** / **`.wire_length`** — the DNS wire encoding
+  (`b'\x03www\x07example\x03com\x00'`), delegated to the package's own encoder so
+  it cannot drift from what `resolve_wire()` sends. Always absolute; there is no
+  relative wire form. `.wire_length` is the figure the **255**-octet protocol
+  limit applies to, as against the 253 printable limit checked at construction —
+  the gap being one length prefix per label plus the root.
+- **`.is_hostname()`** — whether every label is legal RFC 1123 LDH (letters,
+  digits, hyphens; no leading or trailing hyphen). **Narrower than what the type
+  accepts, on purpose**: `_dmarc.example.com`, `_sip._tcp.example.com` and
+  `_acme-challenge.example.com` are all real DNS names, so rejecting underscores
+  at construction would make this useless for SRV, DMARC and ACME work. The
+  constructor takes the broad DNS rule; this reports the narrow host rule.
+- **`.is_wildcard`** — whether the leftmost label is `*`. A predicate only:
+  there is deliberately **no `matches()`**, because DNS (RFC 4592) and TLS
+  certificate matching (RFC 6125) disagree about whether `*.example.com` covers
+  `a.b.example.com`, and choosing one silently would be wrong for half of
+  callers. Build the rule you need from `.is_subdomain_of()` and `len()`.
+- **`.common_ancestor(other)`** — the deepest domain enclosing both names, or
+  `None` when they share no label. `Fqdn("a.example.com")
+  .common_ancestor("b.example.com")` is `Fqdn('example.com')`.
 - Other members: `.tld`, `len()` (label count, not characters), iteration and
   indexing over labels (a *slice* gives a plain tuple, since an arbitrary slice
-  of a name usually is not one), `in` (tests a **label**, case-insensitively),
-  `.child(*labels)` as the spelled-out `/`, `.is_subdomain_of()` (a name is
-  **not** a subdomain of itself; qualification is ignored), `.relative_to()`
-  (raises `ValueError` if not under, and the result is never qualified),
-  `.reverse()` (flips label order — **not** a reverse DNS pointer, which is
-  built from an address and so is absent here), and
-  `is_valid`/`try_parse` classmethods matching `MACAddress`'s shape.
+  of a name usually is not one), `.child(*labels)` as the spelled-out `/`,
+  `.is_subdomain_of()` (a name is **not** a subdomain of itself; qualification
+  ignored), `.relative_to()` (raises `ValueError` if not under, and the result is
+  never qualified), `.reverse()` (flips label order — **not** a reverse DNS
+  pointer, which is built from an address; `netimps._dnswire.reverse_name()` is
+  that), and `is_valid`/`try_parse` classmethods matching `MACAddress`'s shape.
 - **Network helpers are pass-throughs, not new behaviour**: `.resolve(**kw)` →
   `resolve()`, `.ping(**kw)` → `ping()`, `.ip(**kw)` → the first address or
   `None`. A trailing dot survives the delegation, so a fully-qualified name

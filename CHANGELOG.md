@@ -11,12 +11,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - **`Fqdn`** -- a domain name as a value type, with label algebra: `.labels`,
   `.hostname`, `.domain`, `.domains`, `.tld`, `.is_fully_qualified()`,
-  `.with_hostname()`, `.is_subdomain_of()`, `.relative_to()`, `.reverse()`, and
-  `/` to compose. Immutable, hashable, ordered on *reversed* labels so sorting
-  groups by TLD. Case-insensitive equality per RFC 4343, with `__hash__`
-  agreeing. `.resolve()`, `.ping()` and `.ip()` delegate to the existing module
-  functions. `is_valid`/`try_parse` classmethods match `MACAddress`'s shape, and
-  `FqdnLike` is the accepted-input union.
+  `.with_hostname()`, `.is_subdomain_of()`, `.relative_to()`, `.reverse()`,
+  `.common_ancestor()`, and `/` to compose. Immutable, hashable, ordered on
+  *reversed* labels so sorting groups by TLD. Case-insensitive equality per
+  RFC 4343, with `__hash__` agreeing. `.resolve()`, `.ping()` and `.ip()`
+  delegate to the existing module functions. `is_valid`/`try_parse` classmethods
+  match `MACAddress`'s shape, and `FqdnLike` is the accepted-input union.
+
+  **`name in domain` works like the stdlib's `address in network`** --
+  `Fqdn("www.example.com") in Fqdn("example.com")`. Inclusive, where
+  `.is_subdomain_of()` is strict: a zone contains its own apex just as a `/24`
+  contains its network address. Accepts a `str`, ignores qualification, and
+  answers `False` rather than raising for anything unparseable. A **label** test
+  is `"com" in f.labels`.
+
+  **Text interop**: `str(f)` is the name, and `f + str` / `str + f` give a plain
+  `str`, for building a URL or a log line. `Fqdn + Fqdn` raises and points at
+  `/`.
+
+  Also `.unicode` (the display form, decoding punycode -- labels are stored
+  ASCII because that is what goes on the wire), `.wire`/`.wire_length` (the DNS
+  wire encoding, delegated to the package's own encoder; `.wire_length` is what
+  the 255-octet protocol limit applies to, against the 253 printable limit),
+  `.is_hostname()` (RFC 1123 LDH, **narrower** than what the type accepts, since
+  `_dmarc` and `_sip._tcp` are real names), and `.is_wildcard` (a predicate only
+  -- no `matches()`, because DNS and TLS disagree about whether `*.example.com`
+  covers `a.b.example.com`).
 
   **The algebra is deliberately inverted from `pathlib`**, because DNS puts the
   most significant label last: `.name` is the *leftmost* label, `.parent` strips

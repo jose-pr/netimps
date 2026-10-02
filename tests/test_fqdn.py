@@ -168,8 +168,9 @@ def test_iteration_indexing_and_membership():
     # A slice is labels, not a name: an arbitrary slice usually is not one.
     assert f[1:] == ("b", "c", "d")
     assert isinstance(f[1:], tuple)
-    assert "b" in f and "B" in f and "z" not in f
-    assert 42 not in f
+    # Label membership lives on `.labels`. `in` on the name itself means
+    # containment -- see test_in_means_containment_like_ip_in_subnet.
+    assert "b" in f.labels and "z" not in f.labels
 
 
 # --------------------------------------------------------------------------- #
@@ -549,3 +550,200 @@ def test_ip_does_not_cache_unlike_host(monkeypatch):
     f.ip()
     f.ip()
     assert len(calls) == 2
+
+
+# --------------------------------------------------------------------------- #
+# Containment: the `ip in subnet` analogue                                     #
+# --------------------------------------------------------------------------- #
+
+
+def test_in_means_containment_like_ip_in_subnet():
+    """``name in domain`` mirrors the stdlib's ``address in network``.
+
+    This package is a thin layer over ``ipaddress``, so the stdlib idiom wins.
+    An earlier version made ``in`` a *label* test, which reads plausibly and
+    conflicts head-on: ``"com" in Fqdn("www.example.com")`` is True as a label
+    test and False as containment, and one expression cannot answer both.
+    """
+    import ipaddress
+
+    # The precedent this follows.
+    assert ipaddress.ip_address("10.0.0.5") in ipaddress.ip_network("10.0.0.0/24")
+
+    assert Fqdn("www.example.com") in Fqdn("example.com")
+    assert Fqdn("a.b.example.com") in Fqdn("example.com")
+    assert Fqdn("example.com") not in Fqdn("www.example.com")
+    assert Fqdn("example.org") not in Fqdn("example.com")
+    # Not fooled by a shared text suffix across a label boundary.
+    assert Fqdn("notexample.com") not in Fqdn("example.com")
+
+
+def test_in_is_inclusive_where_is_subdomain_of_is_strict():
+    """The pair mirrors ``<=`` against ``<``, and the difference is deliberate.
+
+    A zone contains its own apex, exactly as a /24 contains its network
+    address -- so ``in`` is the inclusive one, matching ipaddress.
+    """
+    f = Fqdn("example.com")
+    assert f in f
+    assert not f.is_subdomain_of(f)
+
+
+def test_in_accepts_a_string_and_ignores_qualification():
+    assert "mail.example.com" in Fqdn("example.com")
+    assert Fqdn("www.example.com.") in Fqdn("example.com")
+    assert Fqdn("www.example.com") in Fqdn("example.com.")
+
+
+def test_in_is_a_total_predicate():
+    """False, never an exception, so it stays safe inside a filter."""
+    for junk in ("a..b", "", "10.0.0.1", 42, None, object()):
+        assert junk not in Fqdn("example.com")
+
+
+def test_in_is_usable_as_a_filter():
+    names = [Fqdn("a.example.com"), Fqdn("b.example.org"), Fqdn("c.example.com")]
+    zone = Fqdn("example.com")
+    assert [str(n) for n in names if n in zone] == ["a.example.com", "c.example.com"]
+
+
+# --------------------------------------------------------------------------- #
+# Text interop                                                                 #
+# --------------------------------------------------------------------------- #
+
+
+def test_str_gives_the_name():
+    assert str(Fqdn("www.example.com")) == "www.example.com"
+    assert str(Fqdn("www.example.com.")) == "www.example.com."
+    assert "{}".format(Fqdn("example.com")) == "example.com"
+    assert "%s:443" % (Fqdn("example.com"),) == "example.com:443"
+
+
+def test_addition_with_a_string_gives_a_string():
+    f = Fqdn("example.com")
+    assert f + "/health" == "example.com/health"
+    assert isinstance(f + "/health", str)
+    assert "https://" + f == "https://example.com"
+    assert isinstance("https://" + f, str)
+    # A fully qualified name contributes its dot, because + is text.
+    assert Fqdn("example.com.") + "/x" == "example.com./x"
+
+
+def test_adding_two_names_raises_and_names_the_operator_that_works():
+    """Text-concatenating two names gives garbage, so it is refused."""
+    with pytest.raises(TypeError, match="to compose"):
+        Fqdn("www") + Fqdn("example.com")
+
+
+def test_adding_a_non_string_is_a_type_error():
+    with pytest.raises(TypeError):
+        Fqdn("example.com") + 42
+    with pytest.raises(TypeError):
+        42 + Fqdn("example.com")
+
+
+# --------------------------------------------------------------------------- #
+# Presentation and classification                                              #
+# --------------------------------------------------------------------------- #
+
+
+def test_unicode_decodes_punycode_for_display():
+    """Labels are stored ASCII; this is the other direction, for humans."""
+    assert Fqdn("münchen.de").unicode == "münchen.de"
+    assert str(Fqdn("münchen.de")) == "xn--mnchen-3ya.de"
+    # Either spelling in gives the same pair out.
+    assert Fqdn("xn--mnchen-3ya.de").unicode == "münchen.de"
+    assert Fqdn("example.com").unicode == "example.com"
+    assert Fqdn("münchen.de.").unicode == "münchen.de."
+
+
+def test_unicode_passes_through_undecodable_punycode():
+    """A display helper that raises is worse than one showing the stored form."""
+    name = Fqdn._from_labels(("xn--", "com"), False)
+    assert name.unicode == "xn--.com"
+
+
+@pytest.mark.parametrize(
+    "name, expected",
+    [
+        ("www.example.com", True),
+        ("a-b.example.com", True),
+        ("123.example.com", True),
+        ("_dmarc.example.com", False),
+        ("_sip._tcp.example.com", False),
+        ("*.example.com", False),
+        ("-bad.example.com", False),
+        ("bad-.example.com", False),
+    ],
+)
+def test_is_hostname_is_narrower_than_what_the_type_accepts(name, expected):
+    """RFC 1123 LDH, reported rather than enforced.
+
+    Underscore names are real and common -- SRV, DMARC, ACME -- so rejecting
+    them at construction would make the type useless for that work. The
+    constructor takes the broad DNS rule; this reports the narrow host rule.
+    """
+    assert Fqdn(name).is_hostname() is expected
+    # All of them are still valid names.
+    assert Fqdn.is_valid(name)
+
+
+def test_is_wildcard_is_a_predicate_only():
+    """No ``matches()``: DNS (RFC 4592) and TLS (RFC 6125) disagree on whether
+    ``*.example.com`` covers ``a.b.example.com``, so choosing one silently would
+    be wrong for half of callers."""
+    assert Fqdn("*.example.com").is_wildcard
+    assert not Fqdn("www.example.com").is_wildcard
+    assert not hasattr(Fqdn("*.example.com"), "matches")
+
+
+@pytest.mark.parametrize(
+    "a, b, expected",
+    [
+        ("a.example.com", "b.example.com", "example.com"),
+        ("a.b.example.com", "c.d.example.com", "example.com"),
+        ("www.example.com", "example.com", "example.com"),
+        ("a.com", "b.com", "com"),
+        ("example.com", "example.org", None),
+    ],
+)
+def test_common_ancestor(a, b, expected):
+    result = Fqdn(a).common_ancestor(b)
+    assert result == (Fqdn(expected) if expected else None)
+
+
+def test_common_ancestor_is_symmetric_in_labels():
+    a, b = Fqdn("x.example.com"), Fqdn("y.example.com")
+    assert a.common_ancestor(b).labels == b.common_ancestor(a).labels
+
+
+# --------------------------------------------------------------------------- #
+# Wire form                                                                    #
+# --------------------------------------------------------------------------- #
+
+
+def test_wire_encoding_delegates_to_the_packages_own_encoder():
+    """So it cannot drift from what ``resolve_wire`` actually sends."""
+    from netimps import _dnswire
+
+    assert Fqdn("www.example.com").wire == b"\x03www\x07example\x03com\x00"
+    assert Fqdn("www.example.com").wire == _dnswire.encode_name("www.example.com")
+
+
+def test_wire_is_always_absolute():
+    """There is no relative wire form, so the root terminator is unconditional."""
+    assert Fqdn("example.com").wire == Fqdn("example.com.").wire
+    assert Fqdn("example.com").wire.endswith(b"\x00")
+
+
+def test_wire_length_explains_the_253_vs_255_gap():
+    """The printable limit is 253; the wire limit is 255.
+
+    The difference is one length prefix per label plus the root terminator,
+    which is exactly what this exposes.
+    """
+    f = Fqdn("www.example.com")
+    assert len(str(f)) == 15
+    assert f.wire_length == 17
+    assert f.wire_length == len(str(f)) + 2
+    assert Fqdn("a").wire_length == 3

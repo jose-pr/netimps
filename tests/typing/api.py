@@ -232,3 +232,13 @@ while current is not None:
 
 # Host narrows to a name, or None for an address.
 assert_type(Host("www.example.com").fqdn, Optional[Fqdn])
+
+# Fqdn's text interop and the containment predicate.
+assert_type(fqdn + "/path", str)
+assert_type("https://" + fqdn, str)
+assert_type(fqdn.unicode, str)
+assert_type(fqdn.is_wildcard, bool)
+assert_type(fqdn.is_hostname(), bool)
+assert_type(fqdn.common_ancestor("example.com"), Optional[Fqdn])
+assert_type(fqdn.wire, bytes)
+assert_type(fqdn.wire_length, int)

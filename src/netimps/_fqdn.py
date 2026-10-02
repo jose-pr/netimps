@@ -464,6 +464,126 @@ class Fqdn:
         found = self.resolve(**kwargs)
         return found[0] if found else None
 
+    # -- presentation and classification -----------------------------------
+
+    @property
+    def unicode(self) -> str:
+        """The name in its display form, decoding punycode back to Unicode.
+
+        Labels are stored ASCII-encoded, because that is what goes on the wire
+        and what comparisons must use. This is the other direction, for showing
+        a name to a person::
+
+            Fqdn("münchen.de").unicode     # 'münchen.de'
+            str(Fqdn("münchen.de"))        # 'xn--mnchen-3ya.de'
+
+        A label that is not valid punycode is passed through unchanged rather
+        than raising -- ``xn--`` on its own is undecodable, and a display helper
+        that throws is worse than one that shows the stored form.
+        """
+        out = []
+        for label in self._labels:
+            if label.lower().startswith("xn--"):
+                try:
+                    out.append(label.encode("ascii").decode("idna"))
+                    continue
+                except (UnicodeError, ValueError):
+                    pass
+            out.append(label)
+        text = ".".join(out)
+        return text + "." if self._absolute else text
+
+    @property
+    def is_wildcard(self) -> bool:
+        """Whether the leftmost label is ``*`` -- a DNS wildcard name.
+
+        A predicate only. Deliberately **no matching method**: DNS wildcards
+        (RFC 4592) synthesise for names at any depth below the wildcard's
+        parent, while TLS certificate matching (RFC 6125) allows exactly one
+        label. Those are different answers for ``a.b.example.com`` against
+        ``*.example.com``, and picking one silently would be wrong for half the
+        callers. Write the rule you need against :meth:`is_subdomain_of`.
+        """
+        return self._labels[0] == "*"
+
+    def is_hostname(self) -> bool:
+        """Whether every label is a legal *host* name label (RFC 1123 LDH).
+
+        Letters, digits and hyphens only, and no leading or trailing hyphen.
+
+        This is **narrower than what this type accepts**, and deliberately so:
+        plenty of real DNS names are not hostnames. ``_dmarc.example.com``,
+        ``_sip._tcp.example.com`` and ``_acme-challenge.example.com`` all carry
+        an underscore, and a wildcard carries ``*``. Rejecting them at
+        construction would make the type useless for SRV, DMARC and ACME work,
+        so the constructor takes the broad DNS rule and this reports the narrow
+        one::
+
+            Fqdn("_dmarc.example.com").is_hostname()   # False -- but valid DNS
+            Fqdn("www.example.com").is_hostname()      # True
+        """
+        for label in self._labels:
+            if not label or label[0] == "-" or label[-1] == "-":
+                return False
+            if not all(
+                char.isascii() and (char.isalnum() or char == "-") for char in label
+            ):
+                return False
+        return True
+
+    def common_ancestor(self, other: "FqdnLike") -> "Optional[Fqdn]":
+        """The deepest domain enclosing both names, or ``None`` if unrelated.
+
+        ``Fqdn("a.example.com").common_ancestor("b.example.com")`` is
+        ``Fqdn('example.com')``. Compared from the right, since that is the end
+        names share. Qualification follows this name's.
+
+        ``None`` rather than an empty name when the two share no label at all:
+        there is no such thing as a zero-label name, and the root is not a
+        useful answer.
+        """
+        suffix = other if isinstance(other, Fqdn) else Fqdn(other)
+        mine, theirs = self._key(), suffix._key()
+        shared = 0
+        for a, b in zip(reversed(mine), reversed(theirs)):
+            if a != b:
+                break
+            shared += 1
+        if not shared:
+            return None
+        return self._from_labels(
+            self._labels[len(self._labels) - shared :], self._absolute
+        )
+
+    # -- wire form ---------------------------------------------------------
+
+    @property
+    def wire(self) -> bytes:
+        """The DNS wire encoding: each label length-prefixed, root terminated.
+
+        ``Fqdn("www.example.com").wire`` is
+        ``b'\\x03www\\x07example\\x03com\\x00'``. Delegates to the package's own
+        encoder, so it cannot drift from what :func:`netimps.resolve_wire`
+        actually sends.
+
+        Always absolute -- the root terminator is present whether or not this
+        name carries a trailing dot, because there is no relative wire form.
+        """
+        from ._dnswire import encode_name
+
+        return encode_name(".".join(self._labels))
+
+    @property
+    def wire_length(self) -> int:
+        """Octets this name occupies on the wire, root terminator included.
+
+        This is the figure the **255**-octet protocol limit applies to, while
+        the 253 limit checked at construction is on the printable form -- the
+        difference being one length prefix per label plus the root. Worth
+        reaching for when a name is going into a packet you are sizing.
+        """
+        return len(self.wire)
+
     # -- plumbing ----------------------------------------------------------
 
     @classmethod
@@ -510,6 +630,39 @@ class Fqdn:
     def __repr__(self) -> str:
         return "Fqdn(%r)" % (str(self),)
 
+    def __add__(self, other: object) -> str:
+        """``fqdn + str`` is a **plain string**, concatenated as text.
+
+        For building a URL, a log line or a config value without reaching for
+        ``str()`` first::
+
+            Fqdn("example.com") + "/health"      # 'example.com/health'
+            "https://" + Fqdn("example.com")     # 'https://example.com'
+
+        A fully qualified name contributes its trailing dot, since that is what
+        ``str()`` gives and ``+`` is defined as text concatenation.
+
+        **Only a ``str`` is accepted.** ``Fqdn + Fqdn`` raises, pointing at
+        ``/``: concatenating two names as text yields
+        ``'www.example.comexample.com'``, which is never what anyone meant, and
+        composing them is what ``/`` is for.
+        """
+        if isinstance(other, Fqdn):
+            raise TypeError(
+                "cannot add two Fqdn values as text -- use `/` to compose names "
+                "(%r / %r), or str() on each if you really want concatenation"
+                % (str(self), str(other))
+            )
+        if not isinstance(other, str):
+            return NotImplemented  # type: ignore[return-value]
+        return str(self) + other
+
+    def __radd__(self, other: object) -> str:
+        """``str + fqdn`` is a plain string. See :meth:`__add__`."""
+        if not isinstance(other, str):
+            return NotImplemented  # type: ignore[return-value]
+        return other + str(self)
+
     def __len__(self) -> int:
         """The number of labels, not the number of characters.
 
@@ -520,11 +673,45 @@ class Fqdn:
     def __iter__(self) -> "Iterator[str]":
         return iter(self._labels)
 
-    def __contains__(self, label: object) -> bool:
-        """Whether a *label* is present, compared case-insensitively."""
-        if not isinstance(label, str):
+    def __contains__(self, other: object) -> bool:
+        """Whether ``other`` sits **at or under** this name -- ``name in domain``.
+
+        The DNS reading of the stdlib's ``address in network``::
+
+            Fqdn("www.example.com") in Fqdn("example.com")   # True
+            "mail.example.com" in Fqdn("example.com")         # True
+            Fqdn("example.com") in Fqdn("example.com")        # True -- "at or under"
+            Fqdn("example.org") in Fqdn("example.com")        # False
+
+        **Inclusive**, unlike :meth:`is_subdomain_of`, which excludes the name
+        itself. The pair mirrors ``<=`` against ``<``: a zone contains its own
+        apex, exactly as a ``/24`` contains its network address, so ``in`` is the
+        one that matches ``ipaddress``. Use ``is_subdomain_of`` when you mean
+        *strictly* below.
+
+        This is deliberately **not** a label test. An earlier version made
+        ``"com" in Fqdn("www.example.com")`` true, which reads plausibly and
+        conflicts head-on with the containment meaning -- the same expression
+        cannot answer both. Containment won because it is the stdlib idiom this
+        package is a thin layer over, and because a label test is already
+        spelled ``"com" in f.labels``.
+
+        Accepts an :class:`Fqdn` or a ``str``, ignores qualification (the
+        trailing dot does not change where a name sits in the tree), and answers
+        ``False`` rather than raising for anything unparseable -- which keeps it
+        usable as a filter predicate.
+        """
+        if isinstance(other, Fqdn):
+            candidate: "Optional[Fqdn]" = other
+        elif isinstance(other, str):
+            candidate = Fqdn.try_parse(other)
+        else:
             return False
-        return label.lower() in tuple(part.lower() for part in self._labels)
+        if candidate is None:
+            return False
+        if len(candidate._labels) < len(self._labels):
+            return False
+        return candidate._key()[-len(self._labels) :] == self._key()
 
     def __getitem__(self, index: "Any") -> "Any":
         """Index or slice the labels, leftmost first.
