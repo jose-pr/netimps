@@ -122,6 +122,7 @@ map:
 | `bind`, `bind_error_hint`, `interface_for`, `interfaces_for`, `is_local_address` | socket creation and local membership |
 | `get_source_ip`, `get_free_port`, `tcp_check`, `wait_for_port` | socket helpers |
 | `SocketOption`, `disable_connreset`, `set_buffer_size` | named option triple; the Windows `SIO_UDP_CONNRESET` switch (no stdlib route); buffer growth reporting what was *granted* |
+| `AddressInUseError` | one stable `OSError` subclass for "the address is taken", never a `PermissionError` |
 | `UdpEndpoint`, `Datagram` | UDP receive with arrival interface (`IP_PKTINFO` / `IPV6_RECVPKTINFO`, per family) |
 | `recvmsg`, `sendmsg`, `CMSG_LEN`, `CMSG_SPACE`, `supports_recvmsg` | ancillary-data messaging on **every** platform, Windows included (via `WSARecvMsg`/`WSASendMsg`) |
 | `patch_socket_module`, `socket_patched` | install/remove the default-on `socket` patch that gives Windows the stdlib method names |

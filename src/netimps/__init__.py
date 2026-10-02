@@ -149,6 +149,7 @@ __all__ = [
     "wait_for_port",
     "get_route",
     "bind",
+    "AddressInUseError",
     "SocketOption",
     "disable_connreset",
     "set_buffer_size",
@@ -539,6 +540,7 @@ if _msg_patch_requested():
 from ._udp import Datagram, UdpEndpoint  # noqa: E402
 from ._sockets import (  # noqa: E402
     bind,
+    AddressInUseError,
     SocketOption,
     disable_connreset,
     set_buffer_size,

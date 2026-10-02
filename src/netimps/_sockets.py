@@ -18,6 +18,7 @@ unprivileged on every supported platform.
 
 from __future__ import annotations
 
+import errno as _errno
 import socket as _socket
 import struct as _struct
 from subprocess import DEVNULL as _DEVNULL
@@ -51,6 +52,7 @@ _InterfaceQuery = Union[
 
 __all__ = [
     "bind",
+    "AddressInUseError",
     "SocketOption",
     "disable_connreset",
     "set_buffer_size",
@@ -134,6 +136,43 @@ class SocketOption(NamedTuple):
     value: Any
 
 
+class AddressInUseError(OSError):
+    """The address is taken -- one stable type, whatever the platform called it.
+
+    "The port is already bound" surfaces as **three different shapes** depending
+    on the flags and the interpreter. Measured on Windows 11 ARM64 against an
+    exclusive holder:
+
+    ==========================  ==================  ========  ==========
+    call                        type                ``errno``  ``winerror``
+    ==========================  ==================  ========  ==========
+    3.14, ``allow_takeover``    ``PermissionError``  13        10013
+    3.9, ``allow_takeover``     ``OSError``          10013     10013
+    either, plain               ``OSError``          10048     10048
+    ==========================  ==================  ========  ==========
+
+    The 3.14 row is the harmful one: ``PermissionError`` says "privilege
+    problem", and on Windows there is no such thing for a port -- the address is
+    simply held. A consumer branching on the type then sends its user after an
+    elevation problem that cannot exist, which is why one downstream project
+    carries a wrapper that re-derives the fact by string-matching
+    :func:`bind_error_hint`'s message.
+
+    So :func:`bind` raises this instead, with ``errno`` normalised to
+    ``EADDRINUSE``, the hint as the message, and the original exception chained
+    as ``__cause__`` -- so ``winerror`` and the platform's own code stay
+    reachable for anyone who wants them.
+
+    **Subclasses :class:`OSError` and deliberately not
+    :class:`PermissionError`**: every existing ``except OSError`` keeps working,
+    while ``except PermissionError`` stops catching a case that was never about
+    permission. A genuine privilege failure -- POSIX ``EACCES`` on a port below
+    1024 -- is left exactly as it was.
+    """
+
+    __slots__ = ()
+
+
 def bind(
     address: str = "",
     port: int = 0,
@@ -211,17 +250,28 @@ def bind(
 
     sock = _socket.socket(family, kind)
     try:
+        exclusive = getattr(_socket, "SO_EXCLUSIVEADDRUSE", None)
         if allow_address_takeover:
             sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        elif exclusive is not None:
+            # Windows, and set for **both** values of `reuse_address` -- which it
+            # was not, and that was an inverted-safety bug. With neither option
+            # set, a *more specific* SO_REUSEADDR bind takes traffic from a
+            # wildcard holder: measured, a thief on 127.0.0.1 received the
+            # datagram while the holder on 0.0.0.0 got nothing and no error. So
+            # `reuse_address=False`, the setting that reads as strictest, was the
+            # least strict thing available here -- the careful caller got the
+            # unsafe behaviour.
+            #
+            # Setting it regardless costs nothing: on Windows this option's only
+            # effect is denying that takeover. There is no TIME_WAIT restart for
+            # UDP it could forbid, and for TCP it is already what
+            # `reuse_address=True` asked for. `reuse_address` therefore governs
+            # POSIX `SO_REUSEADDR` only, which is what the name means everywhere
+            # else.
+            sock.setsockopt(_socket.SOL_SOCKET, exclusive, 1)
         elif reuse_address:
-            exclusive = getattr(_socket, "SO_EXCLUSIVEADDRUSE", None)
-            if exclusive is None:
-                sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
-            else:
-                # Windows. Not merely "SO_REUSEADDR spelled differently": this
-                # is the option that *denies* the takeover SO_REUSEADDR would
-                # permit, and it is what a plain stdlib bind gets by default.
-                sock.setsockopt(_socket.SOL_SOCKET, exclusive, 1)
+            sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
         if reuse_port:
             # Absent on Windows; setting it unconditionally would raise there.
             option = getattr(_socket, "SO_REUSEPORT", None)
@@ -237,13 +287,45 @@ def bind(
         for level, name, value in options:
             sock.setsockopt(level, name, value)
 
-        sock.bind((address, port))
+        try:
+            sock.bind((address, port))
+        except OSError as exc:
+            raise _as_in_use(exc, port) from exc
         if listen is not None and kind == _socket.SOCK_STREAM:
             sock.listen(listen)
     except BaseException:
         sock.close()
         raise
     return sock
+
+
+#: Winsock codes that mean "the address is taken", whatever Python wrapped them
+#: in. 10048 is WSAEADDRINUSE; 10013 is WSAEACCES, which on a bind means the
+#: address is held exclusively rather than that the caller lacks a privilege.
+_WSA_IN_USE = frozenset((10048, 10013))
+
+
+def _as_in_use(exc: "OSError", port: "Optional[int]") -> "OSError":
+    """Return :class:`AddressInUseError` for an in-use failure, else ``exc``.
+
+    Classified here rather than left to the caller because ``bind`` already knows
+    -- it is the code that writes the hint. Returning the original untouched for
+    anything else keeps genuine privilege failures (POSIX ``EACCES`` on a low
+    port) exactly as they were.
+    """
+    winerror = getattr(exc, "winerror", None)
+    in_use = winerror in _WSA_IN_USE or exc.errno == _errno.EADDRINUSE
+    if not in_use:
+        return exc
+    hint = bind_error_hint(exc, port)
+    error = AddressInUseError(_errno.EADDRINUSE, hint or "address already in use")
+    # Keep the platform's own code reachable; __cause__ carries the rest.
+    if winerror is not None:
+        try:
+            error.winerror = winerror  # type: ignore[attr-defined]
+        except AttributeError:  # pragma: no cover - read-only on some builds
+            pass
+    return error
 
 
 def bind_error_hint(

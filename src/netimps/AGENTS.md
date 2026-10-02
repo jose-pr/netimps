@@ -659,6 +659,31 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
   > reachable, but only by asking for it by its consequence:
   > `allow_address_takeover=True`. On POSIX that flag adds nothing, since
   > `reuse_address` already sets exactly that option.
+  > **On Windows this is set for *both* values of `reuse_address`.** It used to
+  > be set only for `True`, which left `reuse_address=False` setting *nothing* --
+  > and nothing is the unsafe state there: a *more specific* `SO_REUSEADDR` bind
+  > takes traffic from a non-exclusive wildcard holder. Reproduced: a thief on
+  > `127.0.0.1` received the datagram while the holder on `0.0.0.0` got nothing
+  > and no error. So the flag that read as "strictest" was the least strict one
+  > available. `reuse_address` now governs POSIX `SO_REUSEADDR` only;
+  > `allow_address_takeover=True` is the single way to opt into a takeover.
+- **`AddressInUseError(OSError)`** — what `bind()` raises when the address is
+  taken, on every platform and interpreter. The same situation used to surface
+  three ways: `PermissionError`/errno 13 on Windows 3.14, `OSError`/errno 10013
+  on 3.9, `OSError`/errno 10048 without `allow_address_takeover`. The first is
+  actively misleading — Windows has no privileged ports, so a `PermissionError`
+  there describes a mechanism that does not exist.
+
+  `errno` is `EADDRINUSE`, the message is `bind_error_hint()`'s text, and the
+  original exception is chained as `__cause__` (so `winerror` is still
+  reachable). Subclasses `OSError` but **not** `PermissionError`, so
+  `except OSError` is unaffected while `except PermissionError` stops catching
+  this. A real POSIX `EACCES` on a port below 1024 is untouched.
+
+  Note that creating a conflict differs by platform: `bind()` defaults to
+  `reuse_address=True`, and on **Linux UDP** that means two sockets may share
+  the port, so there is no error to raise. Pass `reuse_address=False` when you
+  want a duplicate bind to be refused there.
 - **`SocketOption(level, name, value)`** — a named triple for `bind`'s
   `options=`. A `NamedTuple`, so it *is* a tuple: bare `(level, name, value)`
   tuples keep working and code that unpacks these does too. Purely so a list of
@@ -1266,6 +1291,16 @@ the wrapped socket, and the endpoint is a **context manager**
   ignores* a v6 cmsg on a v4 socket, so there is no correct silent behaviour
   available. An `OSError` from the kernel, meaning a source this host cannot
   send from, propagates; only platform incapability degrades to `sendto`.
+- **The arrival interface is cached per endpoint**, so the default path is not
+  the slow one. `recv()` used to call `get_interfaces()` and scan it for *every*
+  datagram: measured 1.07 ms per packet against 0.015 with
+  `resolve_interface=False`, a 70x cost, and 35–42 ms per enumeration on a host
+  with many adapters. Now an `index -> Interface` cache refreshed on a miss and
+  on a 30-second TTL — 0.017 ms per packet, one enumeration for ten datagrams.
+  A miss triggers a refresh because an unseen index means the adapter set
+  changed; negative results are cached so a vanished index does not re-enumerate
+  forever. `resolve_interface=False` still skips it entirely and never
+  enumerates.
 - **`truncated`** reports `MSG_TRUNC`: the **payload** did not fit `bufsize`
   and `.data` is the leading part of a longer datagram. A different question
   from `control_truncated`, and the one that silently corrupts a decode — a

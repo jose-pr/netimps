@@ -131,6 +131,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`AddressInUseError(OSError)`** -- one stable type for "the address is
+  taken", raised by `bind()` instead of whatever the platform happened to call
+  it. Measured on Windows 11 ARM64 against an exclusive holder, the *same
+  situation* had three shapes: `PermissionError`/errno 13 on 3.14,
+  `OSError`/errno 10013 on 3.9, and `OSError`/errno 10048 without the takeover
+  flag. The 3.14 row is the harmful one -- `PermissionError` says "privilege
+  problem", and Windows has no privileged ports, so a consumer branching on the
+  type sent its user after an elevation problem that cannot exist.
+
+  `errno` is normalised to `EADDRINUSE`, `bind_error_hint()`'s text is the
+  message, and the original is chained as `__cause__` so `winerror` stays
+  reachable. It subclasses `OSError` and deliberately **not**
+  `PermissionError`: every `except OSError` keeps working while
+  `except PermissionError` stops catching a case that was never about
+  permission. A genuine POSIX `EACCES` on a port below 1024 is left exactly as
+  it was.
+
+### Fixed
+
+- **`bind(reuse_address=False)` left a Windows wildcard bind open to hijack.**
+  It set *nothing* -- both `SO_REUSEADDR` and `SO_EXCLUSIVEADDRUSE` read 0 --
+  and Windows then lets a *more specific* `SO_REUSEADDR` bind take over a
+  non-exclusive wildcard. Reproduced: a thief binding `127.0.0.1` received the
+  datagram while the holder on `0.0.0.0` got nothing and no error.
+
+  So the flag that reads as "strictest" was the least strict setting available,
+  which is the worst shape a safety option can have -- the careful caller got
+  the unsafe behaviour. `SO_EXCLUSIVEADDRUSE` is now set on Windows whenever
+  `allow_address_takeover` is false, for **both** values of `reuse_address`;
+  that option's only effect there is denying the takeover, so it costs nothing.
+  `reuse_address` now governs POSIX `SO_REUSEADDR` only, which is what the name
+  means everywhere else. `allow_address_takeover=True` remains the one way to
+  opt into the old behaviour. Windows-only change, strictly toward safety.
+- **`UdpEndpoint.recv()` enumerated every interface on every datagram.**
+  Measured on Windows loopback with 300-octet packets: **1.07 ms per packet**
+  against 0.015 ms with `resolve_interface=False` -- a 70x cost on the *default*
+  path, and one a consuming project measured at 35-42 ms per enumeration on a
+  host with more adapters. Worse than a bad default: the class docstring's own
+  example uses the default and reads `.interface`, so the documented usage was
+  the slow one, and a server loop is a hot loop by definition since the sender
+  controls the rate.
+
+  Now resolved through a per-endpoint `index -> Interface` cache, refreshed on a
+  **miss** as well as on a 30-second TTL -- a miss means the adapter set changed,
+  which is both cheap to act on and exactly when it matters. Negative results are
+  cached too, so a stale or vanished index does not re-enumerate forever.
+  Measured after: **0.017 ms per packet**, and one enumeration for ten datagrams
+  instead of ten.
+- `UdpEndpoint.send()`'s docstring still claimed Windows could not honour `src`
+  at all and that `supports_src_pinning` was `False` there. Both stopped being
+  true earlier in this release.
+
+### Added
+
 - **`Fqdn`** -- a domain name as a value type, with label algebra: `.labels`,
   `.hostname`, `.domain`, `.domains`, `.tld`, `.is_fully_qualified()`,
   `.with_hostname()`, `.is_subdomain_of()`, `.relative_to()`, `.reverse()`,
