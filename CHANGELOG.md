@@ -150,6 +150,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **`bind()`'s default let a second live UDP socket take the port on Linux.**
+  `reuse_address=True` (the default) set `SO_REUSEADDR`, and on a *datagram*
+  socket that is not the `TIME_WAIT` convenience it is for TCP -- it permits
+  duplicate bindings of **live** sockets. Measured on WSL: a second `bind()` of
+  the same live UDP `addr:port` with default arguments succeeded and the datagram
+  went to the **second** socket, with the holder getting no error. `socket(7)` is
+  explicit that the exception is an active *listening* socket, and a UDP socket
+  never listens.
+
+  `SO_REUSEADDR` is now set on POSIX for **stream sockets only**. Sharing a UDP
+  port stays reachable through the names that say so -- `reuse_port=True`
+  (`SO_REUSEPORT`, the option designed for it) or `allow_address_takeover=True`.
+  `multicast_socket` sets what it needs itself and was verified not to rely on
+  the old default.
+
+  This also corrects two documentation passages that stated the opposite: both
+  said "two live sockets still cannot hold one `addr:port`", which is true for
+  TCP and false for UDP on Linux.
 - **`bind(reuse_address=False)` left a Windows wildcard bind open to hijack.**
   It set *nothing* -- both `SO_REUSEADDR` and `SO_EXCLUSIVEADDRUSE` read 0 --
   and Windows then lets a *more specific* `SO_REUSEADDR` bind take over a

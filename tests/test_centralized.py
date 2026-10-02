@@ -43,8 +43,14 @@ def test_bind_datagram_defaults():
             # asks for exclusivity instead. Asserting SO_REUSEADDR on this
             # platform was asserting that the port could be stolen.
             assert sock.getsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE)
+            assert not sock.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR)
         else:
-            assert sock.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR)
+            # And POSIX gets NEITHER for a datagram socket. This used to assert
+            # SO_REUSEADDR, which was asserting that the port could be stolen on
+            # Linux too: TIME_WAIT is a TCP concept, so on UDP the option's only
+            # remaining effect there is to permit duplicate bindings of live
+            # sockets -- measured, the second binder received the datagram.
+            assert not sock.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR)
     finally:
         sock.close()
 

@@ -228,8 +228,13 @@ def bind(
 
     .. warning::
        **``SO_REUSEADDR`` is not the same option on Windows.** On POSIX it
-       only permits binding an address still in ``TIME_WAIT``; two live
-       sockets still cannot hold one ``addr:port``. On Windows it lets **any
+       only permits binding an address still in ``TIME_WAIT`` -- and
+       **only for a stream socket**. ``TIME_WAIT`` is a TCP concept, so on a
+       UDP socket the option's one remaining effect on Linux is to permit
+       duplicate bindings of *live* sockets, which is traffic theft rather
+       than a restart convenience. So this no longer sets it for
+       ``SOCK_DGRAM``; use ``reuse_port=True`` or
+       ``allow_address_takeover=True`` to share a UDP port deliberately. On Windows it lets **any
        process** bind an ``addr:port`` another socket is already listening on,
        and the later binder can win subsequent connections -- reproduced on
        Windows 11, where a plain second bind was refused with ``EACCES`` while
@@ -270,7 +275,25 @@ def bind(
             # POSIX `SO_REUSEADDR` only, which is what the name means everywhere
             # else.
             sock.setsockopt(_socket.SOL_SOCKET, exclusive, 1)
-        elif reuse_address:
+        elif reuse_address and kind != _socket.SOCK_DGRAM:
+            # POSIX, **stream sockets only**. `SO_REUSEADDR` on a datagram socket
+            # buys nothing a caller wants and costs the port: `TIME_WAIT` is a
+            # TCP concept, so for UDP the option's only effect on Linux is to
+            # permit *duplicate bindings of live sockets*. Measured on WSL: with
+            # this set by default, a second `bind()` of the same live UDP
+            # `addr:port` succeeded and the datagram went to the **second**
+            # socket, with the holder getting no error -- silent traffic theft
+            # under the default call.
+            #
+            # `socket(7)` is explicit that the exception is an active *listening*
+            # socket, and a UDP socket never listens. So the guarantee the docs
+            # used to claim here -- "two live sockets still cannot hold one
+            # addr:port" -- is true for TCP and false for UDP.
+            #
+            # Sharing a UDP port is still reachable, by the names that say so:
+            # `reuse_port=True` (`SO_REUSEPORT`, the option actually designed for
+            # it) or `allow_address_takeover=True`. `multicast_socket` sets what
+            # it needs itself and does not rely on this.
             sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
         if reuse_port:
             # Absent on Windows; setting it unconditionally would raise there.

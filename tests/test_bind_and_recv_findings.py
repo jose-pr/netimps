@@ -94,9 +94,16 @@ def test_allow_address_takeover_still_opts_into_the_unsafe_behaviour():
 
 @pytest.mark.skipif(IS_WINDOWS, reason="the POSIX half of the same flag")
 @pytest.mark.parametrize("reuse_address", [False, True])
-def test_on_posix_reuse_address_still_governs_so_reuseaddr_alone(reuse_address):
-    """The fix must not change POSIX, where `reuse_address` already means this."""
-    sock = bind("0.0.0.0", 0, reuse_address=reuse_address)
+def test_on_posix_reuse_address_governs_so_reuseaddr_for_stream_sockets(reuse_address):
+    """The Windows hijack fix must not change what POSIX does for TCP.
+
+    Stream sockets specifically: this test used to bind the *default* datagram
+    kind and assert the same thing, which encoded the very behaviour the Linux
+    UDP-sharing finding was about. `TIME_WAIT` is a TCP concept, so a datagram
+    socket never wanted this option -- see
+    `test_a_default_udp_bind_does_not_set_so_reuseaddr`.
+    """
+    sock = bind("0.0.0.0", 0, kind=socket.SOCK_STREAM, reuse_address=reuse_address)
     try:
         value = sock.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR)
         assert bool(value) is reuse_address
@@ -282,3 +289,102 @@ def test_address_in_use_error_is_exported():
     assert "AddressInUseError" in netimps.__all__
     assert issubclass(AddressInUseError, OSError)
     assert not issubclass(AddressInUseError, PermissionError)
+
+
+# --------------------------------------------------------------------------- #
+# bind()'s default used to let a second live UDP socket take the port on Linux  #
+# --------------------------------------------------------------------------- #
+
+
+def _second_bind_succeeds(port, **kwargs):
+    try:
+        second = bind("127.0.0.1", port, **kwargs)
+    except OSError:
+        return False
+    second.close()
+    return True
+
+
+def test_a_duplicate_udp_bind_is_refused_under_the_defaults():
+    """`SO_REUSEADDR` on a UDP socket buys nothing and costs the port.
+
+    `TIME_WAIT` is a TCP concept, so on a datagram socket the option's one
+    remaining effect on Linux is permitting duplicate bindings of *live* sockets.
+    Measured on WSL before the fix: a second `bind()` of the same live UDP
+    `addr:port` with default arguments succeeded and the datagram went to the
+    **second** socket, with the holder getting no error. `socket(7)` is explicit
+    that the exception is an active *listening* socket, and a UDP socket never
+    listens -- so the guarantee the docs claimed here was true for TCP only.
+    """
+    holder = bind("127.0.0.1", 0)
+    try:
+        port = holder.getsockname()[1]
+        assert not _second_bind_succeeds(
+            port
+        ), "a second live UDP bind must be refused under the defaults"
+    finally:
+        holder.close()
+
+
+def test_a_default_udp_bind_does_not_set_so_reuseaddr():
+    """The mechanism, pinned directly, so the fix cannot regress quietly."""
+    sock = bind("127.0.0.1", 0)
+    try:
+        assert sock.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR) == 0
+    finally:
+        sock.close()
+
+
+def test_a_stream_socket_still_gets_so_reuseaddr_on_posix():
+    """The legitimate use survives: restarting a TCP server over `TIME_WAIT`.
+
+    This is the whole reason `reuse_address` defaults to True, and narrowing the
+    fix to datagram sockets is what keeps it.
+    """
+    if IS_WINDOWS:
+        pytest.skip("Windows gets SO_EXCLUSIVEADDRUSE instead; covered above")
+    sock = bind("127.0.0.1", 0, kind=socket.SOCK_STREAM)
+    try:
+        assert sock.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR) == 1
+    finally:
+        sock.close()
+
+
+def test_sharing_a_udp_port_is_still_reachable_by_the_explicit_names():
+    """Taking the default away must not take the capability away.
+
+    `reuse_port` is the option actually designed for sharing, and
+    `allow_address_takeover` already says what it does in its name.
+    """
+    for kwargs in ({"reuse_port": True}, {"allow_address_takeover": True}):
+        try:
+            holder = bind("127.0.0.1", 0, **kwargs)
+        except OSError as exc:  # pragma: no cover - option absent on this platform
+            pytest.skip("%s unavailable here: %s" % (kwargs, exc))
+        try:
+            port = holder.getsockname()[1]
+            shared = _second_bind_succeeds(port, **kwargs)
+        finally:
+            holder.close()
+        if not shared and IS_WINDOWS and "reuse_port" in kwargs:
+            continue  # SO_REUSEPORT does not exist on Windows; a documented no-op
+        assert shared, "%s must still permit sharing" % (kwargs,)
+
+
+def test_multicast_socket_does_not_depend_on_the_old_default():
+    """It sets what it needs itself, so the change cannot have broken it.
+
+    Checked rather than assumed -- the finding asked for exactly this, since a
+    multicast receiver is the one legitimate case for sharing a port.
+    """
+    import inspect
+
+    source = inspect.getsource(netimps.multicast_socket)
+    assert (
+        "SO_REUSEADDR" in source
+    ), "multicast_socket must set SO_REUSEADDR itself, not inherit it from bind()"
+    sock = netimps.multicast_socket("239.1.2.3", 0)
+    try:
+        assert sock.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR) == 1
+    finally:
+        sock.close()

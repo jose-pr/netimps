@@ -646,9 +646,18 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
   exception propagates, so a failed call leaks nothing. A failed bind raises
   `OSError` — see `bind_error_hint`.
 
-  > **`reuse_address=True` is not one socket option.** On POSIX it sets
-  > `SO_REUSEADDR`, which only permits binding an address still in
-  > `TIME_WAIT`; two live sockets still cannot hold one `addr:port`. On
+  > **`reuse_address=True` is not one socket option, and does nothing for UDP.**
+  > On POSIX it sets `SO_REUSEADDR` **only for a stream socket**, where it
+  > permits binding an address still in `TIME_WAIT`. `TIME_WAIT` is a TCP
+  > concept: on a *datagram* socket the option's one remaining effect on Linux
+  > is to permit duplicate bindings of **live** sockets, so it is set no longer.
+  > Measured on WSL before the fix — a second `bind()` of the same live UDP
+  > `addr:port` with default arguments succeeded and the datagram went to the
+  > **second** socket, with the holder getting no error. `socket(7)` is explicit
+  > that the exception is an active *listening* socket, and a UDP socket never
+  > listens. Share a UDP port deliberately with `reuse_port=True`
+  > (`SO_REUSEPORT`, the option designed for it) or `allow_address_takeover=True`;
+  > `multicast_socket` sets what it needs itself. On
   > **Windows** `SO_REUSEADDR` means something else entirely: it lets **any
   > process** bind an `addr:port` another socket is already listening on, and
   > the later binder can win subsequent connections — reproduced on Windows 11,
@@ -680,10 +689,10 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
   `except OSError` is unaffected while `except PermissionError` stops catching
   this. A real POSIX `EACCES` on a port below 1024 is untouched.
 
-  Note that creating a conflict differs by platform: `bind()` defaults to
-  `reuse_address=True`, and on **Linux UDP** that means two sockets may share
-  the port, so there is no error to raise. Pass `reuse_address=False` when you
-  want a duplicate bind to be refused there.
+  A duplicate UDP bind is refused on every platform under the defaults, which
+  was **not** true before this release — see the `reuse_address` box above.
+  Sharing is now opt-in through `reuse_port=True` or
+  `allow_address_takeover=True`, and only then does a second bind succeed.
 - **`SocketOption(level, name, value)`** — a named triple for `bind`'s
   `options=`. A `NamedTuple`, so it *is* a tuple: bare `(level, name, value)`
   tuples keep working and code that unpacks these does too. Purely so a list of

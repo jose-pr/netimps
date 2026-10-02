@@ -960,16 +960,55 @@ def _recording_socket(monkeypatch):
     return applied
 
 
-def test_bind_sets_exclusiveaddruse_on_windows_and_reuseaddr_elsewhere(monkeypatch):
-    """One flag, two options -- because one option would not be one meaning."""
+def test_bind_sets_exclusiveaddruse_on_windows_and_nothing_for_posix_udp(monkeypatch):
+    """One flag, three outcomes -- because one option would not be one meaning.
+
+    Updated twice over, and the old version of this test encoded both defects it
+    is now pinned against:
+
+    - **Windows** gets `SO_EXCLUSIVEADDRUSE` for *either* value of
+      `reuse_address`. It used to be set only for `True`, which left
+      `reuse_address=False` setting nothing -- and nothing is the unsafe state
+      there, since a more specific `SO_REUSEADDR` bind can then take a wildcard
+      holder's traffic.
+    - **POSIX datagram** sockets get **neither**. `TIME_WAIT` is a TCP concept, so
+      `SO_REUSEADDR` on a UDP socket only permits duplicate bindings of live
+      sockets -- measured on Linux, the second binder received the datagram.
+    """
     applied = _recording_socket(monkeypatch)
     netimps.bind("127.0.0.1", 0).close()
 
     exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
-    wanted = socket.SO_REUSEADDR if exclusive is None else exclusive
-    assert (socket.SOL_SOCKET, wanted, 1) in applied
     if exclusive is not None:
+        assert (socket.SOL_SOCKET, exclusive, 1) in applied
         assert (socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) not in applied
+    else:
+        # POSIX, and the default kind is SOCK_DGRAM: neither option belongs.
+        assert (socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) not in applied
+
+
+def test_bind_sets_exclusiveaddruse_on_windows_whatever_reuse_address_says(monkeypatch):
+    """The inverted-safety case: `False` must not mean "set nothing" on Windows."""
+    exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+    if exclusive is None:
+        pytest.skip("SO_EXCLUSIVEADDRUSE is Windows-only")
+    for reuse in (False, True):
+        applied = _recording_socket(monkeypatch)
+        netimps.bind("127.0.0.1", 0, reuse_address=reuse).close()
+        assert (
+            socket.SOL_SOCKET,
+            exclusive,
+            1,
+        ) in applied, "reuse_address=%r left the socket non-exclusive" % (reuse,)
+
+
+def test_bind_still_sets_reuseaddr_for_a_posix_stream_socket(monkeypatch):
+    """The legitimate use survives: restarting a TCP server over `TIME_WAIT`."""
+    if getattr(socket, "SO_EXCLUSIVEADDRUSE", None) is not None:
+        pytest.skip("Windows takes the exclusive path instead")
+    applied = _recording_socket(monkeypatch)
+    netimps.bind("127.0.0.1", 0, kind=socket.SOCK_STREAM).close()
+    assert (socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) in applied
 
 
 def test_bind_takeover_is_an_explicit_opt_in(monkeypatch):
