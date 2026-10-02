@@ -13,6 +13,12 @@ tries them in order and returns the first **non-empty** answer:
   use.
 - :func:`resolve_nslookup` -- shells out to the ``nslookup`` binary. Address
   and reverse records (``a``/``aaaa``/``ptr``) only, parsed from text output.
+- :func:`resolve_wire` -- the DNS protocol itself, standard library only: UDP
+  (TCP when truncated, or asked) to explicit nameservers, from an optional
+  ``source`` address. In the chain only for an explicit ``ns=``/``source=``.
+
+:func:`resolve_doh` asks one DNS-over-HTTPS endpoint (RFC 8484) and is not
+part of the chain: a caller that names a DoH URL wants that answer alone.
 
 ``query`` accepts :data:`AddressLike` everywhere (a hostname string, an
 address string, an address object, or an interface object -- its ``.ip`` is
@@ -24,13 +30,18 @@ Re-exported from :mod:`netimps`.
 
 from __future__ import annotations
 
+import ipaddress as _ipaddress
+import os as _os
 import socket as _socket
+import struct as _struct
+import time as _time
 from functools import partial as _partial
 from subprocess import DEVNULL as _DEVNULL
 from subprocess import TimeoutExpired as _SubprocessTimeout
 from subprocess import run as _run
-from typing import Any, Callable, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+from . import _dnswire
 from ._ip import AddressLike, _dst_argument
 
 __all__ = [
@@ -38,12 +49,14 @@ __all__ = [
     "resolve_dnspython",
     "resolve_system",
     "resolve_nslookup",
+    "resolve_wire",
+    "resolve_doh",
     "ResolutionError",
 ]
 
 #: Backends `resolve()` tries, in order, by name. Each entry is looked up on
 #: this module, so the order is the single source of truth for the chain.
-_BACKENDS = ("dnspython", "system", "nslookup")
+_BACKENDS = ("dnspython", "wire", "system", "nslookup")
 
 _ADDRESS_RDTYPES = ("a", "aaaa")
 
@@ -100,6 +113,7 @@ def resolve_dnspython(
     port: int = 53,
     tcp: bool = False,
     search: Union[bool, List[str]] = True,
+    source: Optional[str] = None,
 ) -> "List[Any]":
     """Resolve ``query`` via ``dnspython`` and return the answers as a list.
 
@@ -154,6 +168,8 @@ def resolve_dnspython(
         ``query`` as-is only, no expansion. A list of domain names tries
         exactly those suffixes instead of the system list, regardless of
         ``ns``. Ignored for an already-qualified (trailing-dot) ``query``.
+    :param source: the local address the queries are sent from (``None``:
+        whatever the OS picks).
 
     A genuine lookup failure (NXDOMAIN, no answer, timeout, all servers failed)
     yields ``[]``; a malformed query or unknown record type raises
@@ -215,15 +231,17 @@ def resolve_dnspython(
         if isinstance(exc, type) and issubclass(exc, Exception)
     )
 
+    # Only when asked: the keyword is not in every dnspython release.
+    extra: "Dict[str, Any]" = {"source": source} if source else {}
     try:
         if rdtype == "ptr":
             # resolve_address builds the reverse (in-addr.arpa/ip6.arpa) name
             # from a plain address itself -- r.resolve(query, "ptr") would
             # require the caller to already have that name, which defeats
             # the point of accepting a literal address as `query`.
-            answer = r.resolve_address(query, tcp=tcp, search=search)
+            answer = r.resolve_address(query, tcp=tcp, search=search, **extra)
         else:
-            answer = r.resolve(query, rdtype, tcp=tcp, search=search)
+            answer = r.resolve(query, rdtype, tcp=tcp, search=search, **extra)
     except _lookup_failures:
         # A genuine "no result" -- the documented [] contract.
         return []
@@ -748,6 +766,7 @@ def resolve(
     search: Union[bool, List[str]] = True,
     backends: "Optional[Union[str, List[str]]]" = None,
     strict: bool = False,
+    source: Optional[Union[str, List[str]]] = None,
 ) -> "List[Any]":
     """Resolve ``query``, trying each backend in ``backends`` until one gives
     a definitive answer.
@@ -761,11 +780,13 @@ def resolve(
         resolve("host", backends=["nslookup", "dnspython"])  # custom order
         resolve("8.8.8.8")                        # rdtype=None -> ptr -> ['dns.google']
 
-    Default order is ``["dnspython", "system", "nslookup"]``: dnspython first
-    (structured records, full ``rdtype`` support, explicit ``ns=``/``search=``
-    control), then the OS resolver (hosts file, NSS, OS cache -- address and
-    reverse records, but no ``ns=`` override), then ``nslookup`` as a last
-    resort if neither Python-level path is usable.
+    Default order is ``["dnspython", "wire", "system", "nslookup"]``:
+    dnspython first (structured records, full ``rdtype`` support, explicit
+    ``ns=``/``search=`` control), then the standard-library DNS client --
+    only for an explicit ``ns=`` or ``source=``, so ``ns=`` works without
+    dnspython -- then the OS resolver (hosts file, NSS, OS cache -- address
+    and reverse records, but no ``ns=`` override), then ``nslookup`` as a last
+    resort if no Python-level path is usable.
 
     A backend is **skipped**, not tried and failed, when it structurally
     cannot serve the request: :func:`resolve_system` for a ``rdtype`` outside
@@ -815,6 +836,10 @@ def resolve(
         ``"system"``, ``"nslookup"``) or a single name as a plain string.
         ``None`` (default) uses all three in the default order, each filtered
         for applicability as described above.
+    :param source: the local address -- or one per address family, as a
+        list -- the queries go out from. Honoured by ``wire`` (each nameserver
+        gets the address of its family) and ``dnspython`` (one address only);
+        excludes ``system`` and ``nslookup``, which cannot choose it.
     :param strict: raise instead of returning ``[]`` when no backend could
         *ask* -- every applicable one failed with a :class:`ResolutionError`
         (resolver unreachable, timeout, ``nslookup`` missing). Off by default,
@@ -850,7 +875,7 @@ def resolve(
     for name in chain:
         attempt: "Callable[[], List[Any]]"
         if name == "system":
-            if rdtype not in ("a", "aaaa", "ptr") or ns or port != 53 or tcp:
+            if rdtype not in ("a", "aaaa", "ptr") or ns or port != 53 or tcp or source:
                 # Cannot honour a non-address rdtype, nor a per-call
                 # nameserver/port/transport -- running it anyway would answer
                 # a different question from the one asked.
@@ -859,6 +884,9 @@ def resolve(
                 resolve_system, query, rdtype, timeout=timeout, search=search
             )
         elif name == "dnspython":
+            sources = [source] if isinstance(source, str) else list(source or [])
+            if len(sources) > 1:
+                continue  # one source address only; `wire` picks per family
             attempt = _partial(
                 resolve_dnspython,
                 query,
@@ -868,9 +896,24 @@ def resolve(
                 port=port,
                 tcp=tcp,
                 search=search,
+                source=sources[0] if sources else None,
+            )
+        elif name == "wire":
+            if not (ns or source) or rdtype not in _dnswire.RDTYPES:
+                continue
+            attempt = _partial(
+                resolve_wire,
+                query,
+                rdtype,
+                ns=ns,
+                timeout=timeout,
+                port=port,
+                tcp=tcp,
+                search=search,
+                source=source,
             )
         elif name == "nslookup":
-            if rdtype not in ("a", "aaaa", "ptr"):
+            if rdtype not in ("a", "aaaa", "ptr") or source:
                 continue
             if isinstance(ns, (list, tuple)):
                 single_ns = ns[0] if ns else None
@@ -912,6 +955,8 @@ def resolve(
             excluded.append("port=%r" % (port,))
         if tcp:
             excluded.append("tcp=True")
+        if source:
+            excluded.append("source=%r" % (source,))
         raise ValueError(
             "no backend in %r can serve rdtype=%r%s"
             % (
@@ -931,3 +976,277 @@ def resolve(
     # between "no such name" and "could not ask" is one most callers do not act
     # on differently. `strict=True` is for the ones that do.
     return []
+
+
+# --- the DNS protocol, standard library only ---------------------------------
+
+
+def _servers(
+    ns: "Optional[Union[str, List[str]]]", port: int
+) -> "List[Tuple[str, int]]":
+    """``(host, port)`` per nameserver: ``host``, ``host:port``, a bare IPv6
+    address, ``[v6]`` or ``[v6]:port``. ``None``: the system's, from
+    ``/etc/resolv.conf`` (POSIX only)."""
+    entries = [ns] if isinstance(ns, str) else list(ns or [])
+    if not entries:
+        try:
+            with open("/etc/resolv.conf", encoding="utf-8") as handle:
+                entries = [
+                    line.split()[1]
+                    for line in handle
+                    if line.split()[:1] == ["nameserver"] and len(line.split()) > 1
+                ]
+        except OSError:
+            entries = []
+        if not entries:
+            raise ResolutionError(
+                "resolve_wire needs ns= here: no /etc/resolv.conf to take the system's from"
+            )
+    out = []
+    for entry in entries:
+        entry = entry.strip()
+        if entry.startswith("["):
+            host, _, rest = entry[1:].partition("]")
+            number = int(rest[1:]) if rest.startswith(":") else port
+        elif entry.count(":") == 1:
+            host, _, rest = entry.partition(":")
+            number = int(rest)
+        else:
+            host, number = entry, port
+        try:
+            _ipaddress.ip_address(host.split("%")[0])
+        except ValueError:
+            raise ValueError("nameserver %r is not an IP address" % (entry,))
+        out.append((host, number))
+    return out
+
+
+def _source_for(
+    source: "Optional[Union[str, List[str]]]", host: str
+) -> "Optional[str]":
+    """The source address of ``host``'s family, ``None`` for any; a source
+    list without one for that family skips the server (``ValueError``)."""
+    if not source:
+        return None
+    sources = [source] if isinstance(source, str) else list(source)
+    family = _ipaddress.ip_address(host.split("%")[0]).version
+    for address in sources:
+        if _ipaddress.ip_address(address.split("%")[0]).version == family:
+            return address
+    raise ValueError("no source address for IPv%d nameserver %s" % (family, host))
+
+
+def _exchange(
+    server: "Tuple[str, int]",
+    payload: bytes,
+    timeout: float,
+    tcp: bool,
+    source: "Optional[str]",
+) -> bytes:
+    host, port = server
+    family = _socket.AF_INET6 if ":" in host else _socket.AF_INET
+    sock = _socket.socket(family, _socket.SOCK_STREAM if tcp else _socket.SOCK_DGRAM)
+    try:
+        sock.settimeout(timeout)
+        if source:
+            sock.bind((source, 0))
+        sock.connect((host, port))
+        if not tcp:
+            sock.send(payload)
+            return sock.recv(65535)
+        sock.sendall(_struct.pack("!H", len(payload)) + payload)
+        size = _struct.unpack("!H", _recv_exactly(sock, 2))[0]
+        return _recv_exactly(sock, size)
+    finally:
+        sock.close()
+
+
+def _recv_exactly(sock: "_socket.socket", count: int) -> bytes:
+    data = b""
+    while len(data) < count:
+        piece = sock.recv(count - len(data))
+        if not piece:
+            raise OSError("connection closed after %d of %d bytes" % (len(data), count))
+        data += piece
+    return data
+
+
+def _question(query: str, rdtype: "Optional[str]") -> "Tuple[str, str]":
+    """``(name asked, rdtype)``: an address literal's PTR name for ``ptr``."""
+    rdtype = (rdtype or _auto_rdtype(query)).lower()
+    if rdtype not in _dnswire.RDTYPES:
+        raise ResolutionError(
+            "rdtype %r is not one the DNS wire backend reads (%s)"
+            % (rdtype, ", ".join(sorted(_dnswire.RDTYPES)))
+        )
+    if rdtype == "ptr":
+        try:
+            return _dnswire.reverse_name(query), rdtype
+        except ValueError:
+            pass
+    return query, rdtype
+
+
+def resolve_wire(
+    query: "AddressLike",
+    rdtype: Optional[str] = None,
+    ns: Optional[Union[str, List[str]]] = None,
+    timeout: Optional[float] = 5.0,
+    port: int = 53,
+    tcp: bool = False,
+    search: Union[bool, List[str]] = True,
+    source: Optional[Union[str, List[str]]] = None,
+) -> "List[Any]":
+    """Resolve ``query`` by speaking DNS to ``ns`` directly -- no dnspython,
+    no OS resolver. UDP, retried over TCP when the reply is truncated (or TCP
+    throughout with ``tcp=True``); the nameservers in turn until one answers.
+
+    ::
+
+        resolve_wire("example.com", ns="1.1.1.1")
+        resolve_wire("example.com", "aaaa", ns=["10.0.0.53:5353", "[fd00::53]"])
+        resolve_wire("example.com", ns="10.0.0.53", source="10.0.0.7")
+
+    :param ns: nameserver(s): ``host``, ``host:port``, ``[v6]:port``.
+        ``None``: ``/etc/resolv.conf``'s (POSIX; elsewhere
+        :class:`ResolutionError`).
+    :param rdtype: ``a``, ``aaaa``, ``cname``, ``ptr``, ``mx``, ``txt``,
+        ``ns``, ``srv``; ``None`` auto-selects as :func:`resolve` does.
+        Another type is a :class:`ResolutionError` (the chain moves on).
+    :param timeout: seconds for the whole resolution, every server included.
+    :param port: the port of an ``ns`` entry that names none.
+    :param source: the address the queries leave from -- one, or one per
+        address family; a server whose family has none is skipped.
+    :param search: a list of domains tries ``query`` under each, then as
+        given; ``True``/``False`` ask for ``query`` as given (this backend
+        reads no system search list).
+
+    Contract as the other backends: native values, ``[]`` for NXDOMAIN or no
+    record of the type, :class:`ResolutionError` when no server answered.
+    A CNAME chain inside the reply is followed.
+    """
+    query = _dst_argument(query)
+    name, rdtype = _question(query, rdtype)
+    servers = _servers(ns, port)
+    names = [name]
+    if isinstance(search, (list, tuple)) and not name.endswith(".") and "." not in name:
+        names = ["%s.%s" % (name, domain.strip(".")) for domain in search] + [name]
+    deadline = _time.monotonic() + (timeout if timeout is not None else 5.0)
+    last: Optional[Exception] = None
+    answered = False
+    for candidate in names:
+        for index, server in enumerate(servers):
+            remaining = deadline - _time.monotonic()
+            if remaining <= 0:
+                raise ResolutionError(
+                    "no answer within %ss (last: %s)" % (timeout, last)
+                )
+            # Each server gets its share of what is left, so a dead first one
+            # cannot use up the time the next would have answered in.
+            remaining /= len(servers) - index
+            try:
+                from_ = _source_for(source, server[0])
+                ident = int.from_bytes(_os.urandom(2), "big")
+                payload = _dnswire.build_query(candidate, rdtype, ident)
+                reply = _dnswire.parse_response(
+                    _exchange(server, payload, remaining, tcp, from_), ident
+                )
+                if reply.truncated and not tcp:
+                    reply = _dnswire.parse_response(
+                        _exchange(
+                            server,
+                            payload,
+                            max(deadline - _time.monotonic(), 0.01),
+                            True,
+                            from_,
+                        ),
+                        ident,
+                    )
+            except (OSError, ValueError) as exc:
+                last = exc
+                continue
+            if reply.rcode == _dnswire.NXDOMAIN:
+                answered = True
+                break
+            if reply.rcode != _dnswire.NOERROR:
+                last = ResolutionError(
+                    "%s:%d answered rcode %d" % (server[0], server[1], reply.rcode)
+                )
+                continue
+            values = reply.records(candidate, rdtype)
+            if values:
+                return values
+            answered = True
+            break
+    if answered:
+        return []
+    raise ResolutionError("no nameserver answered: %s" % (last,))
+
+
+def _urllib_fetch(
+    url: str, body: bytes, headers: "dict", timeout: Optional[float]
+) -> bytes:
+    import urllib.error
+    import urllib.request
+
+    request = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            kind = (
+                response.headers.get("Content-Type", "").split(";")[0].strip().lower()
+            )
+            if kind != "application/dns-message":
+                raise ResolutionError(
+                    "%s answered %s, not application/dns-message"
+                    % (url, kind or "nothing")
+                )
+            return response.read()
+    except urllib.error.HTTPError as exc:
+        raise ResolutionError("%s answered HTTP %d" % (url, exc.code))
+    except (urllib.error.URLError, OSError) as exc:
+        raise ResolutionError("%s: %s" % (url, getattr(exc, "reason", exc)))
+
+
+def resolve_doh(
+    query: "AddressLike",
+    url: str,
+    rdtype: Optional[str] = None,
+    timeout: Optional[float] = 5.0,
+    fetch: "Optional[Callable[[str, bytes, dict, Optional[float]], bytes]]" = None,
+) -> "List[Any]":
+    """Resolve ``query`` with DNS over HTTPS (RFC 8484): the DNS message
+    POSTed to ``url`` as ``application/dns-message``.
+
+    ::
+
+        resolve_doh("example.com", "https://cloudflare-dns.com/dns-query")
+
+    :param fetch: ``fetch(url, body, headers, timeout) -> bytes`` sends the
+        request -- so a caller with its own HTTP stack (a proxy, a CA bundle)
+        uses it. ``None``: :mod:`urllib.request`. An ``OSError`` or
+        ``ValueError`` from it is a :class:`ResolutionError`.
+    :param rdtype: as :func:`resolve_wire`.
+
+    Contract as the other backends: native values, ``[]`` for NXDOMAIN or no
+    record of the type, :class:`ResolutionError` when the endpoint could not
+    be asked or answered something else. Not part of :func:`resolve`'s chain.
+    """
+    query = _dst_argument(query)
+    name, rdtype = _question(query, rdtype)
+    payload = _dnswire.build_query(name, rdtype, 0)
+    headers = {
+        "Content-Type": "application/dns-message",
+        "Accept": "application/dns-message",
+    }
+    try:
+        body = (fetch or _urllib_fetch)(url, payload, headers, timeout)
+        reply = _dnswire.parse_response(body, 0)
+    except ResolutionError:
+        raise
+    except (OSError, ValueError) as exc:
+        raise ResolutionError("DNS over HTTPS via %s: %s" % (url, exc))
+    if reply.rcode == _dnswire.NXDOMAIN:
+        return []
+    if reply.rcode != _dnswire.NOERROR:
+        raise ResolutionError("%s answered rcode %d" % (url, reply.rcode))
+    return reply.records(name, rdtype)

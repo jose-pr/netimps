@@ -128,6 +128,8 @@ __all__ = [
     "resolve_dnspython",
     "resolve_system",
     "resolve_nslookup",
+    "resolve_wire",
+    "resolve_doh",
     "ResolutionError",
     "ping",
     "PingResult",
@@ -475,6 +477,8 @@ from ._dns import (  # noqa: E402
     resolve_dnspython,
     resolve_system,
     resolve_nslookup,
+    resolve_wire,
+    resolve_doh,
 )
 from ._ping import PingResult, ping  # noqa: E402
 from ._scan import PORT_RANGES, scan_hosts, scan_ports  # noqa: E402
