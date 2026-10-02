@@ -338,7 +338,8 @@ def subtract(
 
 
 def normalize_host(
-    text: str, default_port: Optional[int] = None
+    text: "Union[str, IPAddress, IPInterface, Any]",
+    default_port: Optional[int] = None,
 ) -> "Tuple[str, Optional[int]]":
     """Split ``"host:port"`` into ``(host, port)``, handling IPv6 brackets.
 
@@ -360,6 +361,13 @@ def normalize_host(
     (``"[fe80::1%eth0]:80"`` -> ``("fe80::1%eth0", 80)``). ``default_port`` is
     used when no port is present.
 
+    ``text`` accepts the package's usual loose union, not only a ``str``: an
+    address object, an :class:`IPv4Interface`/:class:`IPv6Interface` (its ``.ip``
+    is used), a :class:`Host` or an :class:`Fqdn`. :func:`join_host`, the inverse,
+    already did -- this insisted on a ``str`` and rejected the values a caller
+    holding "the host" most often has. A *network* raises :class:`TypeError`,
+    since it names no single host.
+
     Raises :class:`ValueError` on empty input, an unclosed bracket, a port that
     is not an integer in 0-65535, or an unbracketed string with two or more
     colons that is **not** a valid IPv6 address. That last one is a real input
@@ -367,7 +375,32 @@ def normalize_host(
     used to be handed back whole as the *host*, so the caller then looked up a
     name that cannot exist instead of being told what was wrong.
     """
-    if not isinstance(text, str) or not text.strip():
+    if not isinstance(text, str):
+        # The same loose union the rest of the package takes. This used to insist
+        # on a `str` and reject an address object, a `Host` or an `Fqdn` -- values
+        # a caller holding "the host" very often has, and which `join_host`, the
+        # inverse of this function, already accepts. A network still raises, via
+        # `_dst_argument`, since it has no single address.
+        from ._fqdn import Fqdn
+
+        if isinstance(text, (IPv4Network, IPv6Network)):
+            _dst_argument(text)  # raises TypeError, with the reason
+        if isinstance(text, (IPv4Address, IPv6Address, IPv4Interface, IPv6Interface)):
+            text = _dst_argument(text)
+        elif isinstance(text, (Host, Fqdn)):
+            # Both stringify to the text the caller means -- `Host` to its
+            # original spelling, `Fqdn` to the name with its trailing dot if it
+            # has one.
+            text = str(text)
+        else:
+            # An **allowlist**, not a `str()` fallback. A fallback accepted
+            # `None` and turned it into the hostname "None", which is the worst
+            # kind of answer: a plausible one that is wrong, and one a caller
+            # cannot detect. An int or a list went the same way.
+            raise ValueError(
+                "host must be a string, an address, a Host or an Fqdn, got %r" % (text,)
+            )
+    if not text.strip():
         raise ValueError("host must be a non-empty string, got %r" % (text,))
     text = text.strip()
 

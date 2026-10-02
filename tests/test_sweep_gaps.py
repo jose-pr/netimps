@@ -452,3 +452,109 @@ def test_the_new_names_are_all_exported():
     ):
         assert hasattr(netimps, name), name
         assert name in netimps.__all__, name
+
+
+# --------------------------------------------------------------------------- #
+# bind() and normalize_host() take the package's usual loose union             #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "label, value, expected",
+    [
+        ("str", "127.0.0.1", "127.0.0.1"),
+        ("IPv4Address", ipaddress.IPv4Address("127.0.0.1"), "127.0.0.1"),
+        ("IPv4Interface", ipaddress.IPv4Interface("127.0.0.1/8"), "127.0.0.1"),
+        ("Host", None, "127.0.0.1"),
+        ("Fqdn", None, "127.0.0.1"),
+    ],
+)
+def test_bind_accepts_more_than_a_string(label, value, expected):
+    """It used to leak a raw socket-layer TypeError for values every other
+    entry point in the package takes.
+
+    "str, bytes or bytearray expected, not IPv4Address" -- not even a netimps
+    error, for an address object. `ping`, `resolve` and `UdpEndpoint.send` all
+    coerce through the same helper; this one entry point simply never did.
+    """
+    if label == "Host":
+        value = netimps.Host("127.0.0.1")
+    elif label == "Fqdn":
+        value = netimps.Fqdn("localhost")
+    sock = bind(value, 0)
+    try:
+        assert sock.getsockname()[0] == expected
+    finally:
+        sock.close()
+
+
+def test_bind_still_treats_the_empty_string_as_the_wildcard():
+    sock = bind("", 0)
+    try:
+        assert sock.getsockname()[0] in ("0.0.0.0", "")
+    finally:
+        sock.close()
+
+
+def test_bind_refuses_a_network():
+    """A network names no single address, and guessing one would be worse."""
+    with pytest.raises(TypeError, match="not a network"):
+        bind(ipaddress.ip_network("10.0.0.0/24"), 0)
+
+
+@pytest.mark.parametrize(
+    "label, value, expected",
+    [
+        ("str", "example.com:80", ("example.com", 80)),
+        ("IPv4Address", ipaddress.IPv4Address("1.2.3.4"), ("1.2.3.4", None)),
+        ("IPv6Address", ipaddress.IPv6Address("::1"), ("::1", None)),
+        ("IPv4Interface", ipaddress.IPv4Interface("10.0.0.5/24"), ("10.0.0.5", None)),
+    ],
+)
+def test_normalize_host_accepts_more_than_a_string(label, value, expected):
+    """`join_host`, its inverse, already did -- this rejected the values a caller
+    holding "the host" most often has."""
+    assert netimps.normalize_host(value) == expected
+
+
+def test_normalize_host_accepts_host_and_fqdn():
+    assert netimps.normalize_host(netimps.Host("example.com")) == ("example.com", None)
+    # An Fqdn keeps its trailing dot, which is identity-bearing for a name.
+    assert netimps.normalize_host(netimps.Fqdn("b.com.")) == ("b.com.", None)
+
+
+@pytest.mark.parametrize("bad", [None, 42, [], b"x", object()])
+def test_normalize_host_uses_an_allowlist_not_a_str_fallback(bad):
+    """`str(None)` is the hostname "None" -- a plausible answer that is wrong.
+
+    An earlier version of this widening fell back to `str()` for anything
+    unrecognised, which accepted `None`, an int and a list and turned each into a
+    hostname a caller could not detect as bogus. The allowlist is the point.
+    """
+    with pytest.raises((ValueError, TypeError)):
+        netimps.normalize_host(bad)
+
+
+def test_normalize_host_still_refuses_a_network_and_an_empty_string():
+    with pytest.raises(TypeError, match="not a network"):
+        netimps.normalize_host(ipaddress.ip_network("10.0.0.0/24"))
+    with pytest.raises(ValueError):
+        netimps.normalize_host("")
+
+
+@pytest.mark.parametrize(
+    "host, port",
+    [
+        (ipaddress.IPv6Address("::1"), 69),
+        (ipaddress.IPv4Address("10.0.0.1"), 80),
+        ("example.com", 443),
+    ],
+)
+def test_the_round_trip_law_survives_the_widening(host, port):
+    """`normalize_host(join_host(h, p))` must still come back equal.
+
+    The pair are inverses, and widening one input must not break that -- which is
+    why this is asserted against the *parsed* forms the widening added, not only
+    against strings.
+    """
+    assert netimps.normalize_host(netimps.join_host(host, port)) == (str(host), port)

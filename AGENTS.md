@@ -78,6 +78,7 @@ src/netimps/
 ├── _udp.py        # private: UDP receive with arrival interface (pktinfo)
 ├── _fqdn.py       # private: Fqdn domain-name value type (label algebra)
 ├── _msg.py        # private: cross-platform recvmsg/sendmsg + the socket patch
+├── _aio.py        # private: add_reader polyfill, so arecv works on a Proactor loop
 ├── _winsock.py    # private: ctypes WSARecvMsg/WSASendMsg (Windows only, never imported elsewhere)
 ├── _iface_spec.py # private: shared InterfaceSpec coercion (MAC/name/Interface -> address)
 └── py.typed       # PEP 561 marker — the package ships inline type hints
@@ -126,6 +127,7 @@ map:
 | `AddressInUseError` | one stable `OSError` subclass for "the address is taken", never a `PermissionError` |
 | `UdpEndpoint`, `Datagram` | UDP receive with arrival interface (`IP_PKTINFO` / `IPV6_RECVPKTINFO`, per family) |
 | `UdpEndpoint.reply_socket` | a socket bound to answer *from* the address the client addressed |
+| `UdpEndpoint.arecv`, `.datagrams` | `recv` awaited / `async for`; pktinfo survives even on the Windows Proactor loop |
 | `recvmsg`, `sendmsg`, `CMSG_LEN`, `CMSG_SPACE`, `supports_recvmsg` | ancillary-data messaging on **every** platform, Windows included (via `WSARecvMsg`/`WSASendMsg`) |
 | `patch_socket_module`, `socket_patched` | install/remove the default-on `socket` patch that gives Windows the stdlib method names |
 | `Host` | hostname-or-address value type; `.fqdn` narrows a name to `Fqdn` |
@@ -344,6 +346,8 @@ Tests live in `tests/` and run via `pytest -q` from a checkout;
 | `test_centralized.py` | the helpers centralised from sibling repos: `bind`, `interface_for`, `UdpEndpoint`, `Host`, `retry` |
 | `test_fqdn.py` | `Fqdn` — the label algebra, the pathlib inversion, limits, the hash/eq law |
 | `test_sweep_gaps.py` | the gaps the 2026-10-03 consumer sweep found; each test pins the *difference* from the hand-rolled version |
+| `test_async_udp.py` | `arecv`/`datagrams` on a **real loop**, both Windows loop types, and no leaked threads |
+| `test_server_helpers.py` | `reply_socket`, `is_broadcast`, `max_udp_payload` |
 | `test_msg.py` | `recvmsg`/`sendmsg` on every platform, and the `socket` patch (install, reverse, no-op on POSIX) |
 | `test_cli.py` | the CLI; skips itself when the `cli` extra is absent |
 | `test_platform_smoke.py` | the **only** non-mocked tests — the real `ping`/`ping6` binary and real loopback sockets |

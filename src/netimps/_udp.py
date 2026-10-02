@@ -97,7 +97,7 @@ import socket as _socket
 import struct as _struct
 import sys as _sys
 import time as _time
-from typing import Dict, NamedTuple, Optional, Tuple, Union, cast
+from typing import Any, Dict, NamedTuple, Optional, Tuple, Union, cast
 
 from ._iface_spec import InterfaceSpec
 from ._ifaddrs import Interface
@@ -359,6 +359,7 @@ class UdpEndpoint:
         "_cmsg_size",
         "_iface_cache",
         "_iface_cache_at",
+        "_notifier",
     )
 
     def __init__(self, sock: "_socket.socket", pktinfo: bool = True) -> None:
@@ -368,6 +369,9 @@ class UdpEndpoint:
         self._cmsg_size = 0
         self._iface_cache: "Dict[int, Optional[Interface]]" = {}
         self._iface_cache_at = 0.0
+        #: Created on the first `arecv`, so a synchronous consumer never pays
+        #: for it -- on Windows it owns a thread.
+        self._notifier: "Any" = None
 
         family = getattr(sock, "family", _socket.AF_INET)
         level, receive_option, send_type, _layout = _pktinfo_options(family)
@@ -795,7 +799,99 @@ class UdpEndpoint:
             "could not bind a reply socket for %r" % (datagram.local_address,)
         ) from last
 
+    async def arecv(
+        self, bufsize: int = 65535, resolve_interface: bool = True
+    ) -> "Datagram":
+        """:meth:`recv`, awaited. Same arguments, same :class:`Datagram`.
+
+        Works on **every** asyncio loop, including the Windows default
+        ``ProactorEventLoop``, which has no ``add_reader`` and whose
+        ``recvfrom`` would discard the ancillary data this class exists for::
+
+            async def serve(endpoint):
+                while True:
+                    packet = await endpoint.arecv()
+                    with endpoint.reply_socket(packet) as reply:
+                        reply.sendto(answer(packet), packet.sender)
+
+        The read itself happens **on the loop**, not in a helper thread, so
+        ``bufsize`` stays a per-call argument and
+        :attr:`Datagram.truncated` keeps meaning what it means. Only the
+        *readability notification* is platform-specific -- ``add_reader`` where the
+        loop has it, a thread where it does not. See
+        :class:`netimps._aio.ReadNotifier`.
+
+        One waiter at a time: this is a receive loop's method, and two coroutines
+        awaiting the same endpoint would race for the same datagram regardless of
+        how the waiting were arranged.
+
+        :raises RuntimeError: if the endpoint has been closed.
+        """
+        notifier = self._ensure_notifier()
+        while True:
+            await notifier.wait()
+            try:
+                return self.recv(bufsize, resolve_interface)
+            except BlockingIOError:
+                # A spurious wakeup, or another reader took it. Wait again rather
+                # than returning an empty datagram.
+                continue
+
+    async def datagrams(
+        self, bufsize: int = 65535, resolve_interface: bool = True
+    ) -> "Any":
+        """Yield datagrams until the endpoint is closed -- ``async for`` sugar.
+
+        ::
+
+            async for packet in endpoint.datagrams():
+                ...
+
+        Stops cleanly on :meth:`close`; any other error propagates, because a
+        receive loop that swallows them is how a dead server looks healthy.
+        """
+        while True:
+            try:
+                yield await self.arecv(bufsize, resolve_interface)
+            except (RuntimeError, OSError, ValueError):
+                if self._closed_for_async():
+                    return
+                raise
+
+    def _ensure_notifier(self) -> "Any":
+        """The endpoint's readability notifier, created on first await.
+
+        Lazy on purpose: ``asyncio`` is not imported at package import time -- see
+        the note in :mod:`netimps._aio` -- and a purely synchronous consumer
+        should not pay for a thread it never uses.
+        """
+        if self._notifier is None:
+            if self.socket.fileno() < 0:
+                raise RuntimeError("endpoint is closed")
+            from ._aio import ReadNotifier
+
+            # Non-blocking, so a spurious readability signal cannot wedge the
+            # loop inside `recv`.
+            self.socket.setblocking(False)
+            self._notifier = ReadNotifier(self.socket)
+        return self._notifier
+
+    def _closed_for_async(self) -> bool:
+        try:
+            return self.socket.fileno() < 0
+        except Exception:  # pragma: no cover - a socket in an odd state
+            return True
+
     def close(self) -> None:
+        """Close the wrapped socket, and stop the async notifier if one was started.
+
+        The notifier goes first: its thread selects on this socket, and closing
+        the socket underneath it would turn an orderly shutdown into a caught
+        ``OSError``.
+        """
+        notifier, self._notifier = self._notifier, None
+        if notifier is not None:
+            notifier.close()
         self.socket.close()
 
     def __enter__(self) -> "UdpEndpoint":

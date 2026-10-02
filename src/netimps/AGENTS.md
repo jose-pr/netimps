@@ -291,6 +291,11 @@ so nothing is lost. Pass an existing enumeration in a loop; it is a syscall.
   `normalize_host(join_host(h, p)) == (h, p)` hold in every case. Raises
   `ValueError` for an empty host, a port outside 0–65535, or a mismatched
   bracket (`"[::1"` would otherwise emerge as `"[::1:80"`).
+  Both of these take the package's usual loose union, not only a `str`: an address
+  object, an `IPv4Interface`/`IPv6Interface` (its `.ip` is used), a `Host` or an
+  `Fqdn`. A *network* raises `TypeError` — it names no single host. `normalize_host`
+  uses an allowlist rather than a `str()` fallback, because a fallback turned
+  `None` into the hostname `"None"`.
 - **`unmap(value) -> IPAddress`** — collapse an IPv4-mapped IPv6 address
   (`::ffff:10.0.0.5`) to plain IPv4; anything else passes through. The form a
   dual-stack socket reports an IPv4 peer in, and almost nothing downstream wants
@@ -1337,6 +1342,31 @@ the wrapped socket, and the endpoint is a **context manager**
   ignores* a v6 cmsg on a v4 socket, so there is no correct silent behaviour
   available. An `OSError` from the kernel, meaning a source this host cannot
   send from, propagates; only platform incapability degrades to `sendto`.
+- **`async arecv(bufsize=65535, resolve_interface=True)`** and
+  **`datagrams(...)`** — `recv()` awaited, and an `async for` over arrivals:
+
+  ```python
+  async for packet in endpoint.datagrams():
+      with endpoint.reply_socket(packet) as reply:
+          reply.sendto(answer(packet), packet.sender)
+  ```
+
+  **Pktinfo survives on every loop type**, which is not free. The Windows default
+  `ProactorEventLoop` raises `NotImplementedError` from `add_reader`, and its own
+  `recvfrom` discards ancillary data; `_overlapped` exposes no `WSARecvMsg`, so
+  there is no IOCP route without private API, and
+  `DatagramProtocol.datagram_received(data, addr)` has no slot for cmsgs. So on
+  such a loop a thread waits — and it **reports readability only, never reads**.
+  The `recv` stays on the loop, so `bufsize` is still per call and
+  `.truncated` still means what it says.
+
+  One waiter at a time: this is a receive loop's method, and two coroutines
+  awaiting one endpoint would race for the same datagram however the waiting were
+  arranged. The thread, where there is one, is created on the first `await` and
+  joined by `close()`. `recv()` is unaffected — the synchronous path is untouched.
+
+  **`asyncio` is imported lazily**, never by `import netimps`. A consumer using
+  only the value types pays nothing for it.
 - **`reply_socket(datagram, port=0, connreset=False)`** — a socket bound so
   replies leave from the address the client addressed. The point of pktinfo, in
   one call:

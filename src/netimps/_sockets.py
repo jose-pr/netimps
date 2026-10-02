@@ -175,7 +175,7 @@ class AddressInUseError(OSError):
 
 
 def bind(
-    address: str = "",
+    address: "AddressLike" = "",
     port: int = 0,
     *,
     family: int = _socket.AF_INET,
@@ -200,6 +200,17 @@ def bind(
 
     :param address: local address to bind. ``""`` (the default) is the
         wildcard, which is what a server almost always wants.
+
+        Accepts the same loose union as the rest of the package, not just a
+        ``str``: an :class:`IPv4Address`/:class:`IPv6Address`, an
+        :class:`IPv4Interface`/:class:`IPv6Interface` (its ``.ip`` is used, since
+        the ``/prefix`` means nothing to ``bind``), a :class:`netimps.Host` or a
+        :class:`netimps.Fqdn`. It used to insist on a ``str`` and leak a raw
+        ``TypeError`` from the socket layer -- "str, bytes or bytearray expected,
+        not IPv4Address" -- for a value every other entry point in the package
+        takes. A *network* raises :class:`TypeError`, because it has no single
+        address and guessing one (the network address? the first host?) would be
+        worse than refusing.
     :param port: local port; ``0`` lets the OS choose.
     :param interface: bind to this adapter's address instead of ``address``.
         Accepts an :class:`Interface`, a MAC, an adapter name or an address --
@@ -248,6 +259,11 @@ def bind(
     for turning that into something a user can act on. The socket is closed
     before the exception propagates, so a failed call leaks nothing.
     """
+    # Coerced through the same helper `ping`, `resolve` and `UdpEndpoint.send`
+    # use, so one union is accepted everywhere rather than this one entry point
+    # being stricter than its neighbours.
+    address = _dst_argument(address) if address != "" else ""
+
     if interface is not None:
         resolved = _interface_address(interface, want_ipv6=(family == _socket.AF_INET6))
         if resolved is None:

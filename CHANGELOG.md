@@ -131,6 +131,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`UdpEndpoint.arecv()` and `.datagrams()`** -- `recv()` awaited, and an
+  `async for` over arrivals. Same arguments, same `Datagram`, and **pktinfo
+  survives on every loop type**, including the Windows default
+  `ProactorEventLoop`.
+
+  That default is the whole difficulty: it raises `NotImplementedError` from
+  `add_reader`, and its own `IocpProactor.recvfrom` discards ancillary data. Nor
+  is there an IOCP route -- measured on 3.14, CPython's `_overlapped` exposes no
+  `WSARecvMsg`, so posting one through the loop's completion port would mean
+  reimplementing the overlapped plumbing *and* calling the private
+  `IocpProactor._register`. (`asyncio.DatagramProtocol.datagram_received(data,
+  addr)` has no slot for cmsgs either, so a transport could not deliver them
+  anyway.)
+
+  So on such a loop a thread does the waiting -- and it **reports readability
+  only, never reads**. The `recv` stays on the loop, which keeps `bufsize` a
+  per-call argument and `Datagram.truncated` meaning what it means; a thread that
+  read for you would have to fix `bufsize` when it started. It is created on the
+  first `await`, joined on `close()`, and a test asserts no thread survives the
+  endpoint. `recv()` is untouched.
+
+  `asyncio` is imported **lazily**, never at package import time: pulling it into
+  `__init__` would force the very import ordering that produced this release's
+  `os.sysconf` crash, and a consumer using only the value types should not pay for
+  an event-loop import. A test spawns a fresh interpreter to assert
+  `'asyncio' not in sys.modules` after `import netimps`.
+
+### Changed
+
+- **`bind()` and `normalize_host()` now accept the package's usual loose union**,
+  not just a `str`: an address object, an `IPv4Interface`/`IPv6Interface` (its
+  `.ip` is used), a `Host` or an `Fqdn`. `bind()` previously leaked a raw
+  socket-layer `TypeError` -- "str, bytes or bytearray expected, not
+  IPv4Address" -- not even a netimps error, for a value `ping`, `resolve` and
+  `UdpEndpoint.send` all take; they coerce through a shared helper that these two
+  simply never used. `join_host`, `normalize_host`'s inverse, already accepted
+  them. A *network* still raises `TypeError`, since it names no single host.
+
+  `normalize_host` uses an **allowlist**, not a `str()` fallback. A fallback
+  accepted `None` and turned it into the hostname `"None"` -- a plausible answer
+  that is wrong and that a caller cannot detect -- and did the same for an int or
+  a list.
+
+### Added
+
 - **`UdpEndpoint.reply_socket(datagram)`** -- a socket bound so replies leave
   from the address the client addressed, which is the point of pktinfo in one
   call. A wildcard-bound server answering from a fresh socket sends from whatever
