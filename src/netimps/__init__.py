@@ -149,6 +149,14 @@ __all__ = [
     "is_local_address",
     "UdpEndpoint",
     "Datagram",
+    # Ancillary-data messaging, available on every platform (Windows included).
+    "recvmsg",
+    "sendmsg",
+    "CMSG_LEN",
+    "CMSG_SPACE",
+    "supports_recvmsg",
+    "patch_socket_module",
+    "socket_patched",
     "retry",
     "backoff_delays",
     # Scanning.
@@ -489,6 +497,32 @@ from ._multicast import (  # noqa: E402
     multicast_socket,
 )
 from ._retry import backoff_delays, retry  # noqa: E402
+from ._msg import (  # noqa: E402
+    CMSG_LEN,
+    CMSG_SPACE,
+    patch_socket_module,
+    recvmsg,
+    sendmsg,
+    socket_patched,
+    supports_recvmsg,
+)
+from ._msg import _patch_requested as _msg_patch_requested  # noqa: E402
+
+# The patch is for *other people's* code: `_udp` calls `_msg` directly, so
+# netimps' own behaviour is identical whether or not this runs. That is
+# deliberate -- opting out below must not quietly cost `UdpEndpoint` its
+# pktinfo support.
+#
+# Third-party code is the reason it is installed this early: a module that reads
+# `socket.CMSG_SPACE` into a constant at *its* import time (which is the normal
+# way to probe it) sees None if it is imported before this line.
+#
+# Opt out with NETIMPS_NO_SOCKET_PATCH=1 before the first import, or call
+# `patch_socket_module(False)` afterwards. See `_msg` for why this is default-on
+# and why it installs four names rather than one.
+if _msg_patch_requested():
+    patch_socket_module()
+
 from ._udp import Datagram, UdpEndpoint  # noqa: E402
 from ._sockets import (  # noqa: E402
     bind,

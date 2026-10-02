@@ -76,6 +76,8 @@ src/netimps/
 ├── _ping.py       # private: ping() over the platform binary
 ├── _retry.py      # private: bounded retry with exponential backoff
 ├── _udp.py        # private: UDP receive with arrival interface (pktinfo)
+├── _msg.py        # private: cross-platform recvmsg/sendmsg + the socket patch
+├── _winsock.py    # private: ctypes WSARecvMsg/WSASendMsg (Windows only, never imported elsewhere)
 ├── _iface_spec.py # private: shared InterfaceSpec coercion (MAC/name/Interface -> address)
 └── py.typed       # PEP 561 marker — the package ships inline type hints
 ```
@@ -118,6 +120,8 @@ map:
 | `bind`, `bind_error_hint`, `interface_for`, `interfaces_for`, `is_local_address` | socket creation and local membership |
 | `get_source_ip`, `get_free_port`, `tcp_check`, `wait_for_port` | socket helpers |
 | `UdpEndpoint`, `Datagram` | UDP receive with arrival interface (`IP_PKTINFO` / `IPV6_RECVPKTINFO`, per family) |
+| `recvmsg`, `sendmsg`, `CMSG_LEN`, `CMSG_SPACE`, `supports_recvmsg` | ancillary-data messaging on **every** platform, Windows included (via `WSARecvMsg`/`WSASendMsg`) |
+| `patch_socket_module`, `socket_patched` | install/remove the default-on `socket` patch that gives Windows the stdlib method names |
 | `Host` | hostname-or-address value type |
 | `retry`, `backoff_delays` | bounded retry with exponential backoff |
 | `APIPA`, `LOOPBACK_V4`, `LOOPBACK_V6`, `LINK_LOCAL_V6` | named networks |

@@ -53,11 +53,16 @@ from __future__ import annotations
 
 import socket as _socket
 import struct as _struct
-from typing import NamedTuple, Optional, Tuple, Union
+import sys as _sys
+from typing import NamedTuple, Optional, Tuple, Union, cast
 
 from ._iface_spec import InterfaceSpec
 from ._ifaddrs import Interface
 from ._ip import AddressLike, IPAddress, IPv4Address, IPv6Address, _dst_argument
+from ._msg import CMSG_SPACE as _cmsg_space
+from ._msg import recvmsg as _recvmsg
+from ._msg import sendmsg as _sendmsg
+from ._msg import supports_recvmsg as _supports_recvmsg
 
 __all__ = ["UdpEndpoint", "Datagram"]
 
@@ -69,12 +74,28 @@ __all__ = ["UdpEndpoint", "Datagram"]
 _IP_PKTINFO = getattr(_socket, "IP_PKTINFO", None)
 _IPV6_PKTINFO = getattr(_socket, "IPV6_PKTINFO", None)
 _IPV6_RECVPKTINFO = getattr(_socket, "IPV6_RECVPKTINFO", None)
-_CMSG_SPACE = getattr(_socket, "CMSG_SPACE", None)
 _MSG_CTRUNC = getattr(_socket, "MSG_CTRUNC", 0)
 
-#: ``struct in_pktinfo``: interface index, then the local and destination
-#: addresses. Native byte order -- this never leaves the host.
-_PKTINFO_V4 = "=I4s4s"
+_IS_WINDOWS = _sys.platform == "win32"
+
+#: ``struct in_pktinfo``, and it is **not one layout across platforms** -- the
+#: field order differs, not merely the size, so a single string cannot serve
+#: both. Native byte order; this never leaves the host.
+#:
+#: - POSIX ``in_pktinfo``: ``{ipi_ifindex; ipi_spec_dst; ipi_addr}``, 12 bytes.
+#: - Windows ``IN_PKTINFO``: ``{ipi_addr; ipi_ifindex}``, 8 bytes, and there is
+#:   no ``spec_dst`` at all.
+#:
+#: Measured 2026-10-02 on loopback: Linux delivered ``cmsg_type`` 8 with 12
+#: bytes, Windows ``cmsg_type`` 19 with 8 bytes. Parsing one with the other's
+#: layout does not raise -- it yields a *plausible wrong address* and index 0,
+#: which is exactly the failure this table exists to prevent.
+_PKTINFO_V4 = "=4sI" if _IS_WINDOWS else "=I4s4s"
+
+#: Whether :data:`_PKTINFO_V4` puts the address before the index. Kept as its
+#: own flag because the struct string alone cannot tell the unpacker which
+#: field it is looking at.
+_PKTINFO_V4_ADDR_FIRST = _IS_WINDOWS
 
 #: ``struct in6_pktinfo``: the 16-byte address **first**, then the interface
 #: index. The opposite field order from ``in_pktinfo``, which is why the two
@@ -143,7 +164,11 @@ def _unpack_pktinfo(
         size = _struct.calcsize(_PKTINFO_V4)
         if len(cdata) < size:
             return None
-        index, _local_if, destination = _struct.unpack(_PKTINFO_V4, cdata[:size])
+        fields = _struct.unpack(_PKTINFO_V4, cdata[:size])
+        if _PKTINFO_V4_ADDR_FIRST:
+            destination, index = fields
+        else:
+            index, _local_if, destination = fields
         return int(index), try_parse(destination)
 
     if level == _socket.IPPROTO_IPV6 and ctype in _V6_PKTINFO_TYPES:
@@ -233,18 +258,16 @@ class UdpEndpoint:
         # Sending needs no socket option, only ``sendmsg`` and a cmsg type for
         # the family -- so it is decided independently of ``pktinfo=``, which
         # is about what arrives.
-        self.supports_src_pinning = send_type is not None and hasattr(sock, "sendmsg")
+        self.supports_src_pinning = send_type is not None and _supports_recvmsg()
 
-        if not pktinfo or receive_option is None or _CMSG_SPACE is None:
+        if not pktinfo or receive_option is None or not _supports_recvmsg():
             return
-        if not hasattr(sock, "recvmsg"):
-            return  # Windows
         try:
             sock.setsockopt(level, receive_option, 1)
         except OSError:
             return  # option exists but this socket/family refuses it
         self.supports_pktinfo = True
-        self._cmsg_size = _CMSG_SPACE(_CMSG_SLOT_BYTES) * _CMSG_SLOTS
+        self._cmsg_size = _cmsg_space(_CMSG_SLOT_BYTES) * _CMSG_SLOTS
 
     def recv(self, bufsize: int = 65535, resolve_interface: bool = True) -> Datagram:
         """Receive one datagram.
@@ -264,11 +287,18 @@ class UdpEndpoint:
             data, sender = self.socket.recvfrom(bufsize)
             return Datagram(data=data, sender=sender)
 
-        # recvmsg is POSIX-only; the hasattr guard in __init__ is what makes
-        # this unreachable on Windows, which the type stubs cannot express.
-        data, ancdata, flags, sender = self.socket.recvmsg(  # type: ignore[attr-defined]
-            bufsize, self._cmsg_size
+        # Routed through `_msg`, not `self.socket.recvmsg`, so this works on
+        # Windows whether or not the stdlib patch is installed -- a caller who
+        # sets NETIMPS_NO_SOCKET_PATCH must not thereby lose pktinfo here.
+        data, ancdata, flags, raw_sender = _recvmsg(
+            self.socket, bufsize, self._cmsg_size
         )
+        # `_msg.recvmsg` types the address as optional because it decodes only
+        # AF_INET/AF_INET6 sockaddrs and answers None for anything else. This
+        # endpoint is one of those two by construction -- `_pktinfo_options`
+        # already dispatched on the family -- so the narrowing is sound here and
+        # would not be in the general case.
+        sender = cast("SocketAddress", raw_sender)
 
         index = 0
         local: "Optional[IPAddress]" = None
@@ -347,7 +377,22 @@ class UdpEndpoint:
                 "cannot pin an IPv6 source (%s) on an AF_INET socket -- "
                 "build the endpoint on an AF_INET6 socket instead" % (local,)
             )
+        if local is None and _IS_WINDOWS:
+            # Windows sends a zero source address **literally**: measured, a pin
+            # of 0.0.0.0 arrives from 0.0.0.0 rather than letting the kernel
+            # choose, which is what Linux does with the same bytes. An
+            # index-only pin therefore cannot be expressed this way here, and
+            # silently sending from 0.0.0.0 would be far worse than refusing.
+            raise ValueError(
+                "cannot pin by interface index alone on Windows (index %d): the "
+                "platform sends a zero source address literally rather than "
+                "choosing one. Pass an address-bearing src instead." % (index,)
+            )
         packed = local.packed if local is not None else b"\x00" * 4
+        if _PKTINFO_V4_ADDR_FIRST:
+            # Windows IN_PKTINFO has no spec_dst, and ipi_addr *is* the field
+            # the send path reads -- the opposite of POSIX below.
+            return level, send_type, _struct.pack(_PKTINFO_V4, packed, index)
         # ipi_addr is the *destination* on receipt and ignored on send; only
         # ipi_spec_dst selects the source address. Measured: zeroing it
         # changes nothing, and filling it with the source was misleading.
@@ -400,12 +445,8 @@ class UdpEndpoint:
         if control is None:
             return self.socket.sendto(data, target)
 
-        # sendmsg is POSIX-only, same as recvmsg above.
-        return int(
-            self.socket.sendmsg(  # type: ignore[attr-defined]
-                [data], [control], 0, target
-            )
-        )
+        # Through `_msg`, same reasoning as `recv` above.
+        return int(_sendmsg(self.socket, [data], [control], 0, target))
 
     def close(self) -> None:
         self.socket.close()

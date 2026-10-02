@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`recvmsg()` / `sendmsg()` now work on Windows**, and are public on every
+  platform, along with `CMSG_LEN()`, `CMSG_SPACE()` and `supports_recvmsg()`.
+  CPython ships neither method on Windows, so this binds `WSARecvMsg` and
+  `WSASendMsg` through `ctypes` and delegates to CPython's own methods
+  elsewhere. Signatures and return shapes are CPython's exactly, for both
+  address families -- an `AF_INET6` sender comes back as the usual
+  `(host, port, flowinfo, scope_id)` 4-tuple, and a v6 destination accepts a
+  2-, 3- or 4-tuple with an optional `%zone` suffix.
+- **`UdpEndpoint` reports the arrival interface on Windows**, v4 and v6:
+  `supports_pktinfo` and `supports_src_pinning` are no longer always `False`
+  there. It calls the Winsock backend directly rather than the patched stdlib
+  method, so disabling the patch below does not cost it pktinfo. One gap is
+  deliberate: pinning by interface index *alone* raises `ValueError` on Windows,
+  because that platform sends a zero source address literally -- a pin of
+  `0.0.0.0` arrives from `0.0.0.0` -- where Linux reads zero as "kernel
+  chooses". Pass an address-bearing `src`.
+- **`patch_socket_module()` / `socket_patched()`**, and netimps installs the
+  patch **on import by default**: `recvmsg`/`sendmsg` onto `socket.socket` and
+  `CMSG_LEN`/`CMSG_SPACE` onto the `socket` module, so POSIX-shaped code runs
+  unchanged on Windows. Set `NETIMPS_NO_SOCKET_PATCH=1` before the first import
+  to decline, or call `patch_socket_module(False)` afterwards. It is strictly
+  additive and never replaces a name the platform already provides, so on Linux
+  and macOS it is a verified no-op. All four names are installed rather than
+  just the method, because Windows lacks `CMSG_SPACE` too and the standard idiom
+  is detect, then size a buffer, then receive.
+
+  Cmsg payloads are **not** normalised to Linux's byte layouts. They genuinely
+  differ -- a v4 `IP_PKTINFO` cmsg is type 8, 12 bytes,
+  `{ifindex; spec_dst; addr}` on Linux against type 19, 8 bytes,
+  `{addr; ifindex}` on Windows -- and faking one as the other would make
+  correct-looking code read a plausible wrong address instead of failing.
+  `UdpEndpoint` is the layer that handles the difference for you.
 - **`resolve_wire()`** -- a DNS client on the standard library alone: one
   question over UDP to each nameserver in turn, asked again over TCP when the
   reply is truncated, CNAME chains followed, records returned as native types

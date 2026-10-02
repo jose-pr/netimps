@@ -882,6 +882,61 @@ receives nothing, and looks fine:
   raises for an IPv6 group, because index `0` means "kernel's choice" — the
   default `interface=` was passed to override.
 
+## Ancillary data: `recvmsg` / `sendmsg` on every platform
+
+CPython ships no `recvmsg`/`sendmsg` on Windows — not a missing constant but a
+missing feature, so probing `socket` for it cannot help. These provide them
+there via `WSARecvMsg`/`WSASendMsg`, and delegate to CPython's own methods
+everywhere else. **Both address families, and both directions.**
+
+**`recvmsg(sock, bufsize, ancbufsize=0, flags=0)`** → `(data, ancdata,
+msg_flags, address)`, exactly CPython's 4-tuple. `ancdata` is a list of
+`(cmsg_level, cmsg_type, cmsg_data)`. `address` is `(host, port)` for `AF_INET`
+and `(host, port, flowinfo, scope_id)` for `AF_INET6`.
+
+**`sendmsg(sock, buffers, ancdata=(), flags=0, address=None)`** → bytes sent.
+`buffers` is a *sequence* of bytes-like objects, not a bare `bytes` (passing
+one raises `TypeError`, as CPython does). A v6 `address` may be a 2-, 3- or
+4-tuple, and a `%zone` suffix on the host is honoured when `scope_id` is absent.
+
+**`CMSG_LEN(length)`** / **`CMSG_SPACE(length)`** — native where CPython has
+them, computed from `WSACMSGHDR` and pointer alignment on Windows. Size an
+`ancbufsize` with `CMSG_SPACE`, never `CMSG_LEN`: the difference is the pad that
+lets a *following* header start aligned, and omitting it silently truncates the
+second cmsg.
+
+**`supports_recvmsg()`** → whether the above can actually run here. Prefer it to
+`hasattr(socket.socket, "recvmsg")`, which answers a different question once the
+patch below is installed.
+
+**`patch_socket_module(enable=True)`** → list of names changed.
+**`socket_patched()`** → whether anything is installed right now.
+
+- **The patch is installed by default, at `import netimps`.** It adds
+  `recvmsg`/`sendmsg` to `socket.socket` and `CMSG_LEN`/`CMSG_SPACE` to the
+  `socket` module, so POSIX-shaped code runs unchanged on Windows. Opt out with
+  **`NETIMPS_NO_SOCKET_PATCH=1`** before the first import, or
+  `patch_socket_module(False)` after it. The env var exists because the choice
+  has to be expressible *before* import.
+- **It is strictly additive and never replaces a native name**, so on Linux and
+  macOS it is a verified no-op (`socket_patched()` is `False` there). If CPython
+  ever ships `recvmsg` on Windows, it stands down by itself.
+- **It installs all four names, not just `recvmsg`.** Windows has no
+  `CMSG_SPACE` either, and the usual idiom is detect → size → receive; patching
+  only the method would let the detection succeed and fail on the next line.
+- **Payloads are the platform's own bytes — they are *not* normalised to
+  Linux's layouts**, because the layouts genuinely differ. Measured on loopback:
+  a v4 `IP_PKTINFO` cmsg is type `8`, 12 bytes, `{ifindex; spec_dst; addr}` on
+  Linux and type `19`, 8 bytes, `{addr; ifindex}` on Windows. Faking one as the
+  other would make correct-looking code read a *plausible wrong address* rather
+  than fail honestly. Use `UdpEndpoint` if you want that difference handled for
+  you. The v6 `in6_pktinfo` layout does agree (`{addr; ifindex}`), though the
+  cmsg type does not (`50` vs `19`).
+- Errors are CPython's: `BlockingIOError` on an empty non-blocking socket (on
+  Windows too), and `OSError(ENOTSUP)` only where neither backend can serve it.
+- A datagram too large for `bufsize` sets `MSG_TRUNC` in `msg_flags` rather than
+  raising, because Winsock reports that as an error where POSIX sets a flag.
+
 ## UDP with arrival interface
 
 **`UdpEndpoint(sock, pktinfo=True)`** — wraps a bound UDP socket so each
@@ -911,13 +966,22 @@ the wrapped socket, and the endpoint is a **context manager**
   family.** `supports_pktinfo` — `recv` will report the arrival interface;
   `False`, never an optimistic `True`, whenever the option for *this* family is
   missing or refused. `supports_src_pinning` — `send(src=)` can be honoured;
-  `False` where the platform has no `sendmsg` (Windows) or no pktinfo cmsg for
-  the family (macOS has no `IP_PKTINFO`).
-- **Degrades rather than failing.** `recvmsg`/`sendmsg` do not exist on Windows
-  whatever the constants say; there `recv` falls back to `recvfrom` and the
-  interface fields are empty, while `send` sends unpinned without even
-  resolving the spec. Check the two flags rather than inferring from an empty
-  result.
+  `False` where there is no pktinfo cmsg for the family (macOS has no
+  `IP_PKTINFO`).
+- **Windows is supported, as of the Winsock backend.** Both flags are `True`
+  there for v4 and v6, via `WSARecvMsg`/`WSASendMsg` — see **Ancillary data**
+  above. `UdpEndpoint` calls that backend *directly* rather than the patched
+  stdlib method, so `NETIMPS_NO_SOCKET_PATCH=1` does not cost it pktinfo.
+  The per-platform `in_pktinfo` layout difference is handled internally; this is
+  the wrapper that exists so callers need not know it.
+- **One thing Windows cannot do: pin by interface index alone.** It sends a zero
+  source address *literally* — measured, a pin of `0.0.0.0` arrives from
+  `0.0.0.0` — where Linux reads zero as "kernel chooses". An index-only `src`
+  therefore raises `ValueError` there rather than sending from the wrong
+  address. Pass an address-bearing `src`.
+- **Degrades rather than failing**, where a platform still cannot serve it:
+  `recv` falls back to `recvfrom` with empty interface fields, and `send` sends
+  unpinned. Check the two flags rather than inferring from an empty result.
 - **`pktinfo=False` governs receiving only.** Sending needs no socket option,
   so `send(src=)` is still honoured on an endpoint built with it.
 - **`send(src=)` pins the interface index as well as the source address.** The
