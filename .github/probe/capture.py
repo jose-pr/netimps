@@ -18,6 +18,7 @@ import platform
 import re
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import time
@@ -383,6 +384,287 @@ if netimps is not None:
     call(
         "multicast_socket('ff02::1', 0)", lambda: netimps.multicast_socket("ff02::1", 0)
     )
+
+# --------------------------------------------------------------------------
+section("pktinfo: constants, cmsg payloads, dual-stack and src pinning")
+# --------------------------------------------------------------------------
+# Captures *bytes*, not conclusions. The v4 pktinfo cmsg has a different field
+# order and length on Windows than on Linux, macOS has no `IP_PKTINFO` at all
+# and needs `IP_RECVDSTADDR`/`IP_RECVIF` instead, and Windows sends a zero
+# source address literally where Linux reads it as "kernel chooses". Every one
+# of those was a surprise, so the raw hex is recorded and left uninterpreted --
+# a later reader can re-parse it without re-running the matrix.
+
+print("\n--- constants")
+for _opt in (
+    "IP_PKTINFO",
+    "IP_RECVDSTADDR",
+    "IP_RECVIF",
+    "IP_UNICAST_IF",
+    "IPV6_PKTINFO",
+    "IPV6_RECVPKTINFO",
+    "IPV6_UNICAST_IF",
+    "IPV6_V6ONLY",
+    "MSG_CTRUNC",
+    "MSG_TRUNC",
+):
+    _value = getattr(socket, _opt, None)
+    print("   socket.%-20s %s" % (_opt, _value))
+    record("pktinfo:const:%s" % _opt, value=_value)
+
+for _helper in ("CMSG_LEN", "CMSG_SPACE", "recvmsg", "sendmsg"):
+    _present = hasattr(socket, _helper) or hasattr(socket.socket, _helper)
+    print("   stdlib %-20s %s" % (_helper, "present" if _present else "ABSENT"))
+    record("pktinfo:stdlib:%s" % _helper, value=_present)
+
+if netimps is not None:
+    print("\n--- netimps messaging layer")
+    call("netimps.supports_recvmsg()", lambda: netimps.supports_recvmsg())
+    # False on POSIX is the correct answer: the patch is strictly additive, so a
+    # platform that already has these must come back untouched.
+    call("netimps.socket_patched()", lambda: netimps.socket_patched())
+    call("netimps.CMSG_SPACE(8)", lambda: netimps.CMSG_SPACE(8))
+    call("netimps.CMSG_LEN(8)", lambda: netimps.CMSG_LEN(8))
+
+
+def pktinfo_capture(label, family, bind_host, send_to, setopts, v6only=None):
+    """Enable *setopts*, receive one datagram, record every cmsg verbatim."""
+    print("\n--- %s" % label)
+    info = {"family": int(family), "bind": bind_host, "sent_to": send_to}
+    server = client = None
+    try:
+        server = socket.socket(family, socket.SOCK_DGRAM)
+        if v6only is not None and hasattr(socket, "IPV6_V6ONLY"):
+            try:
+                server.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, int(v6only))
+                info["v6only"] = int(v6only)
+            except OSError as exc:
+                info["v6only_error"] = repr(exc)
+        server.bind((bind_host, 0))
+        port = server.getsockname()[1]
+        applied = []
+        for level, option, name in setopts:
+            if option is None:
+                applied.append("%s=absent" % name)
+                continue
+            try:
+                server.setsockopt(level, option, 1)
+                applied.append("%s=ok" % name)
+            except OSError as exc:
+                applied.append("%s=%r" % (name, exc))
+        info["setsockopt"] = applied
+        print("   setsockopt: %s" % ", ".join(applied))
+
+        client = socket.socket(
+            socket.AF_INET if "." in send_to else family, socket.SOCK_DGRAM
+        )
+        client.sendto(b"probe", (send_to, port))
+        server.settimeout(5.0)
+        data, ancdata, flags, sender = netimps.recvmsg(
+            server, 2048, netimps.CMSG_SPACE(256)
+        )
+        info["data"] = data.decode("ascii", "replace")
+        info["sender"] = repr(sender)
+        info["msg_flags"] = flags
+        info["cmsgs"] = [
+            {"level": lvl, "type": ctype, "len": len(cdata), "hex": cdata.hex()}
+            for lvl, ctype, cdata in ancdata
+        ]
+        print(
+            "   sender=%s flags=%#x cmsgs=%d"
+            % (info["sender"], flags, len(info["cmsgs"]))
+        )
+        for entry in info["cmsgs"]:
+            print(
+                "   cmsg level=%(level)s type=%(type)s len=%(len)s hex=%(hex)s" % entry
+            )
+        if not info["cmsgs"]:
+            print("   [no cmsg -- the option did not deliver on this platform]")
+    except BaseException as exc:  # noqa: BLE001 - a probe must never abort
+        info["error"] = repr(exc)
+        print("   ! %r" % (exc,))
+    finally:
+        for sock in (server, client):
+            try:
+                if sock is not None:
+                    sock.close()
+            except OSError:
+                pass
+    record("pktinfo:%s" % label, **info)
+    return info
+
+
+if netimps is not None and netimps.supports_recvmsg():
+    _ip_pktinfo = getattr(socket, "IP_PKTINFO", None)
+    _ip_recvdstaddr = getattr(socket, "IP_RECVDSTADDR", None)
+    _ip_recvif = getattr(socket, "IP_RECVIF", None)
+    _v6_recv = getattr(socket, "IPV6_RECVPKTINFO", None) or getattr(
+        socket, "IPV6_PKTINFO", None
+    )
+
+    # (a) macOS has no IP_PKTINFO. Set every v4 option this platform exports and
+    # let the cmsg list say which of them actually delivered.
+    pktinfo_capture(
+        "v4-loopback",
+        socket.AF_INET,
+        "127.0.0.1",
+        "127.0.0.1",
+        [
+            (socket.IPPROTO_IP, _ip_pktinfo, "IP_PKTINFO"),
+            (socket.IPPROTO_IP, _ip_recvdstaddr, "IP_RECVDSTADDR"),
+            (socket.IPPROTO_IP, _ip_recvif, "IP_RECVIF"),
+        ],
+    )
+
+    # A virtual IP: does the arrival address report the VIP rather than the
+    # bound wildcard? This is the whole reason the feature exists.
+    pktinfo_capture(
+        "v4-wildcard-to-127.0.0.2",
+        socket.AF_INET,
+        "0.0.0.0",
+        "127.0.0.2",
+        [
+            (socket.IPPROTO_IP, _ip_pktinfo, "IP_PKTINFO"),
+            (socket.IPPROTO_IP, _ip_recvdstaddr, "IP_RECVDSTADDR"),
+            (socket.IPPROTO_IP, _ip_recvif, "IP_RECVIF"),
+        ],
+    )
+
+    pktinfo_capture(
+        "v6-loopback",
+        socket.AF_INET6,
+        "::1",
+        "::1",
+        [(socket.IPPROTO_IPV6, _v6_recv, "IPV6_RECV/PKTINFO")],
+    )
+
+    # (b) Does a v6-ONLY socket accept IP_PKTINFO? Windows accepted it on a
+    # dual-stack socket; whether it does with V6ONLY=1 decides whether the
+    # option can be set unconditionally or must be conditional.
+    pktinfo_capture(
+        "v6only-accepts-IP_PKTINFO",
+        socket.AF_INET6,
+        "::1",
+        "::1",
+        [
+            (socket.IPPROTO_IPV6, _v6_recv, "IPV6_RECV/PKTINFO"),
+            (socket.IPPROTO_IP, _ip_pktinfo, "IP_PKTINFO"),
+        ],
+        v6only=True,
+    )
+
+    # (c) Dual-stack: a v4 arrival on an AF_INET6 socket. Linux reports the
+    # v4-mapped form from the v6 option alone; Windows was measured delivering
+    # NO cmsg unless IP_PKTINFO is also set, and then the *plain* v4 address.
+    pktinfo_capture(
+        "dualstack-v4-arrival",
+        socket.AF_INET6,
+        "::",
+        "127.0.0.1",
+        [
+            (socket.IPPROTO_IPV6, _v6_recv, "IPV6_RECV/PKTINFO"),
+            (socket.IPPROTO_IP, _ip_pktinfo, "IP_PKTINFO"),
+        ],
+        v6only=False,
+    )
+
+
+def pin_capture(label, family, host, src):
+    """Pin a source with UdpEndpoint.send(src=) and report what the peer saw.
+
+    The endpoint binds the **wildcard**, deliberately. Binding it to *host*
+    first was the original mistake here: the bind already fixes the source, so
+    every pin "worked" and reported 127.0.0.1 whatever it was asked for --
+    a probe that cannot fail measures nothing.
+    """
+    print("\n--- %s" % label)
+    info = {"family": int(family), "src": repr(src)}
+    wildcard = "::" if family == socket.AF_INET6 else "0.0.0.0"
+    endpoint = peer = None
+    try:
+        peer = socket.socket(family, socket.SOCK_DGRAM)
+        peer.bind((host, 0))
+        peer.settimeout(5.0)
+        endpoint = netimps.UdpEndpoint(netimps.bind(wildcard, 0, family=family))
+        info["bound"] = wildcard
+        info["supports_src_pinning"] = endpoint.supports_src_pinning
+        info["supports_pktinfo"] = endpoint.supports_pktinfo
+        sent = endpoint.send(b"pinned", host, peer.getsockname()[1], src=src)
+        info["sent"] = sent
+        _data, observed = peer.recvfrom(100)
+        info["observed_source"] = repr(observed)
+        print(
+            "   pinning=%s sent=%s observed_source=%s"
+            % (info["supports_src_pinning"], sent, info["observed_source"])
+        )
+    except BaseException as exc:  # noqa: BLE001
+        info["error"] = repr(exc)
+        print("   ! %r" % (exc,))
+    finally:
+        for sock in (endpoint, peer):
+            try:
+                if sock is not None:
+                    sock.close()
+            except OSError:
+                pass
+    record("pktinfo:%s" % label, **info)
+    return info
+
+
+if netimps is not None:
+    # (d) 127.0.0.2 succeeded locally and 127.0.0.3 returned WSAEINVAL, with no
+    # explanation and both bindable. Run both on every platform: if the
+    # asymmetry is real it needs documenting, and if it was local noise that
+    # matters just as much.
+    pin_capture("pin-v4-127.0.0.1", socket.AF_INET, "127.0.0.1", "127.0.0.1")
+    pin_capture("pin-v4-127.0.0.2", socket.AF_INET, "127.0.0.1", "127.0.0.2")
+    pin_capture("pin-v4-127.0.0.3", socket.AF_INET, "127.0.0.1", "127.0.0.3")
+    pin_capture("pin-v6-::1", socket.AF_INET6, "::1", "::1")
+
+    # Index-only pinning. On Windows a zero address is sent literally, so this
+    # must raise rather than send from 0.0.0.0; elsewhere the kernel chooses.
+    # Index 1 is loopback on every platform measured so far.
+    pin_capture("pin-v4-index-only", socket.AF_INET, "127.0.0.1", 1)
+    pin_capture("pin-v6-index-only", socket.AF_INET6, "::1", 1)
+
+    # IP_UNICAST_IF is the candidate replacement for an index-only pin on
+    # Windows. The byte order is **not** the same for the two families, which is
+    # the trap: MSDN specifies the index in *network* order for IP_UNICAST_IF
+    # and *host* order for IPV6_UNICAST_IF. Both spellings are tried for both
+    # families so the transcript shows which one the platform accepted rather
+    # than leaving a WSAEINVAL to be misread as "unsupported".
+    print("\n--- IP_UNICAST_IF / IPV6_UNICAST_IF")
+    for _label, _family, _level, _name, _default in (
+        ("v4", socket.AF_INET, socket.IPPROTO_IP, "IP_UNICAST_IF", 31),
+        ("v6", socket.AF_INET6, socket.IPPROTO_IPV6, "IPV6_UNICAST_IF", 31),
+    ):
+        _option = getattr(socket, _name, _default)
+        for _order, _payload in (
+            ("network", struct.pack("!I", 1)),
+            ("host", struct.pack("=I", 1)),
+            ("int", 1),
+        ):
+            _sock = None
+            _key = "pktinfo:unicast_if:%s:%s" % (_label, _order)
+            try:
+                _sock = socket.socket(_family, socket.SOCK_DGRAM)
+                _sock.setsockopt(_level, _option, _payload)
+                _readback = _sock.getsockopt(_level, _option)
+                print(
+                    "   %s %s (%s order) -> ok, getsockopt=%r"
+                    % (_label, _name, _order, _readback)
+                )
+                record(_key, value=repr(_readback))
+            except BaseException as exc:  # noqa: BLE001
+                print("   %s %s (%s order) ! %r" % (_label, _name, _order, exc))
+                record(_key, error=repr(exc))
+            finally:
+                try:
+                    if _sock is not None:
+                        _sock.close()
+                except OSError:
+                    pass
+
 
 # --------------------------------------------------------------------------
 section("Socket option availability (the silent-gap checklist)")
