@@ -56,6 +56,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **`import netimps` then `import asyncio` crashed on Windows.** The import-time
+  socket patch makes `socket.socket.sendmsg` exist, and CPython's
+  `asyncio/selector_events` reads `hasattr(socket.socket, 'sendmsg')` at import
+  time as a POSIX proxy, then calls `os.sysconf('SC_IOV_MAX')` guarding only
+  `except OSError` -- so the `AttributeError` from a missing `os.sysconf` escaped
+  and the import died. `sendmsg` and `os.sysconf` are both POSIX and had always
+  travelled together; the patch was the first thing to separate them.
+
+  The patch now installs an `os.sysconf` shim alongside, answering **per name**:
+  `SC_IOV_MAX` returns 1024 (tunable with `patch_socket_module(iov_max=...)`) and
+  every other name raises `ValueError`. Per name because the three stdlib callers
+  guard differently and no single behaviour satisfies them -- `asyncio` catches
+  `OSError`, `concurrent.futures` catches `(AttributeError, ValueError)`,
+  `multiprocessing` catches `Exception`; raising `OSError` for everything rescues
+  asyncio and breaks `ProcessPoolExecutor`. Regression tests run in **fresh
+  interpreters**, since in-process tests cannot see it: by the time a test body
+  runs, asyncio is already imported.
+
+### Changed
+
+- **The patched `sock.recvmsg` now normalises the v4 `IP_PKTINFO` payload to the
+  POSIX layout**; `netimps.recvmsg()` still reports the platform's own bytes, and
+  `UdpEndpoint` is unaffected. On Windows the patched method rewrites
+  `{addr, ifindex}` (8 bytes) into `{ifindex, spec_dst, addr}` (12 bytes) with
+  `spec_dst` zero-filled -- byte-for-byte what macOS produces. The patched
+  `sendmsg` accepts either layout, chosen by length.
+
+  Rationale: installing the method name without the layout is a
+  half-impersonation, and the missing half is what made POSIX-shaped code unpack
+  `=I4s4s` from an 8-byte buffer and raise `struct.error` -- which is not an
+  `OSError`, so it escaped receive handlers. `spec_dst` is zero rather than a copy
+  of `addr` because the two genuinely differ for a broadcast (measured on Linux:
+  the local interface address against `255.255.255.255`), and code reads
+  `spec_dst` to get the local address -- so copying `addr` would corrupt exactly
+  the field it wanted. Zero is visibly wrong; `255.255.255.255` is not.
+
+  **Known consequence, not fixed by this.** The patch is additive in *names* and
+  therefore not in *behaviour*: code testing
+  `hasattr(socket.socket, "recvmsg")` to detect POSIX now gets the POSIX answer
+  on Windows. **pydhcp 0.6.1 and earlier** read `ipi_spec_dst` for their
+  `SERVER_IDENTIFIER` and will see `0.0.0.0` on Windows -- the same answer they
+  already get on macOS, and no longer a crash. `UdpEndpoint` is the supported way
+  to obtain that address correctly on every platform;
+  `NETIMPS_NO_SOCKET_PATCH=1` opts out of the patch entirely.
+
+### Fixed
+
 - **`sendmsg()` failed on every connected stream socket on Windows.**
   `WSASendMsg` refuses `SOCK_STREAM` outright with `WSAEINVAL` -- measured on
   Windows 11 build 28000, where a connected `SOCK_DGRAM` is accepted, so the

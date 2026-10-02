@@ -1102,20 +1102,83 @@ patch below is installed.
 **`patch_socket_module(enable=True)`** → list of names changed.
 **`socket_patched()`** → whether anything is installed right now.
 
+> **Installing this patch changes what *other* libraries infer.** It is additive
+> in *names* and therefore not additive in *behaviour*: code that tests
+> `hasattr(socket.socket, "recvmsg")` or `getattr(socket, "CMSG_SPACE", None)` to
+> decide whether it is on POSIX now gets the POSIX answer on Windows. The
+> normalisation above is what keeps such code from misparsing the payload, but it
+> cannot fix a consumer that reads a field Windows does not report — `ipi_spec_dst`
+> comes back `0.0.0.0`, exactly as it already does on macOS.
+>
+> Known affected: **pydhcp 0.6.1 and earlier**, which read `ipi_spec_dst` for
+> their `SERVER_IDENTIFIER`. They degrade to `0.0.0.0` rather than crashing, and
+> `UdpEndpoint` is the supported way to get that address correctly on every
+> platform. Set `NETIMPS_NO_SOCKET_PATCH=1` to opt out entirely.
+
 - **The patch is installed by default, at `import netimps`.** It adds
   `recvmsg`/`sendmsg` to `socket.socket` and `CMSG_LEN`/`CMSG_SPACE` to the
   `socket` module, so POSIX-shaped code runs unchanged on Windows. Opt out with
   **`NETIMPS_NO_SOCKET_PATCH=1`** before the first import, or
   `patch_socket_module(False)` after it. The env var exists because the choice
   has to be expressible *before* import.
+- **It also installs `os.sysconf` where the platform has none**, because
+  patching `sendmsg` breaks an invariant the stdlib relies on: `sendmsg` and
+  `os.sysconf` are both POSIX and have always travelled together, so
+  `hasattr(socket.socket, "sendmsg")` has been a sound POSIX proxy. CPython's
+  `asyncio/selector_events` reads exactly that way at import time and guards only
+  `except OSError`, so with `sendmsg` present and `os.sysconf` absent
+  **`import asyncio` died with `AttributeError`**.
+
+  The shim answers **per name**, because the three stdlib callers guard
+  differently and no single behaviour satisfies them: `asyncio` catches
+  `OSError`, `concurrent.futures` catches `(AttributeError, ValueError)`, and
+  `multiprocessing` catches `Exception`. Measured — raising `OSError` for
+  everything rescues asyncio and breaks `ProcessPoolExecutor`; raising
+  `ValueError` does the reverse. So `SC_IOV_MAX` returns a value and every other
+  name raises `ValueError`, which is what POSIX does for an unrecognised name.
+
+  `SC_IOV_MAX` is **1024** by default, tunable with
+  `patch_socket_module(iov_max=...)`. It is a batch size, not a ceiling, and a
+  choice rather than a measurement: Windows reports no buffer-count limit
+  anywhere (1048576 buffers in one `WSASend` were accepted), and the system limit
+  is not settable on POSIX either — Linux's is `#define UIO_MAXIOV 1024` in
+  `linux/uio.h`, with no sysctl and no `/proc` entry. 1024 matches Linux so a
+  caller batching by it behaves the same on both.
 - **It is strictly additive and never replaces a native name**, so on Linux and
   macOS it is a verified no-op (`socket_patched()` is `False` there). If CPython
   ever ships `recvmsg` on Windows, it stands down by itself.
 - **It installs all four names, not just `recvmsg`.** Windows has no
   `CMSG_SPACE` either, and the usual idiom is detect → size → receive; patching
   only the method would let the detection succeed and fail on the next line.
-- **Payloads are the platform's own bytes — they are *not* normalised to
-  Linux's layouts**, because the layouts genuinely differ. Measured on CI
+- **`netimps.recvmsg()` reports the platform's own bytes; the *patched*
+  `sock.recvmsg` normalises them to the POSIX layout.** The split is the point:
+  our own API is honest about the platform, while a caller reaching for
+  `sock.recvmsg` is reaching for a method that only exists on POSIX, so it gets
+  what POSIX would have put there. Installing the name without the layout is a
+  half-impersonation, and the missing half is the one that makes POSIX-shaped
+  code misparse.
+
+  On Windows the patched method rewrites a v4 `IP_PKTINFO` payload from
+  `{addr, ifindex}` (8 bytes) into `{ifindex, spec_dst, addr}` (12 bytes), with
+  **`spec_dst` zero-filled**. The result is byte-for-byte what **macOS**
+  produces — measured, `01000000000000007f000001` for a unicast to `127.0.0.1`
+  on interface 1 — so this is an existing platform's behaviour rather than a
+  fourth one. `spec_dst` is *not* a copy of `addr`: measured on Linux, for a
+  broadcast the two genuinely differ (`spec_dst` is the local interface address,
+  `addr` is `255.255.255.255`), and code reads `spec_dst` precisely to get the
+  local address — so copying `addr` there would silently corrupt the one field it
+  wanted. Zero is visibly wrong; `255.255.255.255` is not.
+
+  The patched `sendmsg` accepts **either** layout, chosen by length, so what the
+  patched `recvmsg` hands you can go straight back out. `UdpEndpoint` is
+  unaffected either way: it calls the backend directly and carries its own
+  layout table.
+
+  The `cmsg_type` is left alone — 19 on Windows, 8 on Linux, 26 on macOS — so a
+  consumer comparing against `socket.IP_PKTINFO` matches the local number. v6
+  `in6_pktinfo` is never touched: `{addr, ifindex}`, 20 bytes, identical on all
+  three.
+- **Through `netimps.recvmsg()` the layouts genuinely differ.** Measured on CI
   runners, one loopback datagram each:
 
   | platform | `cmsg_type` | bytes | v4 `in_pktinfo` layout |

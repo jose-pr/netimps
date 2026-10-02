@@ -277,15 +277,27 @@ def test_patch_is_idempotent_and_reversible():
     assert netimps.patch_socket_module() == [], "a second install must be a no-op"
     removed = netimps.patch_socket_module(False)
     try:
-        assert sorted(removed) == [
+        # os.sysconf joins the set on a platform that lacks it: it is part of
+        # the same patch, because installing sendmsg is what makes the stdlib's
+        # "sendmsg implies os.sysconf is available" inference wrong.
+        assert {"socket.recvmsg", "socket.sendmsg", "CMSG_LEN", "CMSG_SPACE"} <= set(
+            removed
+        )
+        assert set(removed) <= {
             "CMSG_LEN",
             "CMSG_SPACE",
             "socket.recvmsg",
             "socket.sendmsg",
-        ]
+            "os.sysconf",
+            "os.sysconf_names",
+        }
         assert netimps.socket_patched() is False
         assert not hasattr(socket.socket, "recvmsg")
         assert not hasattr(socket, "CMSG_SPACE")
+        # Nothing native was displaced, so removal leaves the name truly absent.
+        import os as _os_check
+
+        assert not hasattr(_os_check, "sysconf")
         # The real surface is unaffected.
         assert netimps.supports_recvmsg() is True
         assert netimps.CMSG_SPACE(8) > 0
@@ -321,14 +333,29 @@ def test_the_patch_never_replaces_a_native_name():
     Verified by construction rather than by platform: whatever is installed
     must be a name the platform did *not* already have.
     """
+    import os as _os
+
     from netimps import _msg
 
-    for name in _msg._installed:
-        attribute = name.split(".", 1)[-1]
-        if name.startswith("socket."):
-            assert getattr(_msg, "_NATIVE_%s" % attribute.upper()) is None
-        else:
-            assert getattr(_msg, "_NATIVE_%s" % attribute.upper()) is None
+    # Expressed against what is actually installed, rather than through a
+    # `_NATIVE_*` naming convention: that convention only ever covered the four
+    # socket names and passed vacuously for anything else, os.sysconf included.
+    expected = {
+        "socket.recvmsg": _msg._patched_recvmsg,
+        "socket.sendmsg": _msg._patched_sendmsg,
+        "CMSG_LEN": _msg.CMSG_LEN,
+        "CMSG_SPACE": _msg.CMSG_SPACE,
+        "os.sysconf": _msg._shim_sysconf,
+    }
+    for name, (owner, attribute) in _msg._installed.items():
+        if name == "os.sysconf_names":
+            assert isinstance(getattr(owner, attribute), dict)
+            continue
+        assert name in expected, "unknown installed name %r" % (name,)
+        assert getattr(owner, attribute) is expected[name], (
+            "%s is not the function netimps installed -- something native was "
+            "displaced" % (name,)
+        )
 
 
 def test_opt_out_is_readable_from_the_environment(monkeypatch):
@@ -530,6 +557,357 @@ def test_sendmsg_on_a_connected_datagram_socket_needs_no_address():
     try:
         assert netimps.sendmsg(sender, [b"xy"]) == 2
         assert peer.recvfrom(100)[0] == b"xy"
+    finally:
+        sender.close()
+        peer.close()
+
+
+# --------------------------------------------------------------------------- #
+# The os.sysconf shim -- subprocess tests, because order matters               #
+# --------------------------------------------------------------------------- #
+
+#: Every check here spawns a **fresh interpreter**. In-process tests cannot see
+#: these bugs: by the time a test body runs, pytest has already imported asyncio
+#: (verified) so `_HAS_SENDMSG` was decided before netimps was imported at all,
+#: and the import order that breaks is the one a plain script uses.
+_FRESH = [sys.executable, "-c"]
+
+
+def _fresh(code, env=None):
+    """Run *code* in a new interpreter and return (returncode, stdout, stderr)."""
+    import subprocess
+
+    full_env = dict(os.environ)
+    full_env.pop("NETIMPS_NO_SOCKET_PATCH", None)
+    # The child does not inherit sys.path, and netimps may be reachable only
+    # through it (a bare checkout with PYTHONPATH=src rather than an install).
+    # Without this the subprocess fails with ModuleNotFoundError and the test
+    # reads as a netimps bug.
+    full_env["PYTHONPATH"] = os.pathsep.join(path for path in sys.path if path)
+    if env:
+        full_env.update(env)
+    result = subprocess.run(
+        _FRESH + [code], capture_output=True, text=True, env=full_env, timeout=120
+    )
+    return result.returncode, result.stdout.strip(), result.stderr.strip()
+
+
+def test_importing_netimps_does_not_break_import_asyncio():
+    """The regression that shipped: `import netimps; import asyncio` crashed.
+
+    CPython's asyncio/selector_events does, at import time::
+
+        _HAS_SENDMSG = hasattr(socket.socket, 'sendmsg')
+        if _HAS_SENDMSG:
+            try: SC_IOV_MAX = os.sysconf('SC_IOV_MAX')
+            except OSError: _HAS_SENDMSG = False
+
+    `sendmsg` and `os.sysconf` are both POSIX and have always travelled
+    together, so that `hasattr` is a sound POSIX proxy -- until the patch makes
+    `sendmsg` exist where `os.sysconf` does not. The guard catches only
+    `OSError`, so the `AttributeError` escaped and the import died.
+    """
+    code = "import netimps; import asyncio; print('ok')"
+    rc, out, err = _fresh(code)
+    assert rc == 0, "import netimps then asyncio failed:\n%s" % err
+    assert out == "ok"
+
+
+def test_the_other_stdlib_sysconf_callers_still_work():
+    """No single exception type satisfies all three, hence the per-name shim.
+
+    Measured: raising OSError for every name rescues asyncio and breaks
+    ProcessPoolExecutor, which catches only (AttributeError, ValueError);
+    raising ValueError or AttributeError for every name does the reverse. So
+    SC_IOV_MAX returns a value and everything else raises ValueError.
+    """
+    code = (
+        "import netimps\n"
+        "from concurrent.futures.process import _check_system_limits\n"
+        "try: _check_system_limits()\n"
+        "except NotImplementedError: pass\n"
+        "import multiprocessing.util as mu\n"
+        "assert isinstance(mu.MAXFD, int), mu.MAXFD\n"
+        "print('ok')\n"
+    )
+    rc, out, err = _fresh(code)
+    assert rc == 0, "a stdlib sysconf caller broke:\n%s" % err
+    assert out == "ok"
+
+
+def test_unknown_sysconf_names_raise_valueerror():
+    """What POSIX does for an unrecognised name, and what the other two catch."""
+    if not IS_WINDOWS:
+        pytest.skip("the shim only installs where os.sysconf is absent")
+    import os as _os
+
+    assert netimps.socket_patched()
+    assert _os.sysconf("SC_IOV_MAX") > 0
+    with pytest.raises(ValueError):
+        _os.sysconf("SC_OPEN_MAX")
+    with pytest.raises(ValueError):
+        _os.sysconf("not-a-name")
+
+
+def test_iov_max_is_reportable_and_tunable():
+    """1024 is a choice, not a measurement -- so it is a parameter.
+
+    Windows reports no buffer-count limit anywhere (no IOV-like socket name,
+    and 1048576 buffers in one WSASend were accepted), and the system limit is
+    not settable on POSIX either: Linux's is `#define UIO_MAXIOV 1024` in
+    linux/uio.h with no sysctl and no /proc entry.
+    """
+    if not IS_WINDOWS:
+        pytest.skip("the shim only installs where os.sysconf is absent")
+    import os as _os
+
+    assert _os.sysconf("SC_IOV_MAX") == 1024
+    try:
+        netimps.patch_socket_module(iov_max=4096)
+        assert _os.sysconf("SC_IOV_MAX") == 4096
+        assert _os.sysconf_names["SC_IOV_MAX"] == 4096
+    finally:
+        netimps.patch_socket_module(False)
+        netimps.patch_socket_module()
+    # Unpatching resets it, so a later install does not inherit the tuning.
+    assert _os.sysconf("SC_IOV_MAX") == 1024
+    with pytest.raises(ValueError, match="at least 1"):
+        netimps.patch_socket_module(iov_max=0)
+
+
+def test_sysconf_is_installed_and_removed_with_the_socket_names():
+    """One mechanism: os.sysconf is needed only because sendmsg was patched."""
+    if not IS_WINDOWS:
+        pytest.skip("nothing to install where the platform has both")
+    import os as _os
+    from netimps import _msg
+
+    assert "os.sysconf" in _msg._installed
+    removed = netimps.patch_socket_module(False)
+    try:
+        assert "os.sysconf" in removed
+        assert not hasattr(_os, "sysconf")
+        assert not hasattr(socket.socket, "sendmsg")
+    finally:
+        netimps.patch_socket_module()
+    assert hasattr(_os, "sysconf") and hasattr(socket.socket, "sendmsg")
+
+
+def test_opting_out_leaves_both_modules_untouched():
+    code = (
+        "import netimps, os, socket\n"
+        "assert not netimps.socket_patched()\n"
+        "assert not hasattr(socket.socket, 'recvmsg')\n"
+        "assert not hasattr(os, 'sysconf')\n"
+        "import asyncio\n"
+        "print('ok')\n"
+    )
+    if not IS_WINDOWS:
+        pytest.skip("on POSIX both names are native, so there is nothing to opt out of")
+    rc, out, err = _fresh(code, env={"NETIMPS_NO_SOCKET_PATCH": "1"})
+    assert rc == 0, err
+    assert out == "ok"
+
+
+# --------------------------------------------------------------------------- #
+# The patched methods reshape the payload; netimps' own functions do not        #
+# --------------------------------------------------------------------------- #
+
+
+def _one_pktinfo(ancdata, ip_pktinfo):
+    found = [
+        cd for lv, ty, cd in ancdata if lv == socket.IPPROTO_IP and ty == ip_pktinfo
+    ]
+    return found[0] if found else None
+
+
+def _recv_both_ways(dest="127.0.0.1", bind_to="0.0.0.0"):
+    """One datagram, captured through netimps.recvmsg and through sock.recvmsg."""
+    import select
+
+    from netimps import _udp
+
+    option = _udp._IP_PKTINFO
+    out = {}
+    for label in ("native", "patched"):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.setsockopt(socket.IPPROTO_IP, option, 1)
+        except OSError:
+            sock.close()
+            pytest.skip("IP_PKTINFO refused on this socket")
+        sock.bind((bind_to, 0))
+        port = sock.getsockname()[1]
+        sock.settimeout(5.0)
+        tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        tx.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        try:
+            tx.sendto(b"probe", (dest, port))
+        except OSError as exc:
+            tx.close()
+            sock.close()
+            pytest.skip("cannot send to %s: %s" % (dest, exc))
+        tx.close()
+        if not select.select([sock], [], [], 3)[0]:
+            sock.close()
+            pytest.skip("no delivery to %s here" % (dest,))
+        if label == "native":
+            _d, anc, _f, _a = netimps.recvmsg(sock, 1500, netimps.CMSG_SPACE(64))
+        else:
+            _d, anc, _f, _a = sock.recvmsg(1500, socket.CMSG_SPACE(64))
+        out[label] = _one_pktinfo(anc, option)
+        sock.close()
+    return out
+
+
+@pytest.mark.skipif(not IS_WINDOWS, reason="only Windows has a layout to reshape")
+def test_the_patched_recvmsg_returns_the_posix_layout():
+    """The patched method impersonates POSIX in layout as well as in name.
+
+    Installing the name without the layout is a half-impersonation, and the
+    missing half is the one that makes POSIX-shaped parsing code wrong: it
+    unpacks `=I4s4s` from an 8-byte buffer and gets `struct.error`, which is not
+    an OSError and so escapes a receive handler.
+    """
+    captured = _recv_both_ways()
+    native, patched = captured["native"], captured["patched"]
+    assert native is not None and patched is not None
+
+    # Native: Windows IN_PKTINFO, 8 bytes, address first.
+    assert len(native) == 8
+    address, index = struct.unpack("=4sI", native)
+    assert socket.inet_ntoa(address) == "127.0.0.1" and index > 0
+
+    # Patched: POSIX in_pktinfo, 12 bytes, index first.
+    assert len(patched) == 12
+    pidx, spec_dst, paddr = struct.unpack("=I4s4s", patched)
+    assert pidx == index
+    assert socket.inet_ntoa(paddr) == "127.0.0.1"
+    assert spec_dst == b"\x00\x00\x00\x00", "spec_dst must be zero-filled"
+
+
+@pytest.mark.skipif(not IS_WINDOWS, reason="only Windows has a layout to reshape")
+def test_the_normalized_bytes_are_byte_identical_to_macos():
+    """Not a fourth behaviour -- an existing platform's.
+
+    macOS, measured on a CI runner for a unicast to 127.0.0.1 on interface 1,
+    produces exactly this payload: ifindex first, spec_dst zero-filled, then the
+    destination. Pinning the hex keeps the claim honest.
+    """
+    captured = _recv_both_ways()
+    patched = captured["patched"]
+    index = struct.unpack("=I4s4s", patched)[0]
+    expected = struct.pack("=I4s4s", index, b"\x00" * 4, socket.inet_aton("127.0.0.1"))
+    assert patched == expected
+    if index == 1:
+        assert patched.hex() == "01000000000000007f000001"
+
+
+@pytest.mark.skipif(not IS_WINDOWS, reason="only Windows has a layout to reshape")
+def test_spec_dst_is_zero_rather_than_a_copy_of_the_destination():
+    """Copying `ipi_addr` into `ipi_spec_dst` would be a plausible wrong address.
+
+    Measured on Linux: for a broadcast the two fields genuinely differ --
+    spec_dst is the local interface address while addr is 255.255.255.255. Code
+    that reads spec_dst does so precisely to get the local address, so handing it
+    the broadcast address would silently corrupt the one field it wanted. Zero is
+    visibly wrong; 255.255.255.255 is not.
+    """
+    captured = _recv_both_ways(dest="255.255.255.255")
+    patched = captured["patched"]
+    assert len(patched) == 12
+    _idx, spec_dst, addr = struct.unpack("=I4s4s", patched)
+    assert socket.inet_ntoa(addr) == "255.255.255.255"
+    assert spec_dst == b"\x00" * 4
+    assert spec_dst != addr, "spec_dst must not be a copy of the destination"
+
+
+def test_netimps_recvmsg_always_reports_the_platforms_own_bytes():
+    """The split that makes the reshaping defensible.
+
+    `netimps.recvmsg` is this package's own API and reports what the kernel
+    said; only the impersonation reshapes. `UdpEndpoint` depends on this, since
+    it calls `_msg` directly and carries its own per-platform layout table.
+    """
+    from netimps import _udp
+
+    captured = _recv_both_ways()
+    native = captured["native"]
+    expected_size = struct.calcsize(_udp._PKTINFO_V4)
+    assert (
+        len(native) == expected_size
+    ), "netimps.recvmsg must agree with _udp's layout table for this platform"
+
+
+@pytest.mark.skipif(
+    IS_WINDOWS, reason="POSIX installs nothing, so there is nothing to reshape"
+)
+def test_on_posix_the_two_paths_are_identical():
+    captured = _recv_both_ways()
+    assert captured["native"] == captured["patched"]
+    assert len(captured["native"]) == 12
+
+
+@pytest.mark.skipif(not IS_WINDOWS, reason="only Windows accepts two layouts")
+def test_the_patched_sendmsg_accepts_either_layout():
+    """So a caller can round-trip what the patched recvmsg handed it."""
+    from netimps import _udp
+
+    option = _udp._IP_PKTINFO
+    peer = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    peer.bind(("127.0.0.1", 0))
+    peer.settimeout(5.0)
+    target = peer.getsockname()
+
+    posix_form = struct.pack("=I4s4s", 0, socket.inet_aton("127.0.0.1"), b"\x00" * 4)
+    native_form = struct.pack("=4sI", socket.inet_aton("127.0.0.1"), 0)
+
+    for label, payload in (("posix", posix_form), ("native", native_form)):
+        sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sender.bind(("0.0.0.0", 0))
+        try:
+            sent = sender.sendmsg(
+                [b"shaped-" + label.encode()],
+                [(socket.IPPROTO_IP, option, payload)],
+                0,
+                target,
+            )
+            assert sent > 0
+            data, observed = peer.recvfrom(100)
+            assert data == b"shaped-" + label.encode()
+            assert observed[0] == "127.0.0.1", (
+                "%s layout did not pin the source" % label
+            )
+        finally:
+            sender.close()
+    peer.close()
+
+
+@pytest.mark.skipif(not IS_WINDOWS, reason="only Windows reshapes")
+def test_a_round_trip_through_the_patched_methods():
+    """Receive through the patched method, send the same cmsg straight back."""
+    from netimps import _udp
+
+    option = _udp._IP_PKTINFO
+    captured = _recv_both_ways()
+    patched = captured["patched"]
+
+    peer = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    peer.bind(("127.0.0.1", 0))
+    peer.settimeout(5.0)
+    sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sender.bind(("0.0.0.0", 0))
+    try:
+        # The bytes that came out of recvmsg go straight into sendmsg.
+        sender.sendmsg(
+            [b"round-trip"],
+            [(socket.IPPROTO_IP, option, patched)],
+            0,
+            peer.getsockname(),
+        )
+        data, _observed = peer.recvfrom(100)
+        assert data == b"round-trip"
     finally:
         sender.close()
         peer.close()
