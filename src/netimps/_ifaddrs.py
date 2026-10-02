@@ -75,7 +75,11 @@ from typing import (
     Union,
 )
 
-__all__ = ["Interface", "get_interfaces", "iter_addresses"]
+__all__ = [
+    "Interface",
+    "get_interfaces",
+    "iter_addresses" "is_broadcast",
+]
 
 _IPInterface = Union[_ipaddress.IPv4Interface, _ipaddress.IPv6Interface]
 
@@ -851,6 +855,64 @@ def get_interfaces(raw: bool = False) -> "List[Interface]":
         return _posix_interfaces(raw)
     except (OSError, AttributeError, ValueError):
         return _fallback_interfaces(raw)
+
+
+def is_broadcast(address: "Any", interface: "Optional[Any]" = None) -> bool:
+    """Whether *address* is an IPv4 broadcast address, limited or subnet.
+
+    The question a wildcard-bound UDP server asks about
+    :attr:`netimps.Datagram.local_address` before answering: RFC 1123 says a TFTP
+    server must ignore a broadcast request, and DHCP has to tell a broadcast
+    DISCOVER from a unicast RENEW.
+
+    ``255.255.255.255`` (limited broadcast) needs no context. The **subnet**
+    broadcast does: ``10.0.0.255`` is only a broadcast if some interface carries
+    ``10.0.0.0/24``, so this consults interface prefixes -- which is why it lives
+    here and not in :mod:`netimps._ip`. Pass ``interface`` to check one adapter
+    (the arrival interface, from ``Datagram.interface``); omit it to check every
+    local one, which costs an enumeration.
+
+    A **v4-mapped** address is unmapped first, because a dual-stack listener
+    reports an IPv4 arrival as ``::ffff:a.b.c.d`` and the broadcast question is
+    about the v4 address inside.
+
+    IPv6 has **no broadcast** -- it uses multicast instead -- so a genuine v6
+    address is always ``False`` here. :func:`netimps.is_multicast` is the
+    companion predicate, kept separate on purpose: "do not answer this" is
+    usually ``is_broadcast(a, i) or is_multicast(a)``, and one name meaning both
+    would hide which of the two it matched.
+
+    Never raises: an address it cannot parse is not a broadcast.
+    """
+    from . import try_parse, unmap
+    from ._ip import IPAddress, IPv4Address
+
+    parsed = address if isinstance(address, (IPv4Address,)) else None
+    if parsed is None:
+        candidate = try_parse(str(address), IPAddress)
+        if candidate is None:
+            return False
+        parsed = unmap(candidate)  # type: ignore[assignment]
+    if not isinstance(parsed, IPv4Address):
+        return False
+
+    # The limited broadcast, which needs no interface context at all.
+    if parsed == IPv4Address("255.255.255.255"):
+        return True
+
+    candidates = [interface] if interface is not None else get_interfaces()
+    for entry in candidates:
+        for bound in getattr(entry, "ips", ()) or ():
+            network = getattr(bound, "network", None)
+            if network is None or network.version != 4:
+                continue
+            # A /31 or /32 has no broadcast address distinct from its hosts;
+            # `broadcast_address` still answers, so size it out explicitly.
+            if network.prefixlen >= 31:
+                continue
+            if parsed == network.broadcast_address:
+                return True
+    return False
 
 
 def iter_addresses(

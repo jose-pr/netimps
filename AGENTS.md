@@ -111,6 +111,7 @@ map:
 | `parse`, `try_parse`, `is_valid` | build a type from a value (raising / `None` / `bool`) |
 | `MACAddress` | parse / classify / render MAC addresses |
 | `get_interfaces`, `Interface`, `iter_addresses` | native cross-platform NIC discovery |
+| `is_broadcast` | is this an IPv4 broadcast, limited or subnet (needs interface prefixes) |
 | `get_ip`, `is_link_scoped` | address resolution and scope classification |
 | `collapse`, `subtract` | CIDR set maths |
 | `normalize_host` | `host:port` splitting, IPv6-aware |
@@ -124,6 +125,7 @@ map:
 | `SocketOption`, `disable_connreset`, `set_buffer_size` | named option triple; the Windows `SIO_UDP_CONNRESET` switch (no stdlib route); buffer growth reporting what was *granted* |
 | `AddressInUseError` | one stable `OSError` subclass for "the address is taken", never a `PermissionError` |
 | `UdpEndpoint`, `Datagram` | UDP receive with arrival interface (`IP_PKTINFO` / `IPV6_RECVPKTINFO`, per family) |
+| `UdpEndpoint.reply_socket` | a socket bound to answer *from* the address the client addressed |
 | `recvmsg`, `sendmsg`, `CMSG_LEN`, `CMSG_SPACE`, `supports_recvmsg` | ancillary-data messaging on **every** platform, Windows included (via `WSARecvMsg`/`WSASendMsg`) |
 | `patch_socket_module`, `socket_patched` | install/remove the default-on `socket` patch that gives Windows the stdlib method names |
 | `Host` | hostname-or-address value type; `.fqdn` narrows a name to `Fqdn` |
@@ -132,6 +134,7 @@ map:
 | `APIPA`, `LOOPBACK_V4`, `LOOPBACK_V6`, `LINK_LOCAL_V6` | named networks |
 | `get_route`, `Route`, `hop_count` | routing and distance |
 | `discover_mtu`, `get_pmtu`, `get_tcp_mss` | path MTU by ICMP/UDP/TCP, the kernel's cached guess, or the negotiated MSS |
+| `max_udp_payload` | the largest UDP payload that fits an MTU unfragmented |
 | `scan_ports`, `scan_hosts`, `PORT_RANGES` | concurrent scanning |
 | `multicast_socket`, `join_group`, `leave_group`, `is_multicast` | multicast |
 | `HOST_DN` | `platform.node()` of the running host, captured at import time |

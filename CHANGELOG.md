@@ -131,6 +131,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`UdpEndpoint.reply_socket(datagram)`** -- a socket bound so replies leave
+  from the address the client addressed, which is the point of pktinfo in one
+  call. A wildcard-bound server answering from a fresh socket sends from whatever
+  the routing table prefers, and DHCP and TFTP clients both check and drop a
+  reply from an address they never talked to. Demonstrated by the contrast: a
+  plain wildcard reply to a client that addressed `127.0.0.2` comes from
+  `127.0.0.1`.
+
+  Three platform traps it absorbs, each measured rather than reasoned about:
+  a v4 arrival on a dual-stack listener is `::ffff:a.b.c.d`, and binding that
+  needs `IPV6_V6ONLY` off which Windows does not default to, so it is unmapped
+  and answered from an `AF_INET` socket; a broadcast, multicast or unspecified
+  destination must not be answered *from*, and is classified and skipped rather
+  than discovered by a failed bind, because Linux binds `255.255.255.255` and
+  `239.1.2.3` happily where Windows refuses them; and an IPv6 link-local
+  destination needs the arrival `ifindex` as its scope, carried as a `%zone`
+  suffix. Falls back to the endpoint's own address and then the wildcard, because
+  a reply from the wrong address still beats no reply. `connreset=False` by
+  default, inverted from `bind()`: a server loop must not die because an earlier
+  answer drew an ICMP port-unreachable from a client that had gone.
+- **`is_broadcast(address, interface=None)`** -- whether an address is an IPv4
+  broadcast, limited *or* subnet. The question a wildcard-bound server asks
+  before answering: RFC 1123 says a TFTP server ignores a broadcast request, and
+  DHCP must tell a broadcast DISCOVER from a unicast RENEW. `255.255.255.255`
+  needs no context; `10.0.0.255` is only a broadcast if some interface carries
+  `10.0.0.0/24`, so this consults interface prefixes -- pass `interface` to check
+  one adapter and skip the enumeration. A v4-mapped address is unmapped first.
+  IPv6 has no broadcast, so a genuine v6 address is always `False`; `is_multicast`
+  stays the separate companion, since one name meaning both would hide which
+  matched.
+- **`max_udp_payload(mtu, ipv6=False)`** -- the largest UDP payload that fits an
+  MTU without fragmenting (`1472` for 1500, `1452` for v6). Takes an `int` rather
+  than an `Interface` on purpose: `Interface.mtu` is `Optional[int]` and **Windows
+  reports no MTU for the loopback adapter**, so whether to fall back to 1500 or
+  refuse is the caller's decision. The v4 figure uses the minimum 20-byte header,
+  so a packet carrying IP options can still fragment.
+
+### Added
+
 - **`AddressInUseError(OSError)`** -- one stable type for "the address is
   taken", raised by `bind()` instead of whatever the platform happened to call
   it. Measured on Windows 11 ARM64 against an exclusive holder, the *same

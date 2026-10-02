@@ -1106,6 +1106,43 @@ ordered. Built from a dotted string or from separate labels, **leftmost first**:
 **`FqdnLike`** — `Union[Fqdn, str]`, the accepted-input union wherever a method
 takes "another name".
 
+## Broadcast and payload sizing
+
+**`is_broadcast(address, interface=None)`** — whether *address* is an IPv4
+broadcast, limited **or** subnet. What a wildcard-bound server asks about
+`Datagram.local_address` before answering: RFC 1123 says a TFTP server ignores a
+broadcast request, and DHCP must tell a broadcast DISCOVER from a unicast RENEW.
+
+- `255.255.255.255` needs no context. The **subnet** broadcast does — `10.0.0.255`
+  is only a broadcast if some interface carries `10.0.0.0/24` — so this consults
+  interface prefixes, which is why it lives beside interface enumeration. Pass
+  `interface` (from `Datagram.interface`) to check one adapter and skip the
+  enumeration.
+- A **v4-mapped** address is unmapped first, since a dual-stack listener reports
+  an IPv4 arrival as `::ffff:a.b.c.d`.
+- **IPv6 has no broadcast** — it uses multicast — so a genuine v6 address is
+  always `False`. `is_multicast` is the companion, kept separate on purpose: "do
+  not answer this" is usually the `or` of the two, and one name meaning both would
+  hide which matched.
+- Never raises; an address it cannot parse is not a broadcast.
+- A `/31` or `/32` is skipped: it has no broadcast address distinct from its
+  hosts, though `broadcast_address` still answers for one.
+
+**`max_udp_payload(mtu, ipv6=False)`** — the largest UDP payload that fits
+without fragmenting: `mtu - ip_header - 8`, so `1472` for a 1500 MTU and `1452`
+for v6. Pair it with `Interface.mtu` to size a datagram to the interface it leaves
+by.
+
+- It takes an **`int`, not an `Interface`**, on purpose. `Interface.mtu` is
+  `Optional[int]` and **Windows reports no MTU for the loopback adapter**, so
+  whether to fall back to 1500 or to refuse is the caller's decision — accepting
+  an `Interface` would hide it. (It also means MTU logic cannot be exercised on
+  Windows loopback.)
+- The v4 figure uses the **minimum** 20-byte header, so a packet carrying IP
+  options can still fragment; subtract more if you set any. IPv6 counts its
+  extension headers as payload, so 40 is exact only without them.
+- Returns `0` rather than a negative for an MTU too small to carry anything.
+
 ## Ancillary data: `recvmsg` / `sendmsg` on every platform
 
 CPython ships no `recvmsg`/`sendmsg` on Windows — not a missing constant but a
@@ -1300,6 +1337,40 @@ the wrapped socket, and the endpoint is a **context manager**
   ignores* a v6 cmsg on a v4 socket, so there is no correct silent behaviour
   available. An `OSError` from the kernel, meaning a source this host cannot
   send from, propagates; only platform incapability degrades to `sendto`.
+- **`reply_socket(datagram, port=0, connreset=False)`** — a socket bound so
+  replies leave from the address the client addressed. The point of pktinfo, in
+  one call:
+
+  ```python
+  packet = endpoint.recv()
+  with endpoint.reply_socket(packet) as reply:
+      reply.sendto(answer, packet.sender)
+  ```
+
+  A wildcard-bound server answering from a fresh socket sends from whatever the
+  routing table prefers; DHCP and TFTP clients both check and drop a reply from an
+  address they never addressed. Measured contrast: a plain wildcard reply to a
+  client that addressed `127.0.0.2` comes from `127.0.0.1`.
+
+  Three traps it absorbs:
+  - **A v4 arrival on a dual-stack listener is `::ffff:a.b.c.d`.** Binding that
+    needs an `AF_INET6` socket with `IPV6_V6ONLY` off, which Windows does not
+    default to — so it is unmapped and answered from a plain `AF_INET` socket.
+  - **A broadcast, multicast or unspecified destination must not be answered
+    *from*.** These are **classified and skipped**, not discovered by a failed
+    bind, because the platforms disagree: Linux binds `255.255.255.255` and
+    `239.1.2.3` happily while Windows refuses both, so relying on the refusal
+    would mean replying *from* the broadcast address on Linux. The subnet case
+    needs interface prefixes, which is what `is_broadcast` supplies.
+  - **An IPv6 link-local destination needs a scope id**, taken from
+    `datagram.interface_index` and carried as a `%zone` suffix, or the bind is
+    refused — the same address can exist on several interfaces and the kernel will
+    not guess.
+
+  Falls back to the endpoint's own bound address, then the wildcard: a reply from
+  the wrong address still beats no reply. `connreset=False` by default, inverted
+  from `bind()`, because a server loop must not die when an earlier answer draws
+  an ICMP port-unreachable from a client that has gone.
 - **The arrival interface is cached per endpoint**, so the default path is not
   the slow one. `recv()` used to call `get_interfaces()` and scan it for *every*
   datagram: measured 1.07 ms per packet against 0.015 with

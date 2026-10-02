@@ -53,10 +53,12 @@ from netimps import (
     MACAddress,
     interface_for,
     interfaces_for,
+    is_broadcast,
     is_local_address,
     is_valid,
     is_wildcard,
     join_host,
+    max_udp_payload,
     parse,
     try_parse,
     unmap,
@@ -261,3 +263,9 @@ assert_type(is_wildcard("0.0.0.0"), bool)
 option = SocketOption(1, 2, 3)
 assert_type(option.level, int)
 assert_type(option.name, int)
+
+
+# The UDP-server helpers. `reply_socket` returns a real socket, not Optional:
+# it falls back to the wildcard rather than giving up.
+assert_type(is_broadcast("255.255.255.255"), bool)
+assert_type(max_udp_payload(1500), int)

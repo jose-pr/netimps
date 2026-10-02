@@ -64,12 +64,29 @@ def reply_for(query, tcp=False):
 
 class FakeNameserver(object):
     def __init__(self, host="127.0.0.1"):
-        self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.udp.bind((host, 0))
-        self.port = self.udp.getsockname()[1]
+        # A port free for **both** UDP and TCP, because `resolve_wire` is given
+        # one `ns=` address and reaches the same number by either transport.
+        #
+        # TCP is bound FIRST: it is the one more likely to collide, since a
+        # recently closed connection leaves the number in `TIME_WAIT` while a UDP
+        # port is free the moment it is closed. Asking TCP for an ephemeral port
+        # and then matching UDP to it therefore succeeds far more often than the
+        # other way round -- which is what the fixture used to do, and why four
+        # tests skipped silently under full-suite port pressure.
         self.tcp = socket.socket()
-        self.tcp.bind((host, self.port))
-        self.tcp.listen(5)
+        try:
+            self.tcp.bind((host, 0))
+            self.port = self.tcp.getsockname()[1]
+            self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                self.udp.bind((host, self.port))
+            except OSError:
+                self.udp.close()
+                raise
+            self.tcp.listen(5)
+        except OSError:
+            self.tcp.close()
+            raise
         self.peers = []
         self.tcp_queries = 0
         threading.Thread(target=self._serve_udp, daemon=True).start()
@@ -106,16 +123,27 @@ class FakeNameserver(object):
         self.tcp.close()
 
 
+#: Attempts at finding a port free on both transports. 5 was not enough: under a
+#: full-suite run on Windows -- hundreds of sockets opened and closed, TCP numbers
+#: sitting in TIME_WAIT -- it gave up and **four tests skipped silently**, while
+#: the file passed 26/26 in isolation. A skip is not a pass, and these cover
+#: `resolve_wire`'s TCP fallback, so losing them quietly is the worst case. 50
+#: attempts cost milliseconds.
+_PORT_ATTEMPTS = 50
+
+
 @pytest.fixture()
 def server():
-    for _ in range(5):  # the UDP port number may be taken for TCP
+    for _ in range(_PORT_ATTEMPTS):
         try:
             fake = FakeNameserver()
             break
         except OSError:
             continue
-    else:
-        pytest.skip("no UDP+TCP port pair free on 127.0.0.1")
+    else:  # pragma: no cover - a host with essentially no free ports
+        pytest.skip(
+            "no port free on both UDP and TCP after %d attempts" % (_PORT_ATTEMPTS,)
+        )
     yield fake
     fake.close()
 

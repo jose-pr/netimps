@@ -652,6 +652,149 @@ class UdpEndpoint:
         # Through `_msg`, same reasoning as `recv` above.
         return int(_sendmsg(self.socket, [data], [control], 0, target))
 
+    @staticmethod
+    def _is_repliable(local: "IPAddress", interface: "Optional[Interface]") -> bool:
+        """Whether *local* is an address a reply socket may actually bind to.
+
+        Classified rather than discovered by a failed bind, because **the
+        platforms disagree about which addresses are bindable**. Measured: Linux
+        binds ``255.255.255.255`` and ``239.1.2.3`` without complaint while
+        Windows refuses both. So "try it and fall back on OSError" silently
+        produces a socket bound to the broadcast address on Linux -- and a reply
+        sent *from* ``255.255.255.255`` is one most clients discard, which is
+        exactly the failure this method exists to prevent.
+
+        Excluded: the unspecified address (nothing to answer from), multicast,
+        and broadcast -- both the limited form and the **subnet** form, which
+        needs the arrival interface's prefixes and is what
+        :func:`netimps.is_broadcast` is for. Passing ``interface`` keeps that
+        check off the enumerating path.
+        """
+        from . import is_multicast
+        from ._ifaddrs import is_broadcast
+
+        if local.is_unspecified or local.is_multicast:
+            return False
+        if is_multicast(local):
+            return False
+        return not is_broadcast(local, interface)
+
+    def reply_socket(
+        self,
+        datagram: "Datagram",
+        port: int = 0,
+        connreset: bool = False,
+    ) -> "_socket.socket":
+        """A new socket bound so replies leave from the address the client used.
+
+        The point of pktinfo, in one call. A wildcard-bound server that answers
+        from a fresh socket sends from whichever address the routing table
+        prefers, which is not necessarily the one the client addressed -- and a
+        client that checks (DHCP and TFTP both do) drops the reply::
+
+            packet = endpoint.recv()
+            with endpoint.reply_socket(packet) as reply:
+                reply.sendto(answer, packet.sender)
+
+        Falls back deliberately rather than failing: the returned socket is bound
+        to the first of these that works -- the arrival address, then this
+        endpoint's own bound address, then the wildcard. A socket that answers
+        from the wrong address still answers.
+
+        Three things make this worth a method, each found by measurement rather
+        than reasoning:
+
+        - **A v4 arrival on a dual-stack listener is ``::ffff:a.b.c.d``**, and
+          binding that needs an ``AF_INET6`` socket with ``IPV6_V6ONLY`` off --
+          which Windows does not default to. So a mapped address is unmapped and
+          answered from a plain ``AF_INET`` socket instead.
+        - **A broadcast, multicast or unspecified destination must not be
+          answered from.** These are *classified* and skipped, not discovered by
+          a failed bind, because the platforms disagree about which are bindable:
+          measured, Linux binds ``255.255.255.255`` and ``239.1.2.3`` happily
+          while Windows refuses both. Relying on the refusal would mean replying
+          *from* the broadcast address on Linux, which most clients discard. The
+          subnet-broadcast case needs the arrival interface's prefixes, which is
+          what :func:`netimps.is_broadcast` supplies.
+        - **An IPv6 link-local destination needs a scope id**, taken from
+          ``datagram.interface_index``, or the bind fails with "invalid
+          argument".
+
+        ``connreset=False`` by default, unlike :func:`netimps.bind`: a reply
+        socket is a server's, and a server loop should not die because an earlier
+        answer drew an ICMP port-unreachable from a client that had gone away.
+        The non-hijackable bind options apply as everywhere else.
+
+        :param datagram: a :class:`Datagram` from :meth:`recv`. Its
+            ``local_address`` is what this binds to; with ``None`` -- no pktinfo
+            -- it goes straight to the fallbacks.
+        :param port: local port for the reply socket; ``0`` lets the OS choose,
+            which is what a per-transaction socket wants.
+        :param connreset: passed to :func:`netimps.bind`; see above for why the
+            default is inverted here.
+        """
+        from ._ip import unmap
+
+        family = self.socket.family
+        candidates: "list" = []
+
+        local = datagram.local_address
+        if local is not None and self._is_repliable(local, datagram.interface):
+            plain = unmap(local)
+            if isinstance(plain, IPv4Address):
+                # Answer v4 from a v4 socket. The mapped form would need an
+                # AF_INET6 socket with V6ONLY cleared, which is not the default
+                # on Windows and is a worse thing to require than a second
+                # socket family.
+                candidates.append((_socket.AF_INET, str(plain)))
+            elif isinstance(plain, IPv6Address):
+                text = str(plain)
+                if plain.is_link_local and datagram.interface_index:
+                    # The zone goes *in the address string*, which is what the
+                    # kernel wants. Without a scope id a link-local bind is
+                    # refused: the same address can exist on several interfaces
+                    # and it will not guess which. `%zone` is how a
+                    # sockaddr_in6 scope is spelled for `bind`.
+                    text = "%s%%%d" % (text, int(datagram.interface_index))
+                candidates.append((_socket.AF_INET6, text))
+
+        # Fallback 1: whatever this endpoint itself is bound to -- right for a
+        # listener pinned to one address, and a no-op for a wildcard one.
+        try:
+            own = self.socket.getsockname()
+            if own and own[0]:
+                candidates.append((family, str(own[0])))
+        except OSError:  # pragma: no cover - a closed socket
+            pass
+
+        # Fallback 2: the wildcard, which always binds.
+        candidates.append((family, ""))
+
+        from ._sockets import bind as _bind
+
+        last: "Optional[BaseException]" = None
+        for candidate_family, address in candidates:
+            try:
+                sock = _bind(
+                    address,
+                    port,
+                    family=candidate_family,
+                    kind=_socket.SOCK_DGRAM,
+                    connreset=connreset,
+                )
+            except (OSError, ValueError) as exc:
+                # A broadcast, multicast or otherwise unbindable destination
+                # lands here, which is why the list is tried rather than vetted.
+                last = exc
+                continue
+            return sock
+
+        # Every candidate failed, including the wildcard, so something is wrong
+        # with the socket rather than with the address.
+        raise OSError(
+            "could not bind a reply socket for %r" % (datagram.local_address,)
+        ) from last
+
     def close(self) -> None:
         self.socket.close()
 

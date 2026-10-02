@@ -52,6 +52,7 @@ _InterfaceQuery = Union[
 
 __all__ = [
     "bind",
+    "max_udp_payload",
     "AddressInUseError",
     "SocketOption",
     "disable_connreset",
@@ -656,6 +657,46 @@ def get_source_ip(
         finally:
             sock.close()
     return None
+
+
+#: Fixed IP header sizes. IPv4's is the *minimum* (options can extend it to 60);
+#: IPv6's is exact, because its extension headers are counted as payload.
+_IPV4_HEADER = 20
+_IPV6_HEADER = 40
+_UDP_HEADER = 8
+
+
+def max_udp_payload(mtu: int, ipv6: bool = False) -> int:
+    """The largest UDP payload that fits *mtu* without fragmenting.
+
+    ``mtu - ip_header - 8``, where the IP header is 20 for v4 and 40 for v6::
+
+        max_udp_payload(1500)              # 1472
+        max_udp_payload(1500, ipv6=True)   # 1452
+
+    Pair it with :attr:`netimps.Interface.mtu` to size a datagram to the
+    interface it will leave by. Three things make this worth a function rather
+    than arithmetic at the call site:
+
+    - the v4 figure uses the **minimum** 20-byte header, so a packet carrying IP
+      options can still fragment. Subtract more if you set any.
+    - IPv6 counts its extension headers as payload, so 40 is exact only without
+      them.
+    - ``Interface.mtu`` is ``Optional[int]``, and Windows reports **no MTU for
+      the loopback adapter**, so a caller must handle ``None`` rather than
+      assume. That is why this takes an ``int`` and does not accept an
+      ``Interface``: the ``None`` decision belongs to the caller, who knows
+      whether to fall back to 1500 or to refuse.
+
+    Returns 0 rather than a negative number for an MTU too small to carry any
+    payload.
+
+    :raises ValueError: for a negative *mtu*.
+    """
+    if mtu < 0:
+        raise ValueError("mtu must not be negative, got %r" % (mtu,))
+    overhead = (_IPV6_HEADER if ipv6 else _IPV4_HEADER) + _UDP_HEADER
+    return max(0, mtu - overhead)
 
 
 def get_free_port(src: str = "127.0.0.1", family: int = _socket.AF_INET) -> int:

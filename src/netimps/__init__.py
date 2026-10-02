@@ -141,6 +141,7 @@ __all__ = [
     "PingResult",
     "Interface",
     "get_interfaces",
+    "is_broadcast",
     "iter_addresses",
     # Socket / route helpers.
     "get_source_ip",
@@ -185,6 +186,7 @@ __all__ = [
     "hop_count",
     "get_pmtu",
     "discover_mtu",
+    "max_udp_payload",
     "get_tcp_mss",
     "HOST_DN",
 ]
@@ -491,7 +493,12 @@ from ._scheme import (  # noqa: E402
     get_default_scheme,
     register_port,
 )
-from ._ifaddrs import Interface, get_interfaces, iter_addresses  # noqa: E402
+from ._ifaddrs import (  # noqa: E402
+    Interface,
+    get_interfaces,
+    is_broadcast,
+    iter_addresses,
+)
 from ._dns import (  # noqa: E402
     ResolutionError,
     resolve,
@@ -540,6 +547,7 @@ if _msg_patch_requested():
 from ._udp import Datagram, UdpEndpoint  # noqa: E402
 from ._sockets import (  # noqa: E402
     bind,
+    max_udp_payload,
     AddressInUseError,
     SocketOption,
     disable_connreset,
