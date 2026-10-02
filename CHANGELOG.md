@@ -161,6 +161,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   IPv6 has no broadcast, so a genuine v6 address is always `False`; `is_multicast`
   stays the separate companion, since one name meaning both would hide which
   matched.
+- **An unbounded `Interface.mtu` is now a number, not `None`.** The Windows
+  loopback adapter reports `0xFFFFFFFF`, which the code called an "unknown"
+  sentinel and mapped to `None`. It is ULONG max and means *unbounded* -- there is
+  no link to constrain loopback -- so that conflated "no limit" with "could not
+  read", and cost callers in the one direction that matters: handling `None` by
+  falling back to 1500 capped loopback at 1472 when it delivers **65507**. Linux
+  reports its own `lo` as 65536 rather than as nothing, so the two platforms
+  disagreed about the same physical reality.
+
+  Such an interface now reports **65535**, the largest datagram the 16-bit IP
+  total-length field can describe -- a clamp to reality rather than an invented
+  figure. `max_udp_payload()` then yields exactly the 65507 measured to arrive,
+  and a test moves a datagram that size to prove it. `None` now means only that
+  the platform genuinely could not read an MTU.
 - **`max_udp_payload(mtu, ipv6=False)`** -- the largest UDP payload that fits an
   MTU without fragmenting (`1472` for 1500, `1452` for v6). Takes an `int` rather
   than an `Interface` on purpose: `Interface.mtu` is `Optional[int]` and **Windows

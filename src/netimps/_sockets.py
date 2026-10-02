@@ -682,11 +682,16 @@ def max_udp_payload(mtu: int, ipv6: bool = False) -> int:
       options can still fragment. Subtract more if you set any.
     - IPv6 counts its extension headers as payload, so 40 is exact only without
       them.
-    - ``Interface.mtu`` is ``Optional[int]``, and Windows reports **no MTU for
-      the loopback adapter**, so a caller must handle ``None`` rather than
-      assume. That is why this takes an ``int`` and does not accept an
-      ``Interface``: the ``None`` decision belongs to the caller, who knows
+    - ``Interface.mtu`` is ``Optional[int]``, so a caller must handle ``None``
+      rather than assume. That is why this takes an ``int`` and does not accept
+      an ``Interface``: the ``None`` decision belongs to the caller, who knows
       whether to fall back to 1500 or to refuse.
+
+      ``None`` now means the platform genuinely could not read an MTU. It no
+      longer includes "unbounded" -- the Windows loopback adapter reports ULONG
+      max and used to come back as ``None``, so a caller falling back to 1500
+      capped loopback at 1472 when it delivers 65507. That interface now reports
+      65535, and this returns the 65507 that was measured to actually arrive.
 
     Returns 0 rather than a negative number for an MTU too small to carry any
     payload.

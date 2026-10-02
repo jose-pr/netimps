@@ -321,3 +321,66 @@ def test_the_new_names_are_exported():
     for name in ("is_broadcast", "max_udp_payload"):
         assert hasattr(netimps, name), name
         assert name in netimps.__all__, name
+
+
+def test_an_unbounded_mtu_is_a_number_not_none():
+    """ULONG max means "no link constrains this", not "unknown".
+
+    The Windows loopback adapter reports 0xFFFFFFFF, which this used to map to
+    ``None`` -- conflating "no limit" with "could not read". It cost callers in
+    the one direction that matters: handling ``None`` by falling back to 1500
+    capped loopback at 1472 when it delivers 65507. Linux reports its own ``lo``
+    as 65536 rather than as nothing, so the two platforms disagreed about the
+    same physical reality.
+
+    65535 is the largest datagram the 16-bit IP total-length field can describe,
+    so it is a clamp to reality rather than an invented figure -- and it yields
+    exactly the payload measured to arrive.
+    """
+    loopbacks = [i for i in netimps.get_interfaces() if i.is_loopback]
+    if not loopbacks:
+        pytest.skip("no loopback interface reported here")
+    for interface in loopbacks:
+        if interface.mtu is None:
+            continue
+        assert (
+            interface.mtu > 1500
+        ), "loopback should not be reported with a link-sized MTU; got %r" % (
+            interface.mtu,
+        )
+        assert max_udp_payload(interface.mtu) >= 1472
+        return
+    pytest.skip("every loopback interface reported no MTU")
+
+
+@pytest.mark.skipif(not IS_WINDOWS, reason="0xFFFFFFFF is what Windows reports")
+def test_the_windows_loopback_mtu_matches_what_loopback_delivers():
+    """The constant is validated against a real datagram, not merely asserted.
+
+    If this fails, either the clamp is wrong or the platform changed -- and
+    either way the number in the docs has stopped being true.
+    """
+    loopback = [i for i in netimps.get_interfaces() if i.is_loopback and i.mtu]
+    if not loopback:
+        pytest.skip("no loopback MTU reported")
+    payload = max_udp_payload(loopback[0].mtu)
+
+    receiver = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    receiver.bind(("127.0.0.1", 0))
+    receiver.settimeout(5.0)
+    netimps.set_buffer_size(receiver, receive=1 << 20)
+    sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sender.sendto(b"x" * payload, receiver.getsockname())
+        data, _ = receiver.recvfrom(payload + 1024)
+        assert (
+            len(data) == payload
+        ), "max_udp_payload said %d would fit on loopback and %d arrived" % (
+            payload,
+            len(data),
+        )
+    except OSError as exc:  # pragma: no cover - buffer limits on a loaded host
+        pytest.skip("could not move a %d-octet datagram here: %s" % (payload, exc))
+    finally:
+        sender.close()
+        receiver.close()

@@ -104,6 +104,14 @@ _IFF_LOOPBACK = 0x8
 _IF_TYPE_SOFTWARE_LOOPBACK = 24
 
 
+#: What an MTU of ULONG max is reported as. The IP total-length field is 16 bits,
+#: so 65535 is the largest datagram that can exist whatever the link allows --
+#: making this a clamp to reality rather than an invented number. It yields
+#: exactly 65507 through :func:`netimps.max_udp_payload`, which is the measured
+#: largest UDP payload loopback actually delivers.
+_UNBOUNDED_MTU = 65535
+
+
 class Interface:
     """One network interface, normalised to be identical across platforms.
 
@@ -118,9 +126,16 @@ class Interface:
             mean the same thing on every platform.
         ips: Every address bound to the interface, each as an
             ``IPv4Interface``/``IPv6Interface`` carrying its real prefix.
-        mtu: Link MTU in bytes, or ``None`` when the platform does not report
-            it. This is the *local link* MTU -- for a bottleneck further along
-            a path see :func:`netimps.discover_mtu`.
+        mtu: Link MTU in bytes, or ``None`` when the platform genuinely could
+            not read one. An **unbounded** MTU is not ``None``: the Windows
+            loopback adapter reports ULONG max, meaning there is no link to
+            constrain it, and that is reported as 65535 -- the largest datagram
+            the 16-bit IP total-length field can describe, so a clamp to reality
+            rather than an invented figure. Measured: that interface really does
+            carry a 65507-octet UDP payload, which is what
+            :func:`netimps.max_udp_payload` derives from it, and Linux reports its
+            own ``lo`` as 65536 rather than as nothing. This is the **link** MTU;
+            for a path see :func:`netimps.discover_mtu`.
         loopback: The kernel's own loopback flag (``IFF_LOOPBACK`` on POSIX,
             ``IF_TYPE_SOFTWARE_LOOPBACK`` on Windows), or ``None`` when it was
             not reported -- the degraded enumeration path, and objects built by
@@ -740,15 +755,29 @@ def _windows_interfaces(want_raw: bool) -> "List[Interface]":
                 "flags": int(node.Flags),
             }
 
-        # 0xFFFFFFFF is the "unknown" sentinel some adapters report.
+        # 0xFFFFFFFF is **not** an "unknown" sentinel, which is what this used to
+        # say. It is ULONG max, and it means *unbounded* -- the Windows loopback
+        # pseudo-interface reports it because there is no link to constrain it.
+        # Measured: that interface really does carry a 65507-octet UDP datagram,
+        # the full protocol maximum, and Linux reports its own `lo` as the number
+        # 65536 rather than as nothing.
+        #
+        # Reporting None for it therefore conflated "no limit" with "could not
+        # read", and cost callers badly in the one direction that matters: a
+        # caller handling None by falling back to 1500 capped loopback at 1472
+        # when it can do 65507. So an unbounded MTU is clamped to the IP
+        # total-length maximum, which is the real constraint and yields exactly
+        # the measured 65507 through `max_udp_payload`. A genuine 0 stays None.
         mtu = int(node.Mtu)
+        if mtu == 0xFFFFFFFF:
+            mtu = _UNBOUNDED_MTU
         interfaces.append(
             Interface(
                 name=name,
                 index=int(node.IfIndex),
                 mac=mac,
                 ips=ips,
-                mtu=mtu if 0 < mtu < 0xFFFFFFFF else None,
+                mtu=mtu if mtu > 0 else None,
                 # IfType is the Windows spelling of IFF_LOOPBACK.
                 loopback=int(node.IfType) == _IF_TYPE_SOFTWARE_LOOPBACK,
                 raw=raw,
