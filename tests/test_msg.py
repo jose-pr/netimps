@@ -427,3 +427,109 @@ def test_winsock_is_not_importable_off_windows():
     with pytest.raises(Exception):
         __import__("netimps._winsock")
     assert sys.platform != "win32"
+
+
+# --------------------------------------------------------------------------- #
+# sendmsg on a stream socket -- WSASend, not WSASendMsg                        #
+# --------------------------------------------------------------------------- #
+
+
+def _tcp_pair():
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    client.connect(listener.getsockname())
+    server, _ = listener.accept()
+    server.settimeout(5.0)
+    listener.close()
+    return client, server
+
+
+def test_sendmsg_works_on_a_connected_stream_socket():
+    """WSASendMsg refuses SOCK_STREAM, so the buffers-only path uses WSASend.
+
+    Measured on Windows 11 build 28000: WSASendMsg answers WSAEINVAL for a
+    connected SOCK_STREAM while accepting a connected SOCK_DGRAM, so the
+    refusal is about the socket *type*, not about being connected. Without the
+    dispatch, every TCP sendmsg failed -- which also meant asyncio's
+    scatter-gather write path could never have worked through the shim.
+    """
+    client, server = _tcp_pair()
+    try:
+        sent = netimps.sendmsg(client, [b"hel", b"lo ", b"world"])
+        assert sent == 11
+        received = b""
+        while len(received) < sent:
+            received += server.recv(4096)
+        assert received == b"hello world", "the buffers must be gathered in order"
+    finally:
+        client.close()
+        server.close()
+
+
+def test_sendmsg_gathers_many_buffers_on_a_stream_socket():
+    """No small IOV_MAX-like cap was found; 500 buffers go in one call."""
+    client, server = _tcp_pair()
+    try:
+        chunks = [bytes([65 + (index % 26)]) for index in range(500)]
+        sent = netimps.sendmsg(client, chunks)
+        assert sent == 500
+        received = b""
+        while len(received) < sent:
+            received += server.recv(4096)
+        assert received == b"".join(chunks)
+    finally:
+        client.close()
+        server.close()
+
+
+def test_sendmsg_still_routes_a_destination_through_wsasendmsg():
+    """The dispatch must not lose the case WSASend cannot serve: a destination."""
+    peer = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    peer.bind(("127.0.0.1", 0))
+    peer.settimeout(5.0)
+    sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        assert netimps.sendmsg(sender, [b"ab", b"cd"], (), 0, peer.getsockname()) == 4
+        assert peer.recvfrom(100)[0] == b"abcd"
+    finally:
+        sender.close()
+        peer.close()
+
+
+def test_sendmsg_still_routes_ancdata_through_wsasendmsg():
+    """The other case WSASend cannot serve: a control buffer.
+
+    Exercised through the public wrapper that depends on it, since src pinning
+    is the only thing in the package that sends ancillary data.
+    """
+    from netimps import UdpEndpoint, bind
+
+    peer = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    peer.bind(("127.0.0.1", 0))
+    peer.settimeout(5.0)
+    endpoint = UdpEndpoint(bind("0.0.0.0", 0))
+    try:
+        if not endpoint.supports_src_pinning:
+            pytest.skip("no src pinning on this platform")
+        endpoint.send(b"pinned", "127.0.0.1", peer.getsockname()[1], src="127.0.0.1")
+        _data, observed = peer.recvfrom(100)
+        assert observed[0] == "127.0.0.1"
+    finally:
+        endpoint.close()
+        peer.close()
+
+
+def test_sendmsg_on_a_connected_datagram_socket_needs_no_address():
+    peer = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    peer.bind(("127.0.0.1", 0))
+    peer.settimeout(5.0)
+    sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sender.connect(peer.getsockname())
+    try:
+        assert netimps.sendmsg(sender, [b"xy"]) == 2
+        assert peer.recvfrom(100)[0] == b"xy"
+    finally:
+        sender.close()
+        peer.close()

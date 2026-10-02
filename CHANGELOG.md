@@ -56,6 +56,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **`sendmsg()` failed on every connected stream socket on Windows.**
+  `WSASendMsg` refuses `SOCK_STREAM` outright with `WSAEINVAL` -- measured on
+  Windows 11 build 28000, where a connected `SOCK_DGRAM` is accepted, so the
+  refusal is about the socket *type* and not about being connected. The
+  buffers-only path now uses **`WSASend`**, Windows' own scatter-gather send,
+  which works there and showed no small `IOV_MAX`-like cap (500 buffers in one
+  call, verified). A destination or a control buffer still routes through
+  `WSASendMsg`, the only call that carries either, so `UdpEndpoint.send(src=)`
+  is unchanged. Ancillary data on a stream socket still fails, which is correct:
+  Windows has no per-packet information to attach to one.
+
 - **`UdpEndpoint` reported nothing when a datagram was too large for
   `bufsize`.** `Datagram` now carries **`truncated`**, from `MSG_TRUNC`, beside
   the existing `control_truncated`. The flag was always in `msg_flags` and was

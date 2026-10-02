@@ -164,6 +164,24 @@ _ws2.WSAIoctl.argtypes = [
 ]
 _ws2.WSAIoctl.restype = _ctypes.c_int
 
+#: ``WSASend`` is the scatter-gather send that works on a **stream** socket.
+#: ``WSASendMsg`` does not: measured on Windows 11 build 28000, it answers
+#: ``WSAEINVAL`` for a connected ``SOCK_STREAM`` while accepting a connected
+#: ``SOCK_DGRAM``, so the refusal is about the socket *type* and not about
+#: being connected. ``WSASend`` takes no destination and no control buffer,
+#: which is exactly the buffers-only case -- see :func:`sendmsg` for the
+#: dispatch.
+_ws2.WSASend.argtypes = [
+    _SOCKET,
+    _ctypes.POINTER(_WSABUF),
+    _ULONG,
+    _ctypes.POINTER(_DWORD),
+    _DWORD,
+    _ctypes.c_void_p,
+    _ctypes.c_void_p,
+]
+_ws2.WSASend.restype = _ctypes.c_int
+
 _ws2.WSASendMsg.argtypes = [
     _SOCKET,
     _ctypes.POINTER(_WSAMSG),
@@ -481,6 +499,20 @@ def sendmsg(
     buffers, optional ``ancdata`` as ``(level, type, bytes)``, and the number
     of bytes sent.
 
+    **Two Winsock calls back this, chosen by what is being sent**, because no
+    single one covers the ground ``sendmsg`` does:
+
+    - no ``ancdata`` and no ``address`` -- ``WSASend``. Required for a
+      ``SOCK_STREAM`` socket, which ``WSASendMsg`` refuses outright with
+      ``WSAEINVAL`` (measured on build 28000; a connected ``SOCK_DGRAM`` is
+      accepted, so the refusal is about the socket type, not about being
+      connected). Scatter-gather works here -- 500 buffers in one call were
+      verified -- and no small ``IOV_MAX``-like cap was found.
+    - otherwise -- ``WSASendMsg``, the only one that carries a control buffer
+      or an explicit destination. Ancillary data on a stream socket therefore
+      still fails, which is correct: Windows has no per-packet information to
+      attach to one.
+
     Pinning the source address through an ``IP_PKTINFO`` / ``IPV6_PKTINFO``
     cmsg works here, with one trap that is **not** shared with Linux: Windows
     sends a zero address *literally* rather than reading it as "kernel
@@ -505,6 +537,26 @@ def sendmsg(
         array[index].buf = _ctypes.cast(held, _ctypes.c_void_p) if held else None
 
     control = _build_control(ancdata)
+
+    if control is None and address is None:
+        # Buffers only, to a connected socket: WSASend. This is the only route
+        # that works on a stream socket, and it is equally correct for a
+        # connected datagram one, so there is no need to inspect the type.
+        sent = _DWORD()
+        rc = _ws2.WSASend(
+            sock.fileno(),
+            array,
+            len(chunks),
+            _ctypes.byref(sent),
+            int(flags),
+            None,
+            None,
+        )
+        if rc != 0:
+            _raise_last_error()
+        del keepalive
+        return sent.value
+
     sockaddr = None
     if address is not None:
         sockaddr = _encode_sockaddr(address, sock.family)
