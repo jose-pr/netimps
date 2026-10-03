@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.3.3] - 2026-10-03
+
 ### Added
 
 - **`join_host(host, port=None)`** -- the inverse of `normalize_host`, and the
@@ -53,155 +57,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   passthrough to `.packed.hex`. Present because this is a value object rather
   than a `bytes` subclass, so the method is not inherited -- and a downstream
   project was subclassing the type partly to add it back.
-
-### Fixed
-
-- **`import netimps` then `import asyncio` crashed on Windows.** The import-time
-  socket patch makes `socket.socket.sendmsg` exist, and CPython's
-  `asyncio/selector_events` reads `hasattr(socket.socket, 'sendmsg')` at import
-  time as a POSIX proxy, then calls `os.sysconf('SC_IOV_MAX')` guarding only
-  `except OSError` -- so the `AttributeError` from a missing `os.sysconf` escaped
-  and the import died. `sendmsg` and `os.sysconf` are both POSIX and had always
-  travelled together; the patch was the first thing to separate them.
-
-  The patch now installs an `os.sysconf` shim alongside, answering **per name**:
-  `SC_IOV_MAX` returns 1024 (tunable with `patch_socket_module(iov_max=...)`) and
-  every other name raises `ValueError`. Per name because the three stdlib callers
-  guard differently and no single behaviour satisfies them -- `asyncio` catches
-  `OSError`, `concurrent.futures` catches `(AttributeError, ValueError)`,
-  `multiprocessing` catches `Exception`; raising `OSError` for everything rescues
-  asyncio and breaks `ProcessPoolExecutor`. Regression tests run in **fresh
-  interpreters**, since in-process tests cannot see it: by the time a test body
-  runs, asyncio is already imported.
-
-### Changed
-
-- **The patched `sock.recvmsg` now normalises the v4 `IP_PKTINFO` payload to the
-  POSIX layout**; `netimps.recvmsg()` still reports the platform's own bytes, and
-  `UdpEndpoint` is unaffected. On Windows the patched method rewrites
-  `{addr, ifindex}` (8 bytes) into `{ifindex, spec_dst, addr}` (12 bytes) with
-  `spec_dst` zero-filled -- byte-for-byte what macOS produces. The patched
-  `sendmsg` accepts either layout, chosen by length.
-
-  Rationale: installing the method name without the layout is a
-  half-impersonation, and the missing half is what made POSIX-shaped code unpack
-  `=I4s4s` from an 8-byte buffer and raise `struct.error` -- which is not an
-  `OSError`, so it escaped receive handlers. `spec_dst` is zero rather than a copy
-  of `addr` because the two genuinely differ for a broadcast (measured on Linux:
-  the local interface address against `255.255.255.255`), and code reads
-  `spec_dst` to get the local address -- so copying `addr` would corrupt exactly
-  the field it wanted. Zero is visibly wrong; `255.255.255.255` is not.
-
-  **Known consequence, not fixed by this.** The patch is additive in *names* and
-  therefore not in *behaviour*: code testing
-  `hasattr(socket.socket, "recvmsg")` to detect POSIX now gets the POSIX answer
-  on Windows. **pydhcp 0.6.1 and earlier** read `ipi_spec_dst` for their
-  `SERVER_IDENTIFIER`, and **measured, they receive but allocate and reply to
-  nothing** on Windows. A zero-filled `spec_dst` does not degrade a consumer that
-  resolves its interface from that field, it silences it -- an earlier draft of
-  this entry said "will see `0.0.0.0` ... and no longer a crash", which was
-  inferred from the field's value rather than measured against the consumer. The
-  owner's decision is to accept this: the two projects are released together and
-  have no external consumers yet. `UdpEndpoint` is the supported way to obtain
-  that address correctly on every platform; `NETIMPS_NO_SOCKET_PATCH=1` opts out
-  of the patch entirely.
-
-### Fixed
-
-- **`sendmsg()` failed on every connected stream socket on Windows.**
-  `WSASendMsg` refuses `SOCK_STREAM` outright with `WSAEINVAL` -- measured on
-  Windows 11 build 28000, where a connected `SOCK_DGRAM` is accepted, so the
-  refusal is about the socket *type* and not about being connected. The
-  buffers-only path now uses **`WSASend`**, Windows' own scatter-gather send,
-  which works there and showed no small `IOV_MAX`-like cap (500 buffers in one
-  call, verified). A destination or a control buffer still routes through
-  `WSASendMsg`, the only call that carries either, so `UdpEndpoint.send(src=)`
-  is unchanged. Ancillary data on a stream socket still fails, which is correct:
-  Windows has no per-packet information to attach to one.
-
-- **`UdpEndpoint` reported nothing when a datagram was too large for
-  `bufsize`.** `Datagram` now carries **`truncated`**, from `MSG_TRUNC`, beside
-  the existing `control_truncated`. The flag was always in `msg_flags` and was
-  being dropped, so a caller had no way to tell a complete datagram from the
-  leading fragment of a longer one -- and a protocol parser handed a message cut
-  mid-field reports a malformed packet rather than a short read. Measured on
-  Linux with `bufsize=576`: a 1102-octet datagram arrived cut to 576 with the
-  flag set and discarded. Reported, not raised: deciding that a short datagram is
-  fatal belongs to the protocol.
-
-  It is reported on the no-pktinfo path too, which now goes through `recvmsg`
-  with a zero-length control buffer rather than `recvfrom`, because `recvfrom`
-  cannot report it. Losing the arrival interface is a documented degrade; losing
-  this is silent data loss, and the two no longer have to be given up together.
-
-### Fixed
-
-- **A cancelled `arecv()` left its reader registered on the loop**, and the
-  notifier stayed bound to the first loop for good. Both reported by a consumer
-  reading the code, and both reproduced here before fixing.
-
-  Cancelling the awaiting task is the ordinary server shutdown -- cancel the
-  receive task, then close the endpoint -- and the registration was removed only
-  when it *fired*, so the loop was left watching a socket that then closed and
-  raised from the selector on its next poll. Measured:
-  `loop.remove_reader(fileno)` after a cancelled `arecv` returned `True`,
-  meaning one was still there. A cancelled `arecv` now unregisters itself, and
-  the thread path drops its pending future.
-
-  Separately, the notifier thread captured its loop for its whole lifetime, so
-  serving one endpoint from a second loop -- `asyncio.run(serve())` twice, or a
-  server stopped and restarted -- sent readiness to a closed loop. Measured on a
-  `ProactorEventLoop`: the second exchange timed out while the daemon thread
-  raised an unhandled "Event loop is closed" to stderr, where no caller could
-  see it. A different running loop now retires the old thread and starts
-  another, joining the old one rather than abandoning it; the only previous
-  reset was `close()`, which also closes the socket. The post is additionally
-  guarded, since a loop can close between the select and the call.
-
-- **`bind(options=[(SOL_SOCKET, SO_REUSEADDR, 1)])` failed with a bare
-  `WSAEINVAL` on Windows** -- a regression introduced in this same unreleased
-  cycle, caught by a consumer's test suite. Windows refuses `SO_REUSEADDR` on a
-  socket that already carries `SO_EXCLUSIVEADDRUSE`, and once `bind()` began
-  setting the latter for *both* values of `reuse_address`, the stdlib-shaped
-  spelling of "share this address" stopped working. The error names neither
-  option, so the caller saw only "An invalid argument was supplied".
-
-  An explicit nonzero `SO_REUSEADDR` in `options=` is now treated as
-  `allow_address_takeover=True` -- it is the caller asking for takeover in so
-  many words. A zero value stays an explicit opt-out. `bind_error_hint` learned
-  `WSAEINVAL`, since a bare 10022 is undiagnosable. Verified against the
-  reporting consumer's suite: the three tests that failed now pass, and fail
-  again when the fix is reverted.
-
-- **A v4 client of a dual-stack listener could not be replied to at all.**
-  Measured on Windows 11 ARM64 with an `AF_INET` client on `127.0.0.1` and a
-  `bind("::", family=AF_INET6, IPV6_V6ONLY=0)` listener, it failed **both** ways:
-
-  - *With* pktinfo, `reply_socket` correctly returned an `AF_INET` socket, but
-    `datagram.sender` was still the v6 4-tuple -- so the `reply.sendto(answer,
-    packet.sender)` shown in this library's own docs raised `TypeError: AF_INET
-    address must be a pair (host, port)`.
-  - *Without* pktinfo there was no `local_address`, so both fallbacks used the
-    **listener's** family; the resulting `AF_INET6` socket carries
-    `IPV6_V6ONLY=1` on Windows (the platform default, which `bind()` does not
-    clear), and `sendto` to a mapped address failed with `WinError 10049`. The
-    exchange silently never started.
-
-  Now **the sender's family decides the reply socket's**, with or without
-  pktinfo, and the own-address fallback is skipped when it is in the wrong
-  family. New **`Datagram.reply_address`** gives the peer in the family that was
-  chosen -- a mapped sender as a plain `(host, port)`, everything else unchanged
-  -- and is what the examples now pass to `sendto`.
-
-- **`is_multicast` missed a v4-mapped group below Python 3.13.** The stdlib only
-  began delegating a mapped address's `is_*` properties to the embedded v4
-  address in 3.13, so `IPv6Address("::ffff:224.0.0.1").is_multicast` is `False`
-  on 3.9 and `True` on 3.14 -- the function's answer depended on the
-  interpreter. It unmaps first now, as `is_broadcast` already did.
-  `UdpEndpoint._is_repliable` inherits this, so on 3.9-3.12 a reply socket could
-  bind a mapped multicast destination.
-
-### Added
 
 - **`interface_enumerations() -> int`** -- how many times this process has
   really enumerated its adapters. Counts the syscall and never a cached hit,
@@ -317,30 +172,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   firewall can allow (`tftp-hpa -R`, `dnsmasq --tftp-port-range`). Materialised
   once, so a generator is safe but must be finite; empty raises `ValueError`.
 
-### Fixed
-
-- **`reply_socket` answered from the wrong address when the port was taken.**
-  The candidate loop caught every `OSError` and advanced the *address*, so an
-  explicit `port=` already held on the arrival address fell through to the
-  endpoint's own address and then the wildcard **with the same port** -- and
-  where that later bind succeeded, the reply left from an address the client
-  never addressed, which is the single failure this method exists to prevent.
-
-  Measured on Windows 11 ARM64 against the pre-fix code: holding
-  `10.6.0.223:57014` and replying to a datagram that arrived there returned a
-  socket bound to `127.0.0.1:57014`.
-
-  A held port and an unusable address are different failures and now move in
-  different directions -- an unbindable address (broadcast, multicast, a wrong
-  scope) advances the **address**, a held port advances the **port** on the same
-  address. When the ports run out on an otherwise bindable address this raises
-  **`AddressInUseError`** and binds nothing, so a caller can also tell "port
-  busy, try another" from "this address is unbindable", which the old generic
-  `OSError` hid. Both `reply_socket` and `AddressInUseError` are new in this
-  unreleased cycle, so no released behaviour changed.
-
-### Added
-
 - **`UdpEndpoint.arecv()` and `.datagrams()`** -- `recv()` awaited, and an
   `async for` over arrivals. Same arguments, same `Datagram`, and **pktinfo
   survives on every loop type**, including the Windows default
@@ -367,24 +198,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `os.sysconf` crash, and a consumer using only the value types should not pay for
   an event-loop import. A test spawns a fresh interpreter to assert
   `'asyncio' not in sys.modules` after `import netimps`.
-
-### Changed
-
-- **`bind()` and `normalize_host()` now accept the package's usual loose union**,
-  not just a `str`: an address object, an `IPv4Interface`/`IPv6Interface` (its
-  `.ip` is used), a `Host` or an `Fqdn`. `bind()` previously leaked a raw
-  socket-layer `TypeError` -- "str, bytes or bytearray expected, not
-  IPv4Address" -- not even a netimps error, for a value `ping`, `resolve` and
-  `UdpEndpoint.send` all take; they coerce through a shared helper that these two
-  simply never used. `join_host`, `normalize_host`'s inverse, already accepted
-  them. A *network* still raises `TypeError`, since it names no single host.
-
-  `normalize_host` uses an **allowlist**, not a `str()` fallback. A fallback
-  accepted `None` and turned it into the hostname `"None"` -- a plausible answer
-  that is wrong and that a caller cannot detect -- and did the same for an int or
-  a list.
-
-### Added
 
 - **`UdpEndpoint.reply_socket(datagram)`** -- a socket bound so replies leave
   from the address the client addressed, which is the point of pktinfo in one
@@ -437,8 +250,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   refuse is the caller's decision. The v4 figure uses the minimum 20-byte header,
   so a packet carrying IP options can still fragment.
 
-### Added
-
 - **`AddressInUseError(OSError)`** -- one stable type for "the address is
   taken", raised by `bind()` instead of whatever the platform happened to call
   it. Measured on Windows 11 ARM64 against an exclusive holder, the *same
@@ -455,61 +266,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `except PermissionError` stops catching a case that was never about
   permission. A genuine POSIX `EACCES` on a port below 1024 is left exactly as
   it was.
-
-### Fixed
-
-- **`bind()`'s default let a second live UDP socket take the port on Linux.**
-  `reuse_address=True` (the default) set `SO_REUSEADDR`, and on a *datagram*
-  socket that is not the `TIME_WAIT` convenience it is for TCP -- it permits
-  duplicate bindings of **live** sockets. Measured on WSL: a second `bind()` of
-  the same live UDP `addr:port` with default arguments succeeded and the datagram
-  went to the **second** socket, with the holder getting no error. `socket(7)` is
-  explicit that the exception is an active *listening* socket, and a UDP socket
-  never listens.
-
-  `SO_REUSEADDR` is now set on POSIX for **stream sockets only**. Sharing a UDP
-  port stays reachable through the names that say so -- `reuse_port=True`
-  (`SO_REUSEPORT`, the option designed for it) or `allow_address_takeover=True`.
-  `multicast_socket` sets what it needs itself and was verified not to rely on
-  the old default.
-
-  This also corrects two documentation passages that stated the opposite: both
-  said "two live sockets still cannot hold one `addr:port`", which is true for
-  TCP and false for UDP on Linux.
-- **`bind(reuse_address=False)` left a Windows wildcard bind open to hijack.**
-  It set *nothing* -- both `SO_REUSEADDR` and `SO_EXCLUSIVEADDRUSE` read 0 --
-  and Windows then lets a *more specific* `SO_REUSEADDR` bind take over a
-  non-exclusive wildcard. Reproduced: a thief binding `127.0.0.1` received the
-  datagram while the holder on `0.0.0.0` got nothing and no error.
-
-  So the flag that reads as "strictest" was the least strict setting available,
-  which is the worst shape a safety option can have -- the careful caller got
-  the unsafe behaviour. `SO_EXCLUSIVEADDRUSE` is now set on Windows whenever
-  `allow_address_takeover` is false, for **both** values of `reuse_address`;
-  that option's only effect there is denying the takeover, so it costs nothing.
-  `reuse_address` now governs POSIX `SO_REUSEADDR` only, which is what the name
-  means everywhere else. `allow_address_takeover=True` remains the one way to
-  opt into the old behaviour. Windows-only change, strictly toward safety.
-- **`UdpEndpoint.recv()` enumerated every interface on every datagram.**
-  Measured on Windows loopback with 300-octet packets: **1.07 ms per packet**
-  against 0.015 ms with `resolve_interface=False` -- a 70x cost on the *default*
-  path, and one a consuming project measured at 35-42 ms per enumeration on a
-  host with more adapters. Worse than a bad default: the class docstring's own
-  example uses the default and reads `.interface`, so the documented usage was
-  the slow one, and a server loop is a hot loop by definition since the sender
-  controls the rate.
-
-  Now resolved through a per-endpoint `index -> Interface` cache, refreshed on a
-  **miss** as well as on a 30-second TTL -- a miss means the adapter set changed,
-  which is both cheap to act on and exactly when it matters. Negative results are
-  cached too, so a stale or vanished index does not re-enumerate forever.
-  Measured after: **0.017 ms per packet**, and one enumeration for ten datagrams
-  instead of ten.
-- `UdpEndpoint.send()`'s docstring still claimed Windows could not honour `src`
-  at all and that `supports_src_pinning` was `False` there. Both stopped being
-  true earlier in this release.
-
-### Added
 
 - **`Fqdn`** -- a domain name as a value type, with label algebra: `.labels`,
   `.hostname`, `.domain`, `.domains`, `.tld`, `.is_fully_qualified()`,
@@ -581,7 +337,233 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   outright and Linux accepts and does not need -- so it is set with the error
   ignored.
 
+### Changed
+
+- **The patched `sock.recvmsg` now normalises the v4 `IP_PKTINFO` payload to the
+  POSIX layout**; `netimps.recvmsg()` still reports the platform's own bytes, and
+  `UdpEndpoint` is unaffected. On Windows the patched method rewrites
+  `{addr, ifindex}` (8 bytes) into `{ifindex, spec_dst, addr}` (12 bytes) with
+  `spec_dst` zero-filled -- byte-for-byte what macOS produces. The patched
+  `sendmsg` accepts either layout, chosen by length.
+
+  Rationale: installing the method name without the layout is a
+  half-impersonation, and the missing half is what made POSIX-shaped code unpack
+  `=I4s4s` from an 8-byte buffer and raise `struct.error` -- which is not an
+  `OSError`, so it escaped receive handlers. `spec_dst` is zero rather than a copy
+  of `addr` because the two genuinely differ for a broadcast (measured on Linux:
+  the local interface address against `255.255.255.255`), and code reads
+  `spec_dst` to get the local address -- so copying `addr` would corrupt exactly
+  the field it wanted. Zero is visibly wrong; `255.255.255.255` is not.
+
+  **Known consequence, not fixed by this.** The patch is additive in *names* and
+  therefore not in *behaviour*: code testing
+  `hasattr(socket.socket, "recvmsg")` to detect POSIX now gets the POSIX answer
+  on Windows. **pydhcp 0.6.1 and earlier** read `ipi_spec_dst` for their
+  `SERVER_IDENTIFIER`, and **measured, they receive but allocate and reply to
+  nothing** on Windows. A zero-filled `spec_dst` does not degrade a consumer that
+  resolves its interface from that field, it silences it -- an earlier draft of
+  this entry said "will see `0.0.0.0` ... and no longer a crash", which was
+  inferred from the field's value rather than measured against the consumer. The
+  owner's decision is to accept this: the two projects are released together and
+  have no external consumers yet. `UdpEndpoint` is the supported way to obtain
+  that address correctly on every platform; `NETIMPS_NO_SOCKET_PATCH=1` opts out
+  of the patch entirely.
+
+- **`bind()` and `normalize_host()` now accept the package's usual loose union**,
+  not just a `str`: an address object, an `IPv4Interface`/`IPv6Interface` (its
+  `.ip` is used), a `Host` or an `Fqdn`. `bind()` previously leaked a raw
+  socket-layer `TypeError` -- "str, bytes or bytearray expected, not
+  IPv4Address" -- not even a netimps error, for a value `ping`, `resolve` and
+  `UdpEndpoint.send` all take; they coerce through a shared helper that these two
+  simply never used. `join_host`, `normalize_host`'s inverse, already accepted
+  them. A *network* still raises `TypeError`, since it names no single host.
+
+  `normalize_host` uses an **allowlist**, not a `str()` fallback. A fallback
+  accepted `None` and turned it into the hostname `"None"` -- a plausible answer
+  that is wrong and that a caller cannot detect -- and did the same for an int or
+  a list.
+
 ### Fixed
+
+- **`import netimps` then `import asyncio` crashed on Windows.** The import-time
+  socket patch makes `socket.socket.sendmsg` exist, and CPython's
+  `asyncio/selector_events` reads `hasattr(socket.socket, 'sendmsg')` at import
+  time as a POSIX proxy, then calls `os.sysconf('SC_IOV_MAX')` guarding only
+  `except OSError` -- so the `AttributeError` from a missing `os.sysconf` escaped
+  and the import died. `sendmsg` and `os.sysconf` are both POSIX and had always
+  travelled together; the patch was the first thing to separate them.
+
+  The patch now installs an `os.sysconf` shim alongside, answering **per name**:
+  `SC_IOV_MAX` returns 1024 (tunable with `patch_socket_module(iov_max=...)`) and
+  every other name raises `ValueError`. Per name because the three stdlib callers
+  guard differently and no single behaviour satisfies them -- `asyncio` catches
+  `OSError`, `concurrent.futures` catches `(AttributeError, ValueError)`,
+  `multiprocessing` catches `Exception`; raising `OSError` for everything rescues
+  asyncio and breaks `ProcessPoolExecutor`. Regression tests run in **fresh
+  interpreters**, since in-process tests cannot see it: by the time a test body
+  runs, asyncio is already imported.
+
+- **`sendmsg()` failed on every connected stream socket on Windows.**
+  `WSASendMsg` refuses `SOCK_STREAM` outright with `WSAEINVAL` -- measured on
+  Windows 11 build 28000, where a connected `SOCK_DGRAM` is accepted, so the
+  refusal is about the socket *type* and not about being connected. The
+  buffers-only path now uses **`WSASend`**, Windows' own scatter-gather send,
+  which works there and showed no small `IOV_MAX`-like cap (500 buffers in one
+  call, verified). A destination or a control buffer still routes through
+  `WSASendMsg`, the only call that carries either, so `UdpEndpoint.send(src=)`
+  is unchanged. Ancillary data on a stream socket still fails, which is correct:
+  Windows has no per-packet information to attach to one.
+
+- **`UdpEndpoint` reported nothing when a datagram was too large for
+  `bufsize`.** `Datagram` now carries **`truncated`**, from `MSG_TRUNC`, beside
+  the existing `control_truncated`. The flag was always in `msg_flags` and was
+  being dropped, so a caller had no way to tell a complete datagram from the
+  leading fragment of a longer one -- and a protocol parser handed a message cut
+  mid-field reports a malformed packet rather than a short read. Measured on
+  Linux with `bufsize=576`: a 1102-octet datagram arrived cut to 576 with the
+  flag set and discarded. Reported, not raised: deciding that a short datagram is
+  fatal belongs to the protocol.
+
+  It is reported on the no-pktinfo path too, which now goes through `recvmsg`
+  with a zero-length control buffer rather than `recvfrom`, because `recvfrom`
+  cannot report it. Losing the arrival interface is a documented degrade; losing
+  this is silent data loss, and the two no longer have to be given up together.
+
+- **A cancelled `arecv()` left its reader registered on the loop**, and the
+  notifier stayed bound to the first loop for good. Both reported by a consumer
+  reading the code, and both reproduced here before fixing.
+
+  Cancelling the awaiting task is the ordinary server shutdown -- cancel the
+  receive task, then close the endpoint -- and the registration was removed only
+  when it *fired*, so the loop was left watching a socket that then closed and
+  raised from the selector on its next poll. Measured:
+  `loop.remove_reader(fileno)` after a cancelled `arecv` returned `True`,
+  meaning one was still there. A cancelled `arecv` now unregisters itself, and
+  the thread path drops its pending future.
+
+  Separately, the notifier thread captured its loop for its whole lifetime, so
+  serving one endpoint from a second loop -- `asyncio.run(serve())` twice, or a
+  server stopped and restarted -- sent readiness to a closed loop. Measured on a
+  `ProactorEventLoop`: the second exchange timed out while the daemon thread
+  raised an unhandled "Event loop is closed" to stderr, where no caller could
+  see it. A different running loop now retires the old thread and starts
+  another, joining the old one rather than abandoning it; the only previous
+  reset was `close()`, which also closes the socket. The post is additionally
+  guarded, since a loop can close between the select and the call.
+
+- **`bind(options=[(SOL_SOCKET, SO_REUSEADDR, 1)])` failed with a bare
+  `WSAEINVAL` on Windows** -- a regression introduced in this same unreleased
+  cycle, caught by a consumer's test suite. Windows refuses `SO_REUSEADDR` on a
+  socket that already carries `SO_EXCLUSIVEADDRUSE`, and once `bind()` began
+  setting the latter for *both* values of `reuse_address`, the stdlib-shaped
+  spelling of "share this address" stopped working. The error names neither
+  option, so the caller saw only "An invalid argument was supplied".
+
+  An explicit nonzero `SO_REUSEADDR` in `options=` is now treated as
+  `allow_address_takeover=True` -- it is the caller asking for takeover in so
+  many words. A zero value stays an explicit opt-out. `bind_error_hint` learned
+  `WSAEINVAL`, since a bare 10022 is undiagnosable. Verified against the
+  reporting consumer's suite: the three tests that failed now pass, and fail
+  again when the fix is reverted.
+
+- **A v4 client of a dual-stack listener could not be replied to at all.**
+  Measured on Windows 11 ARM64 with an `AF_INET` client on `127.0.0.1` and a
+  `bind("::", family=AF_INET6, IPV6_V6ONLY=0)` listener, it failed **both** ways:
+
+  - *With* pktinfo, `reply_socket` correctly returned an `AF_INET` socket, but
+    `datagram.sender` was still the v6 4-tuple -- so the `reply.sendto(answer,
+    packet.sender)` shown in this library's own docs raised `TypeError: AF_INET
+    address must be a pair (host, port)`.
+  - *Without* pktinfo there was no `local_address`, so both fallbacks used the
+    **listener's** family; the resulting `AF_INET6` socket carries
+    `IPV6_V6ONLY=1` on Windows (the platform default, which `bind()` does not
+    clear), and `sendto` to a mapped address failed with `WinError 10049`. The
+    exchange silently never started.
+
+  Now **the sender's family decides the reply socket's**, with or without
+  pktinfo, and the own-address fallback is skipped when it is in the wrong
+  family. New **`Datagram.reply_address`** gives the peer in the family that was
+  chosen -- a mapped sender as a plain `(host, port)`, everything else unchanged
+  -- and is what the examples now pass to `sendto`.
+
+- **`is_multicast` missed a v4-mapped group below Python 3.13.** The stdlib only
+  began delegating a mapped address's `is_*` properties to the embedded v4
+  address in 3.13, so `IPv6Address("::ffff:224.0.0.1").is_multicast` is `False`
+  on 3.9 and `True` on 3.14 -- the function's answer depended on the
+  interpreter. It unmaps first now, as `is_broadcast` already did.
+  `UdpEndpoint._is_repliable` inherits this, so on 3.9-3.12 a reply socket could
+  bind a mapped multicast destination.
+
+- **`reply_socket` answered from the wrong address when the port was taken.**
+  The candidate loop caught every `OSError` and advanced the *address*, so an
+  explicit `port=` already held on the arrival address fell through to the
+  endpoint's own address and then the wildcard **with the same port** -- and
+  where that later bind succeeded, the reply left from an address the client
+  never addressed, which is the single failure this method exists to prevent.
+
+  Measured on Windows 11 ARM64 against the pre-fix code: holding
+  `10.6.0.223:57014` and replying to a datagram that arrived there returned a
+  socket bound to `127.0.0.1:57014`.
+
+  A held port and an unusable address are different failures and now move in
+  different directions -- an unbindable address (broadcast, multicast, a wrong
+  scope) advances the **address**, a held port advances the **port** on the same
+  address. When the ports run out on an otherwise bindable address this raises
+  **`AddressInUseError`** and binds nothing, so a caller can also tell "port
+  busy, try another" from "this address is unbindable", which the old generic
+  `OSError` hid. Both `reply_socket` and `AddressInUseError` are new in this
+  unreleased cycle, so no released behaviour changed.
+
+- **`bind()`'s default let a second live UDP socket take the port on Linux.**
+  `reuse_address=True` (the default) set `SO_REUSEADDR`, and on a *datagram*
+  socket that is not the `TIME_WAIT` convenience it is for TCP -- it permits
+  duplicate bindings of **live** sockets. Measured on WSL: a second `bind()` of
+  the same live UDP `addr:port` with default arguments succeeded and the datagram
+  went to the **second** socket, with the holder getting no error. `socket(7)` is
+  explicit that the exception is an active *listening* socket, and a UDP socket
+  never listens.
+
+  `SO_REUSEADDR` is now set on POSIX for **stream sockets only**. Sharing a UDP
+  port stays reachable through the names that say so -- `reuse_port=True`
+  (`SO_REUSEPORT`, the option designed for it) or `allow_address_takeover=True`.
+  `multicast_socket` sets what it needs itself and was verified not to rely on
+  the old default.
+
+  This also corrects two documentation passages that stated the opposite: both
+  said "two live sockets still cannot hold one `addr:port`", which is true for
+  TCP and false for UDP on Linux.
+- **`bind(reuse_address=False)` left a Windows wildcard bind open to hijack.**
+  It set *nothing* -- both `SO_REUSEADDR` and `SO_EXCLUSIVEADDRUSE` read 0 --
+  and Windows then lets a *more specific* `SO_REUSEADDR` bind take over a
+  non-exclusive wildcard. Reproduced: a thief binding `127.0.0.1` received the
+  datagram while the holder on `0.0.0.0` got nothing and no error.
+
+  So the flag that reads as "strictest" was the least strict setting available,
+  which is the worst shape a safety option can have -- the careful caller got
+  the unsafe behaviour. `SO_EXCLUSIVEADDRUSE` is now set on Windows whenever
+  `allow_address_takeover` is false, for **both** values of `reuse_address`;
+  that option's only effect there is denying the takeover, so it costs nothing.
+  `reuse_address` now governs POSIX `SO_REUSEADDR` only, which is what the name
+  means everywhere else. `allow_address_takeover=True` remains the one way to
+  opt into the old behaviour. Windows-only change, strictly toward safety.
+- **`UdpEndpoint.recv()` enumerated every interface on every datagram.**
+  Measured on Windows loopback with 300-octet packets: **1.07 ms per packet**
+  against 0.015 ms with `resolve_interface=False` -- a 70x cost on the *default*
+  path, and one a consuming project measured at 35-42 ms per enumeration on a
+  host with more adapters. Worse than a bad default: the class docstring's own
+  example uses the default and reads `.interface`, so the documented usage was
+  the slow one, and a server loop is a hot loop by definition since the sender
+  controls the rate.
+
+  Now resolved through a per-endpoint `index -> Interface` cache, refreshed on a
+  **miss** as well as on a 30-second TTL -- a miss means the adapter set changed,
+  which is both cheap to act on and exactly when it matters. Negative results are
+  cached too, so a stale or vanished index does not re-enumerate forever.
+  Measured after: **0.017 ms per packet**, and one enumeration for ten datagrams
+  instead of ten.
+- `UdpEndpoint.send()`'s docstring still claimed Windows could not honour `src`
+  at all and that `supports_src_pinning` was `False` there. Both stopped being
+  true earlier in this release.
 
 - **IPv6 `UdpEndpoint` was silently degraded on Windows.** The receive option
   was looked up as `IPV6_RECVPKTINFO`, which Windows does not export at all;
@@ -1267,7 +1249,8 @@ below is simply what the package contains.
 - **`Host`**, **`retry()`/`backoff_delays()`**, and the named networks `APIPA`,
   `LOOPBACK_V4`, `LOOPBACK_V6`, `LINK_LOCAL_V6`.
 
-[Unreleased]: https://github.com/jose-pr/netimps/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/jose-pr/netimps/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/jose-pr/netimps/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/jose-pr/netimps/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/jose-pr/netimps/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/jose-pr/netimps/compare/v0.2.2...v0.3.0
