@@ -119,6 +119,7 @@ map:
 | `join_host`, `unmap`, `is_wildcard` | build `host:port` (IPv6-bracketed), collapse a v4-mapped address, test for the bind-anything form |
 | `get_default_port`, `get_default_scheme`, `register_port` | scheme ↔ port registry |
 | `resolve`, `resolve_dnspython`, `resolve_system`, `resolve_nslookup` | DNS lookup → native records; `resolve` chains the three backends, each independently callable, and returns `[]` only when every applicable backend answered empty |
+| `resolve_wire`, `resolve_doh` | DNS by **explicit transport** — UDP/TCP to a named server, or DNS-over-HTTPS — bypassing the backend chain when the caller needs to choose the resolver rather than inherit the host's |
 | `ResolutionError` | raised by the three resolvers when a backend could not even ask (missing binary, unreachable server, deadline) — as opposed to an empty answer |
 | `ping`, `PingResult` | reachability with RTT and TTL |
 | `bind`, `bind_error_hint`, `interface_for`, `interfaces_for`, `is_local_address` | socket creation and local membership |
