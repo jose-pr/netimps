@@ -131,6 +131,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`UdpEndpoint.reply_socket(datagram, port=...)` accepts an iterable of
+  ports**, tried in order, for a server that pins transfer ports to a range a
+  firewall can allow (`tftp-hpa -R`, `dnsmasq --tftp-port-range`). Materialised
+  once, so a generator is safe but must be finite; empty raises `ValueError`.
+
+### Fixed
+
+- **`reply_socket` answered from the wrong address when the port was taken.**
+  The candidate loop caught every `OSError` and advanced the *address*, so an
+  explicit `port=` already held on the arrival address fell through to the
+  endpoint's own address and then the wildcard **with the same port** -- and
+  where that later bind succeeded, the reply left from an address the client
+  never addressed, which is the single failure this method exists to prevent.
+
+  Measured on Windows 11 ARM64 against the pre-fix code: holding
+  `10.6.0.223:57014` and replying to a datagram that arrived there returned a
+  socket bound to `127.0.0.1:57014`.
+
+  A held port and an unusable address are different failures and now move in
+  different directions -- an unbindable address (broadcast, multicast, a wrong
+  scope) advances the **address**, a held port advances the **port** on the same
+  address. When the ports run out on an otherwise bindable address this raises
+  **`AddressInUseError`** and binds nothing, so a caller can also tell "port
+  busy, try another" from "this address is unbindable", which the old generic
+  `OSError` hid. Both `reply_socket` and `AddressInUseError` are new in this
+  unreleased cycle, so no released behaviour changed.
+
+### Added
+
 - **`UdpEndpoint.arecv()` and `.datagrams()`** -- `recv()` awaited, and an
   `async for` over arrivals. Same arguments, same `Datagram`, and **pktinfo
   survives on every loop type**, including the Windows default

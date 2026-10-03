@@ -197,6 +197,242 @@ def test_reply_socket_disables_connreset_by_default():
             sock.close()
 
 
+def _hold(address, port=0):
+    """Bind a socket hard enough that a second bind of the same addr:port fails.
+
+    Not `netimps.bind`: this has to be the *holder*, and the question of whether
+    a second bind is refused is exactly what the test needs to control. A plain
+    stdlib datagram socket with no options is the strictest holder available on
+    both families.
+    """
+    holder = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    holder.bind((address, port))
+    return holder
+
+
+def _second_bind_is_refused(address, port):
+    """Does this platform actually refuse a second live bind here?
+
+    Linux UDP permits duplicate live binds when `SO_REUSEADDR` is set, which is
+    why `bind()` stopped setting it for datagram sockets. Rather than trusting
+    that from the test, measure it -- a test that cannot provoke the error it is
+    about should skip, not pass vacuously.
+    """
+    try:
+        probe = bind(address, port)
+    except netimps.AddressInUseError:
+        return True
+    except OSError:
+        return False
+    probe.close()
+    return False
+
+
+def test_reply_socket_takes_a_range_of_ports():
+    """A server pinning transfer ports to a firewall-allowed range (`tftp-hpa
+    -R`, `dnsmasq --tftp-port-range`) had no way through this method."""
+    with UdpEndpoint(bind("0.0.0.0", 0)) as server:
+        # Ask the OS for free ports rather than naming any: a hardcoded port
+        # meets Windows' per-boot excluded ranges sooner or later.
+        scouts = [_hold("127.0.0.1") for _ in range(3)]
+        wanted = [s.getsockname()[1] for s in scouts]
+        for s in scouts:
+            s.close()
+
+        datagram = Datagram(
+            data=b"", sender=("127.0.0.1", 1), local_address=parse("127.0.0.1")
+        )
+        sock = server.reply_socket(datagram, port=wanted)
+        try:
+            assert sock.getsockname()[0] == "127.0.0.1"
+            assert sock.getsockname()[1] in wanted
+        finally:
+            sock.close()
+
+
+def test_a_held_port_advances_the_port_not_the_address():
+    """The regression this method shipped with, and the one failure it exists to
+    prevent.
+
+    Every `OSError` used to advance the *address*, so a taken port fell through
+    to the endpoint's own address and then the wildcard **with the same port** --
+    and where that later bind succeeded, the reply left from an address the
+    client never addressed. An in-use port says nothing is wrong with the
+    address, so the next port on the same address is the only correct move.
+    """
+    with UdpEndpoint(bind("0.0.0.0", 0)) as server:
+        scouts = [_hold("127.0.0.1") for _ in range(2)]
+        taken, free = (s.getsockname()[1] for s in scouts)
+        scouts[1].close()  # `free` is now free; `taken` is still held.
+
+        if not _second_bind_is_refused("127.0.0.1", taken):
+            scouts[0].close()
+            pytest.skip("this platform permits a second live bind here")
+
+        datagram = Datagram(
+            data=b"", sender=("127.0.0.1", 1), local_address=parse("127.0.0.1")
+        )
+        try:
+            sock = server.reply_socket(datagram, port=[taken, free])
+            try:
+                # Both halves matter: the right port *and* the right address.
+                assert sock.getsockname()[1] == free
+                assert sock.getsockname()[0] == "127.0.0.1"
+            finally:
+                sock.close()
+        finally:
+            scouts[0].close()
+
+
+def test_exhausting_the_ports_raises_rather_than_moving_address():
+    """ "Port busy" and "this address is unbindable" are different answers.
+
+    The old code raised a generic `OSError` only after trying the wildcard, so a
+    caller could not tell them apart -- and the wildcard attempt was itself the
+    bug. With every port held on a bindable address this now raises
+    `AddressInUseError` and binds nothing.
+    """
+    with UdpEndpoint(bind("0.0.0.0", 0)) as server:
+        holder = _hold("127.0.0.1")
+        taken = holder.getsockname()[1]
+
+        if not _second_bind_is_refused("127.0.0.1", taken):
+            holder.close()
+            pytest.skip("this platform permits a second live bind here")
+
+        datagram = Datagram(
+            data=b"", sender=("127.0.0.1", 1), local_address=parse("127.0.0.1")
+        )
+        try:
+            with pytest.raises(netimps.AddressInUseError):
+                server.reply_socket(datagram, port=[taken])
+        finally:
+            holder.close()
+
+
+def test_an_unbindable_address_still_advances_the_address():
+    """The other axis, unchanged: a broadcast destination is not a port problem.
+
+    This is what keeps the two-axis fix from being a regression -- the fallback
+    chain still exists, it is just no longer reached by an in-use port.
+    """
+    with UdpEndpoint(bind("127.0.0.1", 0)) as server:
+        scouts = [_hold("127.0.0.1") for _ in range(2)]
+        wanted = [s.getsockname()[1] for s in scouts]
+        for s in scouts:
+            s.close()
+
+        datagram = Datagram(
+            data=b"", sender=("127.0.0.1", 1), local_address=parse("255.255.255.255")
+        )
+        sock = server.reply_socket(datagram, port=wanted)
+        try:
+            assert sock.getsockname()[0] == "127.0.0.1"
+            assert sock.getsockname()[1] in wanted
+        finally:
+            sock.close()
+
+
+def test_a_generator_of_ports_survives_every_address_candidate():
+    """The ports are materialised once, because they are retried per address.
+
+    A generator passed straight through would be empty by the second candidate,
+    which would turn the fallback chain into a silent single attempt.
+    """
+    with UdpEndpoint(bind("127.0.0.1", 0)) as server:
+        scout = _hold("127.0.0.1")
+        wanted = scout.getsockname()[1]
+        scout.close()
+
+        # An unbindable arrival address, so the first candidate fails and the
+        # second has to see the same ports.
+        datagram = Datagram(
+            data=b"", sender=("127.0.0.1", 1), local_address=parse("255.255.255.255")
+        )
+        sock = server.reply_socket(datagram, port=(p for p in [wanted]))
+        try:
+            assert sock.getsockname() == ("127.0.0.1", wanted)
+        finally:
+            sock.close()
+
+
+def _second_local_v4():
+    """Another bindable local v4 address, or None.
+
+    The wrong-address bug needs two: the arrival address with its port held, and
+    a *different* one for the old code to wrongly fall back to.
+    """
+    for iface in netimps.get_interfaces():
+        for ip in iface.ips:
+            address = getattr(ip, "ip", ip)
+            if address.version != 4 or address.is_loopback or address.is_link_local:
+                continue
+            try:
+                probe = bind(str(address), 0)
+            except OSError:
+                continue
+            probe.close()
+            return str(address)
+    return None
+
+
+def test_a_held_port_does_not_answer_from_another_address():
+    """The consumer-facing form of the same bug, with a plain `int` port.
+
+    Measured on Windows 11 ARM64 against the pre-fix code: holding
+    `10.6.0.223:57014` and asking for a reply to a datagram that arrived there
+    returned a socket bound to `127.0.0.1:57014` -- the endpoint's own address.
+    The client addressed one address and the reply would have left from another,
+    which is the single failure this method exists to prevent.
+
+    **This test is environment-dependent and skips freely** -- it needs a second
+    live local v4 address, and one was observed coming and going between runs on
+    this host (a VPN adapter). Do not read a green run as proof of the
+    two-address case; the deterministic coverage of the same bug is
+    `test_exhausting_the_ports_raises_rather_than_moving_address`, which is
+    loopback-only. A standalone reproduction script is kept out of tree.
+    """
+    other = _second_local_v4()
+    if other is None:
+        pytest.skip("needs a second bindable local v4 address")
+
+    holder = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    holder.bind((other, 0))
+    port = holder.getsockname()[1]
+    try:
+        if not _second_bind_is_refused(other, port):
+            pytest.skip("this platform permits a second live bind here")
+
+        with UdpEndpoint(bind("127.0.0.1", 0)) as server:
+            datagram = Datagram(
+                data=b"", sender=("127.0.0.1", 1), local_address=parse(other)
+            )
+            with pytest.raises(netimps.AddressInUseError):
+                server.reply_socket(datagram, port=port)
+    finally:
+        holder.close()
+
+
+def test_an_empty_port_iterable_is_an_error_not_a_wildcard():
+    """`port=[]` is a caller bug. Treating it as "any port" would bind something
+    the caller's firewall rule does not cover."""
+    with UdpEndpoint(bind("0.0.0.0", 0)) as server:
+        datagram = Datagram(data=b"", sender=("127.0.0.1", 1), local_address=None)
+        with pytest.raises(ValueError, match="empty"):
+            server.reply_socket(datagram, port=[])
+
+
+def test_a_plain_int_port_still_works():
+    """The int form is the common case and must not have become an iterable."""
+    with UdpEndpoint(bind("0.0.0.0", 0)) as server:
+        datagram = Datagram(data=b"", sender=("127.0.0.1", 1), local_address=None)
+        sock = server.reply_socket(datagram, port=0)
+        try:
+            assert sock.getsockname()[1] > 0
+        finally:
+            sock.close()
+
+
 # --------------------------------------------------------------------------- #
 # is_broadcast                                                                 #
 # --------------------------------------------------------------------------- #

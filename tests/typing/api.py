@@ -29,14 +29,17 @@ name from its own bundled typeshed, and this file never runs.
 
 from __future__ import annotations
 
+import socket
 from typing import Iterator, Optional, Tuple, Union
 
 from typing_extensions import assert_type
 
 from netimps import (
+    Datagram,
     Fqdn,
     Host,
     SocketOption,
+    UdpEndpoint,
     IPAddress,
     IPAddressLike,
     IPInterface,
@@ -269,3 +272,14 @@ assert_type(option.name, int)
 # it falls back to the wildcard rather than giving up.
 assert_type(is_broadcast("255.255.255.255"), bool)
 assert_type(max_udp_payload(1500), int)
+
+
+# `reply_socket`'s `port` takes an int *or* any iterable of ints, and still
+# returns a concrete socket. Checked from a consumer's config, because the
+# widening is only useful if a caller's own `range`/`list`/generator type-checks.
+def _reply_socket_port_forms(endpoint: UdpEndpoint, packet: Datagram) -> None:
+    assert_type(endpoint.reply_socket(packet), socket.socket)
+    assert_type(endpoint.reply_socket(packet, 69), socket.socket)
+    assert_type(endpoint.reply_socket(packet, range(50000, 50100)), socket.socket)
+    assert_type(endpoint.reply_socket(packet, [50000, 50001]), socket.socket)
+    assert_type(endpoint.reply_socket(packet, (p for p in (1, 2))), socket.socket)

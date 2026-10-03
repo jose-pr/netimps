@@ -1401,6 +1401,24 @@ the wrapped socket, and the endpoint is a **context manager**
   the wrong address still beats no reply. `connreset=False` by default, inverted
   from `bind()`, because a server loop must not die when an earlier answer draws
   an ICMP port-unreachable from a client that has gone.
+
+  **`port` also takes any iterable of ports**, tried in order, for a server that
+  pins transfer ports to a range a firewall can allow (`tftp-hpa -R`,
+  `dnsmasq --tftp-port-range`). The iterable is materialised once, so a generator
+  is safe but must be finite; empty raises `ValueError`.
+
+  > **A held port and an unusable address are different failures, and they move
+  > in different directions.** An address that cannot be bound at all advances to
+  > the next *address*; a port that is merely held advances to the next *port* on
+  > the same address. Conflating them was a real bug here: every `OSError`
+  > advanced the address, so a taken `port=` fell through to the endpoint's own
+  > address **with the same port**, and where that bind succeeded the reply left
+  > from an address the client never addressed — the one failure this method
+  > exists to prevent. Measured on Windows 11 ARM64: holding `10.6.0.223:57014`
+  > and replying to a datagram that arrived there returned a socket on
+  > `127.0.0.1:57014`. So when the ports run out on an otherwise bindable
+  > address, this raises **`AddressInUseError`** and binds nothing, rather than
+  > answering from somewhere else.
 - **The arrival interface is cached per endpoint**, so the default path is not
   the slow one. `recv()` used to call `get_interfaces()` and scan it for *every*
   datagram: measured 1.07 ms per packet against 0.015 with

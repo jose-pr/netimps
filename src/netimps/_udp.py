@@ -97,7 +97,7 @@ import socket as _socket
 import struct as _struct
 import sys as _sys
 import time as _time
-from typing import Any, Dict, NamedTuple, Optional, Tuple, Union, cast
+from typing import Any, Dict, Iterable, NamedTuple, Optional, Tuple, Union, cast
 
 from ._iface_spec import InterfaceSpec
 from ._ifaddrs import Interface
@@ -686,7 +686,7 @@ class UdpEndpoint:
     def reply_socket(
         self,
         datagram: "Datagram",
-        port: int = 0,
+        port: "Union[int, Iterable[int]]" = 0,
         connreset: bool = False,
     ) -> "_socket.socket":
         """A new socket bound so replies leave from the address the client used.
@@ -704,6 +704,20 @@ class UdpEndpoint:
         to the first of these that works -- the arrival address, then this
         endpoint's own bound address, then the wildcard. A socket that answers
         from the wrong address still answers.
+
+        **A taken port is not an unusable address, and the two failures move in
+        different directions.** An address that cannot be bound at all (a
+        broadcast or multicast destination, a link-local one whose scope is
+        wrong) advances to the next *address*; a port that is merely held
+        advances to the next *port* on the same address. Conflating them is a
+        silent correctness bug, and it was this method's: every ``OSError``
+        advanced the address, so an explicit ``port=`` already taken on the
+        arrival address fell through to the endpoint's own address and then the
+        wildcard **with the same port** -- and where that later bind succeeded,
+        the reply left from an address the client never addressed, which is the
+        one failure this method exists to prevent. So when the ports run out on
+        an address, this raises :class:`netimps.AddressInUseError` rather than
+        answering from somewhere else.
 
         Three things make this worth a method, each found by measurement rather
         than reasoning:
@@ -733,9 +747,16 @@ class UdpEndpoint:
             ``local_address`` is what this binds to; with ``None`` -- no pktinfo
             -- it goes straight to the fallbacks.
         :param port: local port for the reply socket; ``0`` lets the OS choose,
-            which is what a per-transaction socket wants.
+            which is what a per-transaction socket wants. Also accepts **any
+            iterable of ports**, tried in the order given, for a server that
+            pins transfer ports to a range a firewall can allow (``tftp-hpa
+            -R``, ``dnsmasq --tftp-port-range``). The iterable is materialised
+            once and reused for each address candidate, so a generator is safe
+            -- but it must be finite. Empty raises :class:`ValueError`.
         :param connreset: passed to :func:`netimps.bind`; see above for why the
             default is inverted here.
+        :raises AddressInUseError: every port was held on an otherwise bindable
+            address. Deliberately *not* a fallback to a different address.
         """
         from ._ip import unmap
 
@@ -775,23 +796,47 @@ class UdpEndpoint:
         candidates.append((family, ""))
 
         from ._sockets import bind as _bind
+        from ._sockets import AddressInUseError
+
+        if isinstance(port, int):
+            ports: "tuple" = (port,)
+        else:
+            # Materialised once: the same ports are retried for each address
+            # candidate, and a generator would be empty by the second.
+            ports = tuple(port)
+            if not ports:
+                raise ValueError("port must not be an empty iterable")
 
         last: "Optional[BaseException]" = None
+        exhausted: "Optional[AddressInUseError]" = None
         for candidate_family, address in candidates:
-            try:
-                sock = _bind(
-                    address,
-                    port,
-                    family=candidate_family,
-                    kind=_socket.SOCK_DGRAM,
-                    connreset=connreset,
-                )
-            except (OSError, ValueError) as exc:
-                # A broadcast, multicast or otherwise unbindable destination
-                # lands here, which is why the list is tried rather than vetted.
-                last = exc
-                continue
-            return sock
+            for one in ports:
+                try:
+                    return _bind(
+                        address,
+                        one,
+                        family=candidate_family,
+                        kind=_socket.SOCK_DGRAM,
+                        connreset=connreset,
+                    )
+                except AddressInUseError as exc:
+                    # The address is fine and the port is held: the next port on
+                    # *this* address is the only move that preserves the reply's
+                    # source address. Moving to the next address would answer
+                    # from one the client never used.
+                    last = exhausted = exc
+                    continue
+                except (OSError, ValueError) as exc:
+                    # A broadcast, multicast or otherwise unbindable destination
+                    # lands here, which is why the list is tried rather than
+                    # vetted. The address is the problem, so no other port on it
+                    # will do better.
+                    last = exc
+                    break
+            else:
+                # Every port held on an address that is otherwise bindable. Do
+                # not fall back to an address the client did not address.
+                raise exhausted  # type: ignore[misc]
 
         # Every candidate failed, including the wildcard, so something is wrong
         # with the socket rather than with the address.
