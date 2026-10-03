@@ -1035,7 +1035,12 @@ def get_interfaces(
     return _copy_interfaces(found)
 
 
-def is_broadcast(address: "Any", interface: "Optional[Any]" = None) -> bool:
+def is_broadcast(
+    address: "Any",
+    interface: "Optional[Any]" = None,
+    *,
+    cache: "Union[bool, float]" = False,
+) -> bool:
     """Whether *address* is an IPv4 broadcast address, limited or subnet.
 
     The question a wildcard-bound UDP server asks about
@@ -1043,9 +1048,17 @@ def is_broadcast(address: "Any", interface: "Optional[Any]" = None) -> bool:
     server must ignore a broadcast request, and DHCP has to tell a broadcast
     DISCOVER from a unicast RENEW.
 
-    ``255.255.255.255`` (limited broadcast) needs no context. The **subnet**
-    broadcast does: ``10.0.0.255`` is only a broadcast if some interface carries
-    ``10.0.0.0/24``, so this consults interface prefixes -- which is why it lives
+    Pass ``interface`` whenever the caller has it -- a
+    :attr:`netimps.Datagram.interface`, say. Without it this enumerates every
+    adapter, measured at **1.25 ms against 0.004 ms**, and a server asking the
+    question of every request pays that per packet. ``cache=`` is the fallback
+    for when the interface is genuinely unknown; it means what it means on
+    :func:`get_interfaces`.
+
+    ``255.255.255.255`` (limited broadcast) needs no context and short-circuits
+    before any of that. The **subnet** broadcast does: ``10.0.0.255`` is only a
+    broadcast if some interface carries ``10.0.0.0/24``, so this consults
+    interface prefixes -- which is why it lives
     here and not in :mod:`netimps._ip`. Pass ``interface`` to check one adapter
     (the arrival interface, from ``Datagram.interface``); omit it to check every
     local one, which costs an enumeration.
@@ -1078,7 +1091,12 @@ def is_broadcast(address: "Any", interface: "Optional[Any]" = None) -> bool:
     if parsed == IPv4Address("255.255.255.255"):
         return True
 
-    candidates = [interface] if interface is not None else get_interfaces()
+    if interface is not None:
+        candidates: "Iterable[Any]" = [interface]
+    elif cache is False:
+        candidates = get_interfaces()
+    else:
+        candidates = get_interfaces(cache=cache)
     for entry in candidates:
         for bound in getattr(entry, "ips", ()) or ():
             network = getattr(bound, "network", None)

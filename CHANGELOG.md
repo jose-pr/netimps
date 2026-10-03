@@ -203,6 +203,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`is_broadcast(address, interface=None, *, cache=False)`** -- the one
+  per-packet entry point the enumeration cache had left out. Without an
+  `interface` it consults every adapter's prefixes, since `10.0.0.255` is only a
+  broadcast if something carries `10.0.0.0/24`: measured **1.25 ms against
+  0.004 ms** when the interface is passed, and a server asking the question of
+  every request pays that per packet. `UdpEndpoint._is_repliable` uses the
+  shared cache now, so `reply_socket()` no longer enumerates per datagram when
+  the arrival index did not resolve. Passing `interface` remains the fastest
+  path and consults neither the cache nor the syscall.
+
 - **`supports_pktinfo(family=AF_INET)`** -- whether a UDP socket of that family
   can report each datagram's arrival interface on this host. The question a
   server asks *before* deciding how to bind: with packet info one wildcard

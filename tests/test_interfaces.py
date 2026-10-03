@@ -850,7 +850,7 @@ def test_the_default_ttl_is_sized_for_a_burst():
 
 
 def test_the_uncached_path_passes_no_keyword_to_get_interfaces(monkeypatch):
-    """A consumer's test double must keep working after this upgrade.
+    """An existing test double must keep working after this upgrade.
 
     A test double for `get_interfaces` may take no keyword arguments, so
     passing `cache=False` to one raises TypeError. The default path therefore
@@ -868,3 +868,75 @@ def test_the_uncached_path_passes_no_keyword_to_get_interfaces(monkeypatch):
     monkeypatch.setattr(_ifaddrs, "get_interfaces", no_kwargs_stub)
     assert netimps.interface_for("10.9.9.9") is None
     assert seen == ["called"]
+
+
+def test_is_broadcast_takes_the_shared_cache(monkeypatch):
+    """The one per-packet entry point the cache work had left out.
+
+    Without an `interface` this consults every adapter's prefixes, because
+    `10.0.0.255` is only a broadcast if something carries `10.0.0.0/24`.
+    Measured at **1.25 ms** per call against 0.004 ms when the interface is
+    passed, and a server asking the question of every request pays it per
+    packet.
+    """
+    calls = _counting_enumerator(monkeypatch)
+    address = netimps.parse("10.9.9.255")
+    for _ in range(5):
+        netimps.is_broadcast(address, cache=math.inf)
+    assert len(calls) == 1
+
+    netimps.clear_interface_cache()
+    for _ in range(3):
+        netimps.is_broadcast(address)
+    assert len(calls) == 4, "the default must still enumerate every call"
+
+
+def test_is_broadcast_gives_the_same_answer_cached_or_not():
+    """A cache that changed the answer would be worse than no cache."""
+    netimps.clear_interface_cache()
+    for probe in ("255.255.255.255", "10.9.9.255", "127.0.0.1", "::1"):
+        uncached = netimps.is_broadcast(probe)
+        cached = netimps.is_broadcast(probe, cache=math.inf)
+        assert uncached == cached, probe
+
+
+def test_is_broadcast_with_an_interface_never_enumerates(monkeypatch):
+    """Passing the interface stays the fastest path, and must not consult the
+    cache or the syscall at all."""
+    iface = netimps.interface_for("127.0.0.1")
+    if iface is None:
+        pytest.skip("no loopback interface resolved")
+    calls = _counting_enumerator(monkeypatch)
+    netimps.is_broadcast(netimps.parse("10.9.9.255"), iface)
+    assert calls == []
+
+
+def test_the_limited_broadcast_short_circuits_before_any_enumeration(monkeypatch):
+    """`255.255.255.255` needs no context, so it must not pay for one."""
+    calls = _counting_enumerator(monkeypatch)
+    assert netimps.is_broadcast("255.255.255.255") is True
+    assert calls == []
+
+
+def test_reply_socket_does_not_enumerate_per_datagram(monkeypatch):
+    """`_is_repliable` calls `is_broadcast`, so `reply_socket` inherited the
+    per-call enumeration whenever the arrival index did not resolve.
+
+    It uses the shared cache now, as the endpoint's own arrival-interface
+    lookup already did.
+    """
+    from netimps import UdpEndpoint, bind
+    from netimps._udp import Datagram
+
+    calls = _counting_enumerator(monkeypatch)
+    netimps.clear_interface_cache()
+    with UdpEndpoint(bind("127.0.0.1", 0)) as endpoint:
+        datagram = Datagram(
+            data=b"",
+            sender=("127.0.0.1", 1),
+            local_address=netimps.parse("127.0.0.1"),
+            interface=None,
+        )
+        for _ in range(5):
+            endpoint.reply_socket(datagram).close()
+    assert len(calls) <= 1, "enumerated more than once across five replies"

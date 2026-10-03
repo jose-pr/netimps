@@ -753,7 +753,7 @@ class UdpEndpoint:
             return False
         if is_multicast(local):
             return False
-        return not is_broadcast(local, interface)
+        return not is_broadcast(local, interface, cache=True)
 
     def reply_socket(
         self,
