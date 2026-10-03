@@ -273,7 +273,22 @@ def bind(
     sock = _socket.socket(family, kind)
     try:
         exclusive = getattr(_socket, "SO_EXCLUSIVEADDRUSE", None)
-        if allow_address_takeover:
+        # An explicit `(SOL_SOCKET, SO_REUSEADDR, nonzero)` in `options` is the
+        # caller asking for takeover in so many words, so it counts as
+        # `allow_address_takeover=True` rather than fighting it.
+        #
+        # Windows **refuses** `SO_REUSEADDR` on a socket that already carries
+        # `SO_EXCLUSIVEADDRUSE`, with a bare `WSAEINVAL` and no indication which
+        # of the two it objected to. Since this function started setting
+        # `SO_EXCLUSIVEADDRUSE` for both values of `reuse_address`, the
+        # stdlib-shaped spelling of "share this address" therefore stopped
+        # working here -- a regression a consumer caught, reported as
+        # "[WinError 10022] An invalid argument was supplied".
+        takeover_requested = allow_address_takeover or any(
+            level == _socket.SOL_SOCKET and name == _socket.SO_REUSEADDR and value
+            for level, name, value in options
+        )
+        if takeover_requested:
             sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
         elif exclusive is not None:
             # Windows, and set for **both** values of `reuse_address` -- which it
@@ -412,6 +427,21 @@ def bind_error_hint(
             "%s is held exclusively by another socket, or blocked by a "
             "firewall or an excluded port range (WSAEACCES); it is in use, "
             "not privileged -- Windows has no privileged ports" % where.capitalize()
+        )
+
+    if winerror == 10022:
+        # WSAEINVAL, and from a bind path it almost always means the socket
+        # carries two reuse options that contradict each other -- Windows
+        # refuses `SO_REUSEADDR` on a socket that already has
+        # `SO_EXCLUSIVEADDRUSE`, and says only "invalid argument" without
+        # naming either. A bare 10022 is undiagnosable, which is the whole
+        # reason this branch exists.
+        return (
+            "Invalid argument (WSAEINVAL) -- on Windows this usually means "
+            "conflicting reuse options on one socket: SO_REUSEADDR is refused "
+            "once SO_EXCLUSIVEADDRUSE is set. Ask for sharing by name with "
+            "allow_address_takeover=True rather than passing SO_REUSEADDR "
+            "through options="
         )
 
     if isinstance(exc, PermissionError) or exc.errno == _errno.EACCES:

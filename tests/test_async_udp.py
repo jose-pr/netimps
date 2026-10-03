@@ -281,3 +281,150 @@ def test_the_proactor_loop_really_lacks_add_reader():
     finally:
         sock.close()
         loop.close()
+
+
+# --------------------------------------------------------------------------- #
+# Teardown and loop rebinding -- both found by a consumer reading the code     #
+# --------------------------------------------------------------------------- #
+
+
+def test_a_cancelled_arecv_unregisters_its_reader():
+    """The most ordinary shutdown there is: cancel the receive task, then close.
+
+    `_ready` unregisters only when it actually *fires*, so a task cancelled
+    while awaiting used to leave the reader registered until the socket next
+    became readable. Closing the socket first -- the usual order -- then leaves
+    the loop polling a closed fd, and the selector raises on its next pass.
+
+    Measured before the fix: `loop.remove_reader(fileno)` after a cancelled
+    `arecv` returned **True**, meaning one was still registered. That return
+    value is the assertion here, because it reports the leak directly rather
+    than through a downstream symptom.
+    """
+
+    async def body():
+        endpoint = UdpEndpoint(bind("127.0.0.1", 0))
+        fileno = endpoint.socket.fileno()
+        try:
+            task = asyncio.ensure_future(endpoint.arecv())
+            await asyncio.sleep(0.05)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            loop = asyncio.get_running_loop()
+            # True would mean one was still registered.
+            assert loop.remove_reader(fileno) is False
+        finally:
+            endpoint.close()
+
+    selector = getattr(asyncio, "SelectorEventLoop", None)
+    if selector is None:  # pragma: no cover - every supported platform has one
+        pytest.skip("no SelectorEventLoop here")
+    loop = selector()
+    try:
+        loop.run_until_complete(body())
+    finally:
+        loop.close()
+
+
+def test_closing_the_socket_after_a_cancelled_arecv_is_quiet():
+    """The symptom the leak caused, asserted end to end.
+
+    A loop left watching a closed fd raises from the selector on its next poll,
+    so the test is simply that the loop keeps running afterwards.
+    """
+
+    async def body():
+        endpoint = UdpEndpoint(bind("127.0.0.1", 0))
+        task = asyncio.ensure_future(endpoint.arecv())
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        endpoint.close()
+        # Several passes through the selector with the socket already closed.
+        for _ in range(5):
+            await asyncio.sleep(0.01)
+        return True
+
+    selector = getattr(asyncio, "SelectorEventLoop", None)
+    if selector is None:  # pragma: no cover - every supported platform has one
+        pytest.skip("no SelectorEventLoop here")
+    loop = selector()
+    try:
+        assert loop.run_until_complete(body()) is True
+    finally:
+        loop.close()
+
+
+@pytest.mark.parametrize("factory", LOOP_FACTORIES, ids=LOOP_IDS)
+def test_one_endpoint_can_be_served_by_two_successive_loops(factory):
+    """`asyncio.run(serve())` twice, or a server stopped and restarted.
+
+    The thread path captured its loop for the life of the thread, so the second
+    loop got nothing and the thread died posting to a closed one. Measured
+    before the fix on a `ProactorEventLoop`: the second exchange timed out while
+    the daemon thread printed an unhandled "Event loop is closed" traceback to
+    stderr -- a failure with no caller to report it to.
+
+    Parametrised over both loop types because the selector path must keep
+    working too; only the thread path had the bug, and only Windows defaults to
+    the one with it.
+    """
+    endpoint = UdpEndpoint(bind("127.0.0.1", 0))
+    port = endpoint.socket.getsockname()[1]
+
+    async def one_exchange():
+        peer = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            peer.sendto(b"ping", ("127.0.0.1", port))
+        finally:
+            peer.close()
+        return (await asyncio.wait_for(endpoint.arecv(), timeout=5)).data
+
+    try:
+        for attempt in (1, 2):
+            loop = factory()
+            try:
+                assert loop.run_until_complete(one_exchange()) == b"ping", attempt
+            finally:
+                loop.close()
+    finally:
+        endpoint.close()
+
+
+@pytest.mark.parametrize("factory", LOOP_FACTORIES, ids=LOOP_IDS)
+def test_rebinding_leaves_no_thread_behind(factory):
+    """Retiring a thread must join it, not merely abandon it.
+
+    A rebind that leaked a thread per loop would be a slow leak in exactly the
+    shape that motivated the fix -- a server restarted repeatedly.
+    """
+    before = {t for t in threading.enumerate()}
+    endpoint = UdpEndpoint(bind("127.0.0.1", 0))
+    port = endpoint.socket.getsockname()[1]
+
+    async def one_exchange():
+        peer = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            peer.sendto(b"ping", ("127.0.0.1", port))
+        finally:
+            peer.close()
+        await asyncio.wait_for(endpoint.arecv(), timeout=5)
+
+    try:
+        for _ in range(3):
+            loop = factory()
+            try:
+                loop.run_until_complete(one_exchange())
+            finally:
+                loop.close()
+    finally:
+        endpoint.close()
+
+    leaked = [
+        t
+        for t in threading.enumerate()
+        if t not in before and t.name == "netimps-readnotify" and t.is_alive()
+    ]
+    assert leaked == []

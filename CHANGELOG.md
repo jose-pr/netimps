@@ -96,10 +96,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   therefore not in *behaviour*: code testing
   `hasattr(socket.socket, "recvmsg")` to detect POSIX now gets the POSIX answer
   on Windows. **pydhcp 0.6.1 and earlier** read `ipi_spec_dst` for their
-  `SERVER_IDENTIFIER` and will see `0.0.0.0` on Windows -- the same answer they
-  already get on macOS, and no longer a crash. `UdpEndpoint` is the supported way
-  to obtain that address correctly on every platform;
-  `NETIMPS_NO_SOCKET_PATCH=1` opts out of the patch entirely.
+  `SERVER_IDENTIFIER`, and **measured, they receive but allocate and reply to
+  nothing** on Windows. A zero-filled `spec_dst` does not degrade a consumer that
+  resolves its interface from that field, it silences it -- an earlier draft of
+  this entry said "will see `0.0.0.0` ... and no longer a crash", which was
+  inferred from the field's value rather than measured against the consumer. The
+  owner's decision is to accept this: the two projects are released together and
+  have no external consumers yet. `UdpEndpoint` is the supported way to obtain
+  that address correctly on every platform; `NETIMPS_NO_SOCKET_PATCH=1` opts out
+  of the patch entirely.
 
 ### Fixed
 
@@ -128,6 +133,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   with a zero-length control buffer rather than `recvfrom`, because `recvfrom`
   cannot report it. Losing the arrival interface is a documented degrade; losing
   this is silent data loss, and the two no longer have to be given up together.
+
+### Fixed
+
+- **A cancelled `arecv()` left its reader registered on the loop**, and the
+  notifier stayed bound to the first loop for good. Both reported by a consumer
+  reading the code, and both reproduced here before fixing.
+
+  Cancelling the awaiting task is the ordinary server shutdown -- cancel the
+  receive task, then close the endpoint -- and the registration was removed only
+  when it *fired*, so the loop was left watching a socket that then closed and
+  raised from the selector on its next poll. Measured:
+  `loop.remove_reader(fileno)` after a cancelled `arecv` returned `True`,
+  meaning one was still there. A cancelled `arecv` now unregisters itself, and
+  the thread path drops its pending future.
+
+  Separately, the notifier thread captured its loop for its whole lifetime, so
+  serving one endpoint from a second loop -- `asyncio.run(serve())` twice, or a
+  server stopped and restarted -- sent readiness to a closed loop. Measured on a
+  `ProactorEventLoop`: the second exchange timed out while the daemon thread
+  raised an unhandled "Event loop is closed" to stderr, where no caller could
+  see it. A different running loop now retires the old thread and starts
+  another, joining the old one rather than abandoning it; the only previous
+  reset was `close()`, which also closes the socket. The post is additionally
+  guarded, since a loop can close between the select and the call.
+
+- **`bind(options=[(SOL_SOCKET, SO_REUSEADDR, 1)])` failed with a bare
+  `WSAEINVAL` on Windows** -- a regression introduced in this same unreleased
+  cycle, caught by a consumer's test suite. Windows refuses `SO_REUSEADDR` on a
+  socket that already carries `SO_EXCLUSIVEADDRUSE`, and once `bind()` began
+  setting the latter for *both* values of `reuse_address`, the stdlib-shaped
+  spelling of "share this address" stopped working. The error names neither
+  option, so the caller saw only "An invalid argument was supplied".
+
+  An explicit nonzero `SO_REUSEADDR` in `options=` is now treated as
+  `allow_address_takeover=True` -- it is the caller asking for takeover in so
+  many words. A zero value stays an explicit opt-out. `bind_error_hint` learned
+  `WSAEINVAL`, since a bare 10022 is undiagnosable. Verified against the
+  reporting consumer's suite: the three tests that failed now pass, and fail
+  again when the fix is reverted.
+
+- **A v4 client of a dual-stack listener could not be replied to at all.**
+  Measured on Windows 11 ARM64 with an `AF_INET` client on `127.0.0.1` and a
+  `bind("::", family=AF_INET6, IPV6_V6ONLY=0)` listener, it failed **both** ways:
+
+  - *With* pktinfo, `reply_socket` correctly returned an `AF_INET` socket, but
+    `datagram.sender` was still the v6 4-tuple -- so the `reply.sendto(answer,
+    packet.sender)` shown in this library's own docs raised `TypeError: AF_INET
+    address must be a pair (host, port)`.
+  - *Without* pktinfo there was no `local_address`, so both fallbacks used the
+    **listener's** family; the resulting `AF_INET6` socket carries
+    `IPV6_V6ONLY=1` on Windows (the platform default, which `bind()` does not
+    clear), and `sendto` to a mapped address failed with `WinError 10049`. The
+    exchange silently never started.
+
+  Now **the sender's family decides the reply socket's**, with or without
+  pktinfo, and the own-address fallback is skipped when it is in the wrong
+  family. New **`Datagram.reply_address`** gives the peer in the family that was
+  chosen -- a mapped sender as a plain `(host, port)`, everything else unchanged
+  -- and is what the examples now pass to `sendto`.
+
+- **`is_multicast` missed a v4-mapped group below Python 3.13.** The stdlib only
+  began delegating a mapped address's `is_*` properties to the embedded v4
+  address in 3.13, so `IPv6Address("::ffff:224.0.0.1").is_multicast` is `False`
+  on 3.9 and `True` on 3.14 -- the function's answer depended on the
+  interpreter. It unmaps first now, as `is_broadcast` already did.
+  `UdpEndpoint._is_repliable` inherits this, so on 3.9-3.12 a reply socket could
+  bind a mapped multicast destination.
 
 ### Added
 

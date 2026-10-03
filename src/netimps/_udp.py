@@ -318,6 +318,45 @@ class Datagram(NamedTuple):
     control_truncated: bool = False
     truncated: bool = False
 
+    @property
+    def reply_address(self) -> "SocketAddress":
+        """``sender``, in the family a :meth:`UdpEndpoint.reply_socket` will use.
+
+        **Use this, not ``sender``, to answer a datagram.** On a dual-stack
+        ``AF_INET6`` listener a v4 client's ``sender`` is the v6 4-tuple
+        ``('::ffff:127.0.0.1', port, 0, 0)``, while ``reply_socket`` correctly
+        hands back an ``AF_INET`` socket -- and so the documented
+        ``reply.sendto(answer, packet.sender)`` raised ``TypeError: AF_INET
+        address must be a pair (host, port)``. Every caller had to unmap the
+        sender itself to match a family the library had chosen for them, which
+        is work the library should do::
+
+            with endpoint.reply_socket(packet) as reply:
+                reply.sendto(answer, packet.reply_address)
+
+        A v4-mapped sender becomes the plain ``(host, port)`` pair; everything
+        else is returned unchanged, so this is the right thing to pass on a
+        single-family listener too.
+        """
+        from . import IPAddress, try_parse
+        from ._ip import unmap
+
+        sender = self.sender
+        if not isinstance(sender, tuple) or len(sender) < 2:
+            return sender
+        host = sender[0]
+        if not isinstance(host, str):
+            return sender
+        parsed = try_parse(host.split("%")[0], IPAddress)
+        if parsed is None or parsed.version != 6:
+            return sender
+        plain = unmap(parsed)
+        if plain.version != 4:
+            return sender
+        # Drop flowinfo and scope id along with the mapping: they are v6
+        # sockaddr fields and an AF_INET sendto rejects a 4-tuple outright.
+        return (str(plain), sender[1])
+
 
 class UdpEndpoint:
     """A UDP socket that can report which interface each datagram arrived on.
@@ -656,6 +695,33 @@ class UdpEndpoint:
         # Through `_msg`, same reasoning as `recv` above.
         return int(_sendmsg(self.socket, [data], [control], 0, target))
 
+    def _reply_family(self, datagram: "Datagram") -> int:
+        """The address family a reply to *datagram* must actually use.
+
+        The **sender's** family, not the listener's. A dual-stack ``AF_INET6``
+        listener sees a v4 client as ``::ffff:a.b.c.d``; a reply socket in the
+        listener's family cannot reach it, because the socket comes up with
+        ``IPV6_V6ONLY=1`` on Windows and ``sendto`` to a mapped address is then
+        refused outright (``WinError 10049``). Deciding from the sender means
+        the answer is the same with or without pktinfo, which is the point --
+        the no-pktinfo path was the one that silently never replied.
+
+        Falls back to the socket's own family when the sender cannot be parsed,
+        which is the old behaviour and the only thing left to guess with.
+        """
+        from . import IPAddress, try_parse
+        from ._ip import unmap
+
+        sender = datagram.sender
+        host = sender[0] if isinstance(sender, tuple) and sender else None
+        if isinstance(host, str):
+            parsed = try_parse(host.split("%")[0], IPAddress)
+            if parsed is not None:
+                return (
+                    _socket.AF_INET if unmap(parsed).version == 4 else _socket.AF_INET6
+                )
+        return self.socket.family
+
     @staticmethod
     def _is_repliable(local: "IPAddress", interface: "Optional[Interface]") -> bool:
         """Whether *local* is an address a reply socket may actually bind to.
@@ -698,7 +764,7 @@ class UdpEndpoint:
 
             packet = endpoint.recv()
             with endpoint.reply_socket(packet) as reply:
-                reply.sendto(answer, packet.sender)
+                reply.sendto(answer, packet.reply_address)
 
         Falls back deliberately rather than failing: the returned socket is bound
         to the first of these that works -- the arrival address, then this
@@ -758,9 +824,20 @@ class UdpEndpoint:
         :raises AddressInUseError: every port was held on an otherwise bindable
             address. Deliberately *not* a fallback to a different address.
         """
+        from . import IPAddress, parse
         from ._ip import unmap
 
-        family = self.socket.family
+        # **The sender's real family decides the reply socket's**, not the
+        # listener's. A dual-stack `AF_INET6` listener sees a v4 client as
+        # `::ffff:a.b.c.d`, and a reply socket in the listener's family cannot
+        # reach it: measured on Windows 11 ARM64, the `AF_INET6` socket comes up
+        # with `IPV6_V6ONLY=1` (the platform default, which `bind()` does not
+        # clear) and `sendto` to a mapped address fails with `WinError 10049`,
+        # "address not valid in its context". The transfer then silently never
+        # starts. That happened whenever there was no `local_address` to go on
+        # -- `pktinfo=False`, or a platform that reported none -- because both
+        # fallbacks used the listener's family.
+        family = self._reply_family(datagram)
         candidates: "list" = []
 
         local = datagram.local_address
@@ -784,12 +861,19 @@ class UdpEndpoint:
                 candidates.append((_socket.AF_INET6, text))
 
         # Fallback 1: whatever this endpoint itself is bound to -- right for a
-        # listener pinned to one address, and a no-op for a wildcard one.
+        # listener pinned to one address, and a no-op for a wildcard one. It is
+        # only usable when it is in the *reply's* family: a v6 wildcard listener
+        # answering a v4 client would otherwise offer `::` to an `AF_INET`
+        # socket, so such a mismatch is skipped and the v4 wildcard below is
+        # used instead.
         try:
             own = self.socket.getsockname()
             if own and own[0]:
-                candidates.append((family, str(own[0])))
-        except OSError:  # pragma: no cover - a closed socket
+                plain_own = unmap(parse(str(own[0]).split("%")[0], IPAddress))
+                wanted = 6 if family == _socket.AF_INET6 else 4
+                if plain_own.version == wanted:
+                    candidates.append((family, str(plain_own)))
+        except (OSError, ValueError):  # pragma: no cover - a closed socket
             pass
 
         # Fallback 2: the wildcard, which always binds.
@@ -857,7 +941,7 @@ class UdpEndpoint:
                 while True:
                     packet = await endpoint.arecv()
                     with endpoint.reply_socket(packet) as reply:
-                        reply.sendto(answer(packet), packet.sender)
+                        reply.sendto(answer(packet), packet.reply_address)
 
         The read itself happens **on the loop**, not in a helper thread, so
         ``bufsize`` stays a per-call argument and

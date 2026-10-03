@@ -434,6 +434,119 @@ def test_a_plain_int_port_still_works():
 
 
 # --------------------------------------------------------------------------- #
+# A v4 client of a dual-stack listener                                        #
+# --------------------------------------------------------------------------- #
+
+
+def _dual_stack_listener():
+    """An `AF_INET6` listener with `IPV6_V6ONLY` cleared, or a skip.
+
+    Dual-stack is not available everywhere (and a v6-less runner cannot test
+    this at all), so the inability to build the listener is a skip rather than a
+    failure -- but it is the *bind* that decides, never a guess from the
+    platform name.
+    """
+    try:
+        return bind(
+            "::",
+            0,
+            family=socket.AF_INET6,
+            options=[(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)],
+        )
+    except OSError as exc:
+        pytest.skip("no dual-stack listener available here: %s" % (exc,))
+
+
+@pytest.mark.parametrize("pktinfo", [True, False])
+def test_a_v4_client_of_a_dual_stack_listener_gets_a_real_reply(pktinfo):
+    """End to end, and it failed **both** ways before -- differently each time.
+
+    Measured on Windows 11 ARM64 against the pre-fix code, with a plain
+    `AF_INET` client on `127.0.0.1` talking to a `bind("::", family=AF_INET6,
+    IPV6_V6ONLY=0)` listener:
+
+    - `pktinfo=True`: `local_address` is `::ffff:127.0.0.1`, so `reply_socket`
+      correctly chose an `AF_INET` socket -- but `datagram.sender` is still the
+      v6 4-tuple, so the documented `reply.sendto(answer, packet.sender)` raised
+      `TypeError: AF_INET address must be a pair (host, port)`.
+    - `pktinfo=False`: no `local_address`, so both fallbacks used the
+      *listener's* family and produced an `AF_INET6` socket with
+      `IPV6_V6ONLY=1` (the Windows default, which `bind()` does not clear).
+      `sendto` to a mapped address then fails with `WinError 10049` and the
+      transfer silently never starts.
+
+    So this asserts the datagram actually arrives back at the client, which is
+    the only claim that covers both.
+    """
+    listener = _dual_stack_listener()
+    port = listener.getsockname()[1]
+    with UdpEndpoint(listener, pktinfo=pktinfo) as server:
+        client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            client.sendto(b"hello", ("127.0.0.1", port))
+            client.settimeout(5)
+            packet = server.recv()
+            with server.reply_socket(packet) as reply:
+                # The reply socket must be in the *client's* family, whatever
+                # the listener's is and whatever pktinfo reported.
+                assert reply.family == socket.AF_INET
+                reply.sendto(b"answer", packet.reply_address)
+            assert client.recvfrom(64)[0] == b"answer"
+        finally:
+            client.close()
+
+
+def test_reply_address_unmaps_a_mapped_sender_to_a_two_tuple():
+    """`sendto` on an `AF_INET` socket rejects a 4-tuple outright, so flowinfo
+    and the scope id have to go with the mapping."""
+    datagram = Datagram(data=b"", sender=("::ffff:127.0.0.1", 9999, 0, 0))
+    assert datagram.reply_address == ("127.0.0.1", 9999)
+
+
+@pytest.mark.parametrize(
+    "sender",
+    [
+        ("127.0.0.1", 9999),
+        ("::1", 9999, 0, 0),
+        ("fe80::1", 9999, 0, 7),
+    ],
+)
+def test_reply_address_leaves_everything_else_alone(sender):
+    """Only a v4-mapped sender is rewritten.
+
+    A real v6 sender keeps its 4-tuple -- the scope id in particular is
+    load-bearing for a link-local peer -- and a v4 sender on a v4 listener was
+    already correct.
+    """
+    assert Datagram(data=b"", sender=sender).reply_address == sender
+
+
+def test_reply_address_passes_through_what_it_cannot_parse():
+    """A unix-socket path or any non-address sender is returned untouched
+    rather than raising: this is a convenience accessor, not a validator."""
+    assert Datagram(data=b"", sender=("not-an-address", 1)).reply_address == (
+        "not-an-address",
+        1,
+    )
+
+
+def test_the_reply_family_follows_the_sender_not_the_listener():
+    """The rule, stated once and pinned.
+
+    Asserted on the `Datagram` rather than through a live dual-stack socket so
+    it holds on a runner with no IPv6 at all.
+    """
+    with UdpEndpoint(bind("127.0.0.1", 0)) as endpoint:
+        mapped = Datagram(data=b"", sender=("::ffff:127.0.0.1", 1))
+        assert endpoint._reply_family(mapped) == socket.AF_INET
+        real_v6 = Datagram(data=b"", sender=("::1", 1, 0, 0))
+        assert endpoint._reply_family(real_v6) == socket.AF_INET6
+        # Unparseable: fall back to the socket's own family, as before.
+        junk = Datagram(data=b"", sender=("nonsense", 1))
+        assert endpoint._reply_family(junk) == endpoint.socket.family
+
+
+# --------------------------------------------------------------------------- #
 # is_broadcast                                                                 #
 # --------------------------------------------------------------------------- #
 

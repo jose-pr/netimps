@@ -73,7 +73,21 @@ def is_multicast(address: "AddressLike") -> bool:
     except (TypeError, ValueError):
         return False
     parsed = try_parse(address, IPAddress)
-    return bool(parsed is not None and parsed.is_multicast)
+    if parsed is None:
+        return False
+    # Unmap first, because the stdlib only started delegating `is_multicast`
+    # (and the other `is_*` properties) of a v4-mapped address to the embedded
+    # v4 address in **3.13**. Measured here: `IPv6Address("::ffff:224.0.0.1")`
+    # answers `is_multicast` False on 3.9 and True on 3.14, so trusting the
+    # property makes this function's answer depend on the interpreter.
+    #
+    # A v4-mapped group is a real group -- it is how a dual-stack listener sees
+    # one -- and `_is_repliable` inherits whatever this returns, so on 3.9-3.12
+    # the gap let a reply socket bind a mapped multicast destination.
+    # `is_broadcast` already unmaps, so this is also the consistent answer.
+    from ._ip import unmap
+
+    return bool(unmap(parsed).is_multicast)
 
 
 #: Multicast scope values (low nibble of the address's second byte, RFC 4291):

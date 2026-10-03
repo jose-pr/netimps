@@ -673,6 +673,15 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
   > reachable, but only by asking for it by its consequence:
   > `allow_address_takeover=True`. On POSIX that flag adds nothing, since
   > `reuse_address` already sets exactly that option.
+
+  > **An explicit `(SOL_SOCKET, SO_REUSEADDR, nonzero)` in `options=` counts as
+  > `allow_address_takeover=True`.** It has to: Windows refuses `SO_REUSEADDR` on
+  > a socket that already carries `SO_EXCLUSIVEADDRUSE`, reporting a bare
+  > `WSAEINVAL` that names neither option — so once this function began setting
+  > `SO_EXCLUSIVEADDRUSE` for both values of `reuse_address`, the stdlib-shaped
+  > spelling of "share this address" stopped working. A zero value is still an
+  > explicit opt-*out* and is not read as a request. `bind_error_hint` now
+  > explains `WSAEINVAL`, since on its own it is undiagnosable.
   > **On Windows this is set for *both* values of `reuse_address`.** It used to
   > be set only for `True`, which left `reuse_address=False` setting *nothing* --
   > and nothing is the unsafe state there: a *more specific* `SO_REUSEADDR` bind
@@ -973,6 +982,11 @@ accepts a scheme name too; passing both raises `ValueError`.
   closing the socket drops membership too, so `leave_group` is only needed to
   leave while keeping the socket open.
 - **`is_multicast(address) -> bool`** — `224.0.0.0/4` or `ff00::/8`; never raises.
+  **Unmaps first**, so a v4-mapped group answers the same on every interpreter: the
+  stdlib only began delegating a mapped address's `is_*` properties to the embedded
+  v4 address in **3.13**, so `IPv6Address("::ffff:224.0.0.1").is_multicast` is `False`
+  on 3.9 and `True` on 3.14. A mapped group is a real group — it is how a dual-stack
+  listener sees one.
 
 The failure modes this exists to prevent are all **silent** — the socket binds,
 receives nothing, and looks fine:
@@ -1187,9 +1201,13 @@ patch below is installed.
 > comes back `0.0.0.0`, exactly as it already does on macOS.
 >
 > Known affected: **pydhcp 0.6.1 and earlier**, which read `ipi_spec_dst` for
-> their `SERVER_IDENTIFIER`. They degrade to `0.0.0.0` rather than crashing, and
-> `UdpEndpoint` is the supported way to get that address correctly on every
-> platform. Set `NETIMPS_NO_SOCKET_PATCH=1` to opt out entirely.
+> their `SERVER_IDENTIFIER`. **Measured, they receive but allocate and reply to
+> nothing** — a zero-filled `spec_dst` does not degrade a consumer that resolves
+> its interface from that field, it silences it. (An earlier version of this box
+> said "degrade to `0.0.0.0` rather than crashing", which was inferred from the
+> field's value rather than measured against the consumer.) `UdpEndpoint` is the
+> supported way to get that address correctly on every platform. Set
+> `NETIMPS_NO_SOCKET_PATCH=1` to opt out entirely.
 
 - **The patch is installed by default, at `import netimps`.** It adds
   `recvmsg`/`sendmsg` to `socket.socket` and `CMSG_LEN`/`CMSG_SPACE` to the
@@ -1348,7 +1366,7 @@ the wrapped socket, and the endpoint is a **context manager**
   ```python
   async for packet in endpoint.datagrams():
       with endpoint.reply_socket(packet) as reply:
-          reply.sendto(answer(packet), packet.sender)
+          reply.sendto(answer(packet), packet.reply_address)
   ```
 
   **Pktinfo survives on every loop type**, which is not free. The Windows default
@@ -1365,6 +1383,20 @@ the wrapped socket, and the endpoint is a **context manager**
   arranged. The thread, where there is one, is created on the first `await` and
   joined by `close()`. `recv()` is unaffected — the synchronous path is untouched.
 
+  **Cancelling the awaiting task is a clean shutdown**, which is the ordinary
+  server one: cancel the receive task, then close the endpoint. A cancelled
+  `arecv` unregisters its reader, so the loop is not left watching a socket that
+  is about to close — it used to be, because the registration was removed only
+  when it actually fired, and the loop then raised from its selector on the next
+  poll.
+
+  **A second loop rebinds.** Serving one endpoint from a new loop —
+  `asyncio.run(serve())` twice, or a server stopped and started again — retires
+  the old thread and starts another. It previously captured the first loop for
+  the thread's lifetime, so the second run received nothing and the thread died
+  posting to a closed loop, with the traceback going to stderr where no caller
+  could see it.
+
   **`asyncio` is imported lazily**, never by `import netimps`. A consumer using
   only the value types pays nothing for it.
 - **`reply_socket(datagram, port=0, connreset=False)`** — a socket bound so
@@ -1374,7 +1406,7 @@ the wrapped socket, and the endpoint is a **context manager**
   ```python
   packet = endpoint.recv()
   with endpoint.reply_socket(packet) as reply:
-      reply.sendto(answer, packet.sender)
+      reply.sendto(answer, packet.reply_address)
   ```
 
   A wildcard-bound server answering from a fresh socket sends from whatever the
@@ -1397,8 +1429,23 @@ the wrapped socket, and the endpoint is a **context manager**
     refused — the same address can exist on several interfaces and the kernel will
     not guess.
 
+  > **The *sender's* family decides the reply socket's, not the listener's**, and
+  > `datagram.reply_address` is what you pass to `sendto`. A dual-stack
+  > `AF_INET6` listener sees a v4 client as `::ffff:a.b.c.d`, and both halves of
+  > that went wrong. With pktinfo, the `AF_INET` socket was right but
+  > `datagram.sender` was still the v6 4-tuple, so the `sendto` shown above
+  > raised `TypeError: AF_INET address must be a pair (host, port)`. Without
+  > pktinfo there was no `local_address`, both fallbacks used the *listener's*
+  > family, and the resulting `AF_INET6` socket has `IPV6_V6ONLY=1` on Windows
+  > (the platform default, which `bind()` does not clear) — so `sendto` to a
+  > mapped address failed with `WinError 10049` and the exchange silently never
+  > started. Deciding from the sender makes the answer the same with or without
+  > pktinfo, and `reply_address` gives the peer in the family that was chosen.
+
   Falls back to the endpoint's own bound address, then the wildcard: a reply from
-  the wrong address still beats no reply. `connreset=False` by default, inverted
+  the wrong address still beats no reply. The own-address fallback is skipped
+  when it is in the wrong family, so a v6 wildcard listener answering a v4 client
+  goes to the v4 wildcard rather than offering `::` to an `AF_INET` socket. `connreset=False` by default, inverted
   from `bind()`, because a server loop must not die when an earlier answer draws
   an ICMP port-unreachable from a client that has gone.
 
@@ -1429,6 +1476,12 @@ the wrapped socket, and the endpoint is a **context manager**
   changed; negative results are cached so a vanished index does not re-enumerate
   forever. `resolve_interface=False` still skips it entirely and never
   enumerates.
+- **`reply_address`** — `sender`, in the family `reply_socket` will use. **Pass
+  this to `sendto`, not `sender`.** A v4-mapped sender becomes the plain
+  `(host, port)` pair, dropping the flowinfo and scope id that an `AF_INET`
+  `sendto` rejects outright; everything else is returned unchanged, including a
+  link-local peer's scope id, so it is also the right thing to pass on a
+  single-family listener.
 - **`truncated`** reports `MSG_TRUNC`: the **payload** did not fit `bufsize`
   and `.data` is the leading part of a longer datagram. A different question
   from `control_truncated`, and the one that silently corrupts a decode — a

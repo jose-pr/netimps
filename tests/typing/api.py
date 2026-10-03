@@ -283,3 +283,17 @@ def _reply_socket_port_forms(endpoint: UdpEndpoint, packet: Datagram) -> None:
     assert_type(endpoint.reply_socket(packet, range(50000, 50100)), socket.socket)
     assert_type(endpoint.reply_socket(packet, [50000, 50001]), socket.socket)
     assert_type(endpoint.reply_socket(packet, (p for p in (1, 2))), socket.socket)
+
+
+# `reply_address` is a socket address like `sender`, not an address object: it is
+# what goes straight into `sendto`. The union is the point -- a v4 reply is the
+# 2-tuple an AF_INET `sendto` demands, a v6 one keeps its scope id.
+def _reply_address_is_a_socket_address(packet: Datagram) -> None:
+    assert_type(
+        packet.reply_address,
+        Union[Tuple[str, int], Tuple[str, int, int, int]],
+    )
+    assert_type(
+        packet.sender,
+        Union[Tuple[str, int], Tuple[str, int, int, int]],
+    )

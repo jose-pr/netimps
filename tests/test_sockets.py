@@ -1442,3 +1442,84 @@ def test_subprocess_helpers_never_read_the_callers_stdin(monkeypatch):
     _sockets._bsd_next_hop("1.1.1.1")
     _sockets._hop_count_traceroute("1.1.1.1", 5, 1.0)
     assert seen == [subprocess.DEVNULL, subprocess.DEVNULL]
+
+
+# --------------------------------------------------------------------------- #
+# SO_REUSEADDR passed the stdlib way through options=                         #
+# --------------------------------------------------------------------------- #
+
+
+def test_so_reuseaddr_in_options_is_honoured_not_refused():
+    """A regression a consumer caught, and it was mine.
+
+    Once `bind()` started setting `SO_EXCLUSIVEADDRUSE` for *both* values of
+    `reuse_address`, Windows began refusing an `SO_REUSEADDR` that arrived
+    through `options=` -- the two cannot coexist on one socket, and it reports
+    only `WSAEINVAL`, naming neither. Measured on Windows 11 ARM64: this exact
+    call raised "[WinError 10022] An invalid argument was supplied" with no
+    hint, and it had worked on 0.3.1.
+
+    An explicit nonzero `SO_REUSEADDR` in `options=` is the caller asking for
+    takeover in so many words, so it is now treated as
+    `allow_address_takeover=True` rather than fought with.
+    """
+    sock = netimps.bind(
+        "127.0.0.1",
+        0,
+        reuse_address=False,
+        options=[(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)],
+    )
+    try:
+        assert sock.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR)
+    finally:
+        sock.close()
+
+
+def test_a_zero_valued_reuseaddr_in_options_is_not_a_takeover_request():
+    """`SO_REUSEADDR, 0` is explicitly asking for it to be *off*.
+
+    Reading any mention of the option as "takeover wanted" would turn an
+    explicit opt-*out* into an opt-in, so the value is what counts.
+    """
+    sock = netimps.bind(
+        "127.0.0.1",
+        0,
+        options=[(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)],
+    )
+    try:
+        assert not sock.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR)
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            # The safe default must still be in force on Windows.
+            assert sock.getsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE)
+    finally:
+        sock.close()
+
+
+def test_other_options_still_reach_the_socket_unchanged():
+    """The scan must not have become a filter: `options=` is still applied."""
+    sock = netimps.bind(
+        "127.0.0.1",
+        0,
+        options=[netimps.SocketOption(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)],
+    )
+    try:
+        assert sock.getsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST)
+    finally:
+        sock.close()
+
+
+@pytest.mark.skipif(
+    not hasattr(socket, "SO_EXCLUSIVEADDRUSE"), reason="WSAEINVAL is Windows-only"
+)
+def test_bind_error_hint_explains_wsaeinval():
+    """A bare 10022 is undiagnosable, which is why it gets a sentence.
+
+    The hint has to name the conflict and the spelling that avoids it; the
+    error itself says only "invalid argument".
+    """
+    exc = OSError(22, "An invalid argument was supplied")
+    exc.winerror = 10022
+    hint = netimps.bind_error_hint(exc)
+    assert hint is not None
+    assert "allow_address_takeover" in hint
+    assert "SO_EXCLUSIVEADDRUSE" in hint

@@ -128,6 +128,7 @@ map:
 | `AddressInUseError` | one stable `OSError` subclass for "the address is taken", never a `PermissionError` |
 | `UdpEndpoint`, `Datagram` | UDP receive with arrival interface (`IP_PKTINFO` / `IPV6_RECVPKTINFO`, per family) |
 | `UdpEndpoint.reply_socket` | a socket bound to answer *from* the address the client addressed |
+| `Datagram.reply_address` | the sender in the family `reply_socket` chose — what to pass to `sendto`, since a dual-stack listener's v4 peer arrives as a v6 4-tuple |
 | `UdpEndpoint.arecv`, `.datagrams` | `recv` awaited / `async for`; pktinfo survives even on the Windows Proactor loop |
 | `recvmsg`, `sendmsg`, `CMSG_LEN`, `CMSG_SPACE`, `supports_recvmsg` | ancillary-data messaging on **every** platform, Windows included (via `WSARecvMsg`/`WSASendMsg`) |
 | `patch_socket_module`, `socket_patched` | install/remove the default-on `socket` patch that gives Windows the stdlib method names |

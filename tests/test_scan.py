@@ -911,3 +911,33 @@ def test_no_default_index_where_the_kernel_chooses(monkeypatch):
 
     monkeypatch.setattr(_multicast, "_NEEDS_EXPLICIT_V6_SCOPE", False)
     assert _multicast._default_v6_scope("ff02::fb") == 0
+
+
+def test_is_multicast_unmaps_a_v4_mapped_group():
+    """The stdlib only delegates a mapped address's `is_*` to the v4 address
+    from **3.13**, so trusting the property made the answer depend on the
+    interpreter.
+
+    Measured: `IPv6Address("::ffff:224.0.0.1").is_multicast` is False on 3.9 and
+    True on 3.14. A v4-mapped group is a real group -- it is how a dual-stack
+    listener sees one -- and `UdpEndpoint._is_repliable` inherits this answer,
+    so on 3.9-3.12 the gap let a reply socket bind a mapped multicast
+    destination. `is_broadcast` already unmapped; now both agree.
+    """
+    assert is_multicast("::ffff:224.0.0.1")
+    assert is_multicast(ipaddress.IPv6Address("::ffff:224.0.0.1"))
+    assert is_multicast(ipaddress.IPv6Address("::ffff:239.1.2.3"))
+    # Not a group, mapped or otherwise.
+    assert not is_multicast("::ffff:10.0.0.1")
+    assert not is_multicast(ipaddress.IPv6Address("::ffff:127.0.0.1"))
+
+
+def test_is_multicast_does_not_depend_on_the_interpreter_version():
+    """The property and this function may legitimately disagree below 3.13.
+
+    Pinned explicitly so nobody "simplifies" this back to `parsed.is_multicast`
+    after 3.13 becomes the floor and the difference stops being visible locally.
+    """
+    mapped = ipaddress.IPv6Address("::ffff:224.0.0.1")
+    assert is_multicast(mapped) is True
+    assert is_multicast(mapped) == is_multicast("224.0.0.1")
