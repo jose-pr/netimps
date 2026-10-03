@@ -8,6 +8,7 @@ fallback path, which are testable exactly.
 
 import ctypes
 import ipaddress
+import math
 import socket
 
 import pytest
@@ -601,3 +602,269 @@ def test_interface_spec_honours_a_zone_suffix(one_adapter):
     # The address keeps its zone; only the lookup drops it.
     resolved = _iface_spec.interface_address("2001:db8::10%fake0", want_ipv6=True)
     assert str(resolved) == "2001:db8::10%fake0"
+
+
+# --------------------------------------------------------------------------- #
+# The opt-in enumeration cache                                                #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture(autouse=True)
+def _clean_interface_cache():
+    """No test may inherit or leave a cached enumeration.
+
+    The cache is process-wide, so a leaked entry would make a later test pass
+    for the wrong reason -- or fail depending on execution order, which is
+    worse.
+    """
+    netimps.clear_interface_cache()
+    yield
+    netimps.clear_interface_cache()
+
+
+def _counting_enumerator(monkeypatch):
+    """Count how often the real enumeration runs."""
+    from netimps import _ifaddrs
+
+    calls = []
+    real = _ifaddrs._enumerate_interfaces
+
+    def counted(raw):
+        calls.append(raw)
+        return real(raw)
+
+    monkeypatch.setattr(_ifaddrs, "_enumerate_interfaces", counted)
+    return calls
+
+
+def test_the_default_does_not_cache_at_all(monkeypatch):
+    """`cache=False` must be exactly the old behaviour: every call enumerates.
+
+    A cache that switched itself on would turn a cheap correct call into a
+    cheap stale one, which is the failure mode worth guarding against here.
+    """
+    calls = _counting_enumerator(monkeypatch)
+    for _ in range(3):
+        netimps.get_interfaces()
+    assert len(calls) == 3
+
+
+def test_cache_true_collapses_repeated_calls(monkeypatch):
+    """One enumeration for a burst, which is the whole point."""
+    calls = _counting_enumerator(monkeypatch)
+    first = netimps.get_interfaces(cache=True)
+    for _ in range(20):
+        assert netimps.get_interfaces(cache=True) == first
+    assert len(calls) == 1
+
+
+def test_a_number_is_a_ttl_in_seconds(monkeypatch):
+    calls = _counting_enumerator(monkeypatch)
+    netimps.get_interfaces(cache=5.0)
+    netimps.get_interfaces(cache=5.0)
+    assert len(calls) == 1
+
+
+def test_the_ttl_expires(monkeypatch):
+    """Asserted against a fake clock, not by sleeping.
+
+    A real sleep would make this test slow *and* flaky; the TTL is a comparison
+    against `time.monotonic`, so moving that is the honest way to test it.
+    """
+    from netimps import _ifaddrs
+
+    calls = _counting_enumerator(monkeypatch)
+    now = [1000.0]
+    monkeypatch.setattr(_ifaddrs._time, "monotonic", lambda: now[0])
+
+    netimps.get_interfaces(cache=1.0)
+    now[0] += 0.5
+    netimps.get_interfaces(cache=1.0)
+    assert len(calls) == 1, "expired early"
+    now[0] += 0.6  # now 1.1s past the first call
+    netimps.get_interfaces(cache=1.0)
+    assert len(calls) == 2, "did not expire"
+
+
+def test_cache_zero_means_always_stale_not_no_cache(monkeypatch):
+    """`cache=0` is the reseed, and the reason there is no `refresh=` argument.
+
+    A TTL of zero is always expired, so it enumerates *and* stores -- after
+    which a normal cached call is served from the fresh entry. Truthiness
+    testing would have made this "do not cache" and left a second argument
+    necessary.
+    """
+    calls = _counting_enumerator(monkeypatch)
+    netimps.get_interfaces(cache=True)
+    assert len(calls) == 1
+    netimps.get_interfaces(cache=0)
+    assert len(calls) == 2, "cache=0 did not re-enumerate"
+    netimps.get_interfaces(cache=True)
+    assert len(calls) == 2, "cache=0 did not reseed the entry"
+
+
+def test_cache_one_is_a_one_second_ttl_not_the_default(monkeypatch):
+    """`cache=1` must not be read as `cache=True`.
+
+    `1 == True` in Python, so only an identity test tells them apart. With
+    `INTERFACE_CACHE_TTL` at 1.0 they happen to coincide today, so this asserts
+    the discrimination directly rather than through observable timing.
+    """
+    from netimps import _ifaddrs
+
+    monkeypatch.setattr(_ifaddrs, "INTERFACE_CACHE_TTL", 999.0)
+    calls = _counting_enumerator(monkeypatch)
+    now = [1000.0]
+    monkeypatch.setattr(_ifaddrs._time, "monotonic", lambda: now[0])
+
+    netimps.get_interfaces(cache=1)
+    now[0] += 2.0
+    netimps.get_interfaces(cache=1)
+    assert len(calls) == 2, "cache=1 was treated as the default TTL"
+
+
+def test_infinite_ttl_never_expires_and_clear_is_the_invalidation(monkeypatch):
+    """The strategy to prefer when the caller knows what changes the answer.
+
+    A TTL is a guess; an event is not. This is the shape a DHCP server arrived
+    at independently -- cache indefinitely, clear on `bind()`.
+    """
+    from netimps import _ifaddrs
+
+    calls = _counting_enumerator(monkeypatch)
+    now = [1000.0]
+    monkeypatch.setattr(_ifaddrs._time, "monotonic", lambda: now[0])
+
+    netimps.get_interfaces(cache=math.inf)
+    now[0] += 10_000.0
+    netimps.get_interfaces(cache=math.inf)
+    assert len(calls) == 1, "an infinite TTL expired"
+
+    netimps.clear_interface_cache()
+    netimps.get_interfaces(cache=math.inf)
+    assert len(calls) == 2, "clear_interface_cache did not invalidate"
+
+
+def test_clear_is_harmless_when_nothing_is_cached():
+    netimps.clear_interface_cache()
+    netimps.clear_interface_cache()
+
+
+def test_raw_is_cached_separately(monkeypatch):
+    """The two return different data; one entry for both would hand a caller
+    the wrong shape."""
+    calls = _counting_enumerator(monkeypatch)
+    netimps.get_interfaces(cache=True)
+    netimps.get_interfaces(raw=True, cache=True)
+    assert calls == [False, True]
+    plain = netimps.get_interfaces(cache=True)
+    raw = netimps.get_interfaces(raw=True, cache=True)
+    assert len(calls) == 2
+    assert all(i.raw is None for i in plain)
+    # `raw` is populated where the platform supplies anything at all.
+    assert any(i.raw is not None for i in raw) or not raw
+
+
+def test_a_cached_call_returns_objects_the_caller_may_mutate():
+    """**The hazard a cache introduces, and the reason it copies.**
+
+    `Interface` has `__slots__` but is not frozen, and `.ips` is a list while
+    `.raw` is a dict. Handing back the stored objects would let one caller's
+    `iface.ips.append(...)` corrupt every later caller's view -- a
+    cross-consumer bug with no plausible trail back to the cache. Copying costs
+    a measured 0.004 ms against 0.969 ms to enumerate, so it is not a trade.
+    """
+    first = netimps.get_interfaces(cache=math.inf)
+    if not first:
+        pytest.skip("no interfaces to mutate")
+    first[0].ips.append("poison")
+    first[0].name = "renamed"
+    first.append("appended to the list")
+
+    second = netimps.get_interfaces(cache=math.inf)
+    assert "poison" not in second[0].ips
+    assert second[0].name != "renamed"
+    assert "appended to the list" not in second
+    # Distinct objects, equal values.
+    assert second[0] is not first[0]
+
+
+def test_a_cached_raw_dict_is_also_copied():
+    """`.raw` is a dict, so it needs the same isolation as `.ips`."""
+    found = netimps.get_interfaces(raw=True, cache=math.inf)
+    with_raw = [i for i in found if i.raw is not None]
+    if not with_raw:
+        pytest.skip("this platform populated no raw data")
+    with_raw[0].raw["poison"] = True
+    again = netimps.get_interfaces(raw=True, cache=math.inf)
+    assert all("poison" not in (i.raw or {}) for i in again)
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda c: netimps.interface_for("127.0.0.1", cache=c),
+        lambda c: list(netimps.interfaces_for("127.0.0.1", cache=c)),
+        lambda c: netimps.is_local_address("10.0.0.1", cache=c),
+    ],
+    ids=["interface_for", "interfaces_for", "is_local_address"],
+)
+def test_the_query_helpers_share_the_cache(monkeypatch, call):
+    """All three funnel through the same enumeration, so one argument reaches
+    every one of them and they populate one shared entry."""
+    calls = _counting_enumerator(monkeypatch)
+    call(math.inf)
+    call(math.inf)
+    assert len(calls) == 1, "the helper did not use the cache"
+
+    netimps.clear_interface_cache()
+    call(False)
+    call(False)
+    assert len(calls) == 3, "the helper cached when it was told not to"
+
+
+def test_interface_for_still_answers_the_same_with_and_without_the_cache():
+    """A cache that changed the answer would be worse than no cache."""
+    netimps.clear_interface_cache()
+    uncached = netimps.interface_for("127.0.0.1")
+    cached = netimps.interface_for("127.0.0.1", cache=math.inf)
+    assert uncached == cached
+
+
+def test_the_endpoint_cache_uses_the_one_shared_ttl():
+    """Two caches of the same fact must not disagree about how stale is stale."""
+    from netimps._udp import UdpEndpoint
+
+    assert UdpEndpoint._IFACE_CACHE_TTL == netimps.INTERFACE_CACHE_TTL
+
+
+def test_the_default_ttl_is_sized_for_a_burst():
+    """Pinned so a future change to this number is deliberate.
+
+    One second bounds the cost at a single enumeration per second whatever the
+    arrival rate, which is what a burst-collapsing cache is for; it is not a
+    long-lived snapshot, and a longer window would only widen the time a
+    renamed adapter goes unnoticed.
+    """
+    assert netimps.INTERFACE_CACHE_TTL == 1.0
+
+
+def test_the_uncached_path_passes_no_keyword_to_get_interfaces(monkeypatch):
+    """A consumer's test double must keep working after this upgrade.
+
+    A test double for `get_interfaces` may take no keyword arguments, so
+    passing `cache=False` to one raises TypeError. The default path therefore
+    keeps its original call shape, which is cheap to preserve and silent to
+    break.
+    """
+    from netimps import _ifaddrs
+
+    seen = []
+
+    def no_kwargs_stub():
+        seen.append("called")
+        return []
+
+    monkeypatch.setattr(_ifaddrs, "get_interfaces", no_kwargs_stub)
+    assert netimps.interface_for("10.9.9.9") is None
+    assert seen == ["called"]

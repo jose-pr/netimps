@@ -1079,12 +1079,12 @@ def test_iter_addresses_rejects_a_bad_family():
 
 
 # --------------------------------------------------------------------------- #
-# MACAddress subclassing -- the guarantee pydhcp's migration depends on        #
+# MACAddress subclassing -- a documented guarantee                             #
 # --------------------------------------------------------------------------- #
 
 
 class _WireMAC(netimps.MACAddress):
-    """A subclass overriding only __str__, as a consumer would."""
+    """A subclass overriding only __str__, as a caller would."""
 
     def __str__(self):
         return self.as_str("-", upper=True)
@@ -1131,7 +1131,7 @@ def test_mac_subclass_classmethods_bind_to_the_subclass():
 
 
 def test_mac_subclass_hex_passthrough():
-    """.hex() is the one bytes method a consumer may need to re-add."""
+    """.hex() is the one bytes method a caller may need to re-add."""
     assert _WireMAC("aa:bb:cc:dd:ee:ff").hex("-").upper() == "AA-BB-CC-DD-EE-FF"
 
 
@@ -1183,8 +1183,8 @@ def test_jitter_seconds_is_absolute_and_spreads_both_ways():
     chosen from the range -1 to +1" -- seconds, not a fraction.
 
     The default mode can only ever *shorten*, so a DHCPv4 client could not use
-    it and pydhcp carried its own schedule. Both signs occurring is the whole
-    assertion; a mean near zero is the second half.
+    it, so neither DHCP standard could be expressed with it. Both signs
+    occurring is the whole assertion; a mean near zero is the second half.
     """
     deltas = [
         value - 10.0
@@ -1348,9 +1348,8 @@ def test_backoff_grows_on_advance_and_resets_on_progress():
     """The shape `backoff_delays` cannot express, and which every protocol
     client here had hand-rolled: a retransmission timer.
 
-    Taken from pytftp's working implementation -- `_rto` doubling to a ceiling
-    on loss and returning to the base the moment the peer moves the transfer
-    forward.
+    A retransmission timer doubles to a ceiling on loss and returns to the base
+    the moment the peer moves the transfer forward.
     """
     timer = Backoff(delay=1.0, multiplier=2.0, max_delay=8.0)
     assert timer.delay == 1.0

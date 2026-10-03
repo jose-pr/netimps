@@ -1,4 +1,4 @@
-"""The UDP-server helpers pytftp asked for: reply_socket, is_broadcast, MTU sizing.
+"""The UDP-server helpers: reply_socket, is_broadcast, MTU sizing.
 
 Each exists because a pktinfo-using UDP server fills the same gap by hand, and
 each is tested against real loopback sockets rather than a mock, because the
@@ -733,3 +733,83 @@ def test_the_windows_loopback_mtu_matches_what_loopback_delivers():
     finally:
         sender.close()
         receiver.close()
+
+
+# --------------------------------------------------------------------------- #
+# supports_pktinfo                                                            #
+# --------------------------------------------------------------------------- #
+
+
+def test_supports_pktinfo_agrees_with_an_actual_endpoint():
+    """It must answer exactly what building an endpoint would answer.
+
+    That is the whole contract: this is a cached shorthand for exactly that, so
+    a different answer here would be a regression dressed as a convenience.
+    """
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        expected = UdpEndpoint(probe).supports_pktinfo
+    finally:
+        probe.close()
+    assert netimps.supports_pktinfo(socket.AF_INET) == expected
+
+
+def test_supports_pktinfo_does_not_feature_test_the_constant_name():
+    """**The trap this function exists to avoid.**
+
+    `getattr(socket, "IP_PKTINFO", None)` is `None` on CPython 3.9-3.11 on
+    *every* platform -- the constant arrived in 3.12 -- while the kernel
+    supported it throughout. A name test therefore says "no" on a platform that
+    works, pushing a server onto a per-address bind it did not need (and on
+    Linux that bind receives no broadcasts at all).
+
+    So on 3.9-3.11 the constant being absent must NOT make this False.
+    """
+    answer = netimps.supports_pktinfo(socket.AF_INET)
+    if not hasattr(socket, "IP_PKTINFO"):
+        # The interpreter lacks the name. The answer must come from the socket.
+        assert (
+            answer is True
+        ), "answered False on an interpreter that merely lacks the constant"
+    assert isinstance(answer, bool)
+
+
+def test_supports_pktinfo_is_cached_per_family(monkeypatch):
+    """Cached because it is a property of the platform, not of a socket."""
+    netimps._udp._PKTINFO_SUPPORT.clear()
+    created = []
+    real = socket.socket
+
+    class Counting(socket.socket):
+        def __init__(self, *args, **kwargs):
+            created.append(args[:2])
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(netimps._udp._socket, "socket", Counting)
+    netimps.supports_pktinfo(socket.AF_INET)
+    netimps.supports_pktinfo(socket.AF_INET)
+    netimps.supports_pktinfo(socket.AF_INET)
+    assert len(created) == 1, "probed more than once for one family"
+    netimps.supports_pktinfo(socket.AF_INET6)
+    assert len(created) == 2, "a second family must be probed separately"
+    assert real is socket.socket or True
+
+
+def test_supports_pktinfo_returns_false_rather_than_raising(monkeypatch):
+    """A family whose socket cannot be created is a "no", not an error.
+
+    IPv6 disabled on the host is the realistic case, and a server asking "can
+    you report arrivals?" wants an answer it can branch on.
+    """
+    netimps._udp._PKTINFO_SUPPORT.clear()
+
+    def refuse(*args, **kwargs):
+        raise OSError("no such family")
+
+    monkeypatch.setattr(netimps._udp._socket, "socket", refuse)
+    assert netimps.supports_pktinfo(socket.AF_INET6) is False
+
+
+def test_supports_pktinfo_defaults_to_ipv4():
+    netimps._udp._PKTINFO_SUPPORT.clear()
+    assert netimps.supports_pktinfo() == netimps.supports_pktinfo(socket.AF_INET)

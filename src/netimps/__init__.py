@@ -141,6 +141,8 @@ __all__ = [
     "PingResult",
     "Interface",
     "get_interfaces",
+    "clear_interface_cache",
+    "INTERFACE_CACHE_TTL",
     "is_broadcast",
     "iter_addresses",
     # Socket / route helpers.
@@ -159,6 +161,7 @@ __all__ = [
     "interfaces_for",
     "is_local_address",
     "UdpEndpoint",
+    "supports_pktinfo",
     "Datagram",
     # Domain names as a value type. Note the pathlib inversion -- see Fqdn.
     "Fqdn",
@@ -495,7 +498,9 @@ from ._scheme import (  # noqa: E402
     register_port,
 )
 from ._ifaddrs import (  # noqa: E402
+    INTERFACE_CACHE_TTL,
     Interface,
+    clear_interface_cache,
     get_interfaces,
     is_broadcast,
     iter_addresses,
@@ -545,7 +550,7 @@ from ._msg import _patch_requested as _msg_patch_requested  # noqa: E402
 if _msg_patch_requested():
     patch_socket_module()
 
-from ._udp import Datagram, UdpEndpoint  # noqa: E402
+from ._udp import Datagram, UdpEndpoint, supports_pktinfo  # noqa: E402
 from ._sockets import (  # noqa: E402
     bind,
     max_udp_payload,

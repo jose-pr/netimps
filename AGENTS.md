@@ -111,7 +111,8 @@ map:
 | `IPv4Address`, `IPv4Interface`, `IPv4Network`, `IPv6Address`, `IPv6Interface`, `IPv6Network` | stdlib concrete-type re-exports |
 | `parse`, `try_parse`, `is_valid` | build a type from a value (raising / `None` / `bool`) |
 | `MACAddress` | parse / classify / render MAC addresses |
-| `get_interfaces`, `Interface`, `iter_addresses` | native cross-platform NIC discovery |
+| `get_interfaces`, `Interface`, `iter_addresses` | native cross-platform NIC discovery; `cache=`/`clear_interface_cache` make a per-packet lookup affordable (97x measured) |
+| `clear_interface_cache`, `INTERFACE_CACHE_TTL` | invalidate the shared enumeration cache, and its default 1 s TTL |
 | `is_broadcast` | is this an IPv4 broadcast, limited or subnet (needs interface prefixes) |
 | `get_ip`, `is_link_scoped` | address resolution and scope classification |
 | `collapse`, `subtract` | CIDR set maths |
@@ -128,6 +129,7 @@ map:
 | `AddressInUseError` | one stable `OSError` subclass for "the address is taken", never a `PermissionError` |
 | `UdpEndpoint`, `Datagram` | UDP receive with arrival interface (`IP_PKTINFO` / `IPV6_RECVPKTINFO`, per family) |
 | `UdpEndpoint.reply_socket` | a socket bound to answer *from* the address the client addressed |
+| `supports_pktinfo` | can this host report a datagram's arrival interface — ask before choosing a wildcard or per-address bind |
 | `Datagram.reply_address` | the sender in the family `reply_socket` chose — what to pass to `sendto`, since a dual-stack listener's v4 peer arrives as a v6 4-tuple |
 | `UdpEndpoint.arecv`, `.datagrams` | `recv` awaited / `async for`; pktinfo survives even on the Windows Proactor loop |
 | `recvmsg`, `sendmsg`, `CMSG_LEN`, `CMSG_SPACE`, `supports_recvmsg` | ancillary-data messaging on **every** platform, Windows included (via `WSARecvMsg`/`WSASendMsg`) |

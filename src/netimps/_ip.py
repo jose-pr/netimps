@@ -685,7 +685,7 @@ def unmap(value: "Union[str, IPAddress]") -> "IPAddress":
     """Collapse an IPv4-mapped IPv6 address to plain IPv4; pass anything else through.
 
     ``::ffff:10.0.0.5`` is how a dual-stack socket reports an IPv4 peer, and
-    almost nothing downstream wants it in that form -- an ACL comparing against
+    almost nothing a caller does wants it in that form -- an ACL comparing against
     ``10.0.0.0/8``, a log line, a config lookup::
 
         unmap("::ffff:10.0.0.5")    # IPv4Address('10.0.0.5')

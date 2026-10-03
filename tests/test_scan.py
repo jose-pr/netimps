@@ -882,7 +882,7 @@ def test_explicit_family_may_not_contradict_the_group():
 def test_only_unroutable_scopes_get_a_default_index(group, needs_scope, monkeypatch):
     """The scope lives in the low nibble of byte 1, not in `is_link_local`.
 
-    This is the trap that made the first attempt at the macOS fix a no-op:
+    This is the trap that makes a naive macOS fix a no-op:
     `ipaddress`'s `is_link_local` means the `fe80::/10` **unicast** range and is
     `False` for `ff02::fb`, so the code decided no scope was needed and the join
     went on failing. RFC 4291 puts the multicast scope in the address itself --

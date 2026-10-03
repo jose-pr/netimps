@@ -298,7 +298,7 @@ so nothing is lost. Pass an existing enumeration in a loop; it is a syscall.
   `None` into the hostname `"None"`.
 - **`unmap(value) -> IPAddress`** — collapse an IPv4-mapped IPv6 address
   (`::ffff:10.0.0.5`) to plain IPv4; anything else passes through. The form a
-  dual-stack socket reports an IPv4 peer in, and almost nothing downstream wants
+  dual-stack socket reports an IPv4 peer in, and almost nothing a caller does wants
   it — an ACL comparing against `10.0.0.0/8`, a log line, a config lookup.
 
   Built on `IPv6Address.ipv4_mapped`, **not** a `"::ffff:"` prefix test, which
@@ -703,9 +703,8 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
   `except OSError` is unaffected while `except PermissionError` stops catching
   this. A real POSIX `EACCES` on a port below 1024 is untouched.
 
-  A duplicate UDP bind is refused on every platform under the defaults, which
-  was **not** true before this release — see the `reuse_address` box above.
-  Sharing is now opt-in through `reuse_port=True` or
+  A duplicate UDP bind is refused on every platform under the defaults — see
+  the `reuse_address` box above. Sharing is opt-in through `reuse_port=True` or
   `allow_address_takeover=True`, and only then does a second bind succeed.
 - **`SocketOption(level, name, value)`** — a named triple for `bind`'s
   `options=`. A `NamedTuple`, so it *is* a tuple: bare `(level, name, value)`
@@ -747,6 +746,35 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
   for a bind failure, recognising POSIX errnos *and* Windows `10013`/`10048`.
   Returns `None` for anything unrecognised, so the caller keeps the original
   error. **Does not raise** — what to do with a failure is the caller's call.
+- **The adapter enumeration is cacheable, and it is opt-in**:
+  `get_interfaces(cache=...)`, and the same argument on `interface_for`,
+  `interfaces_for` and `is_local_address`. `cache=False` (the default) never
+  caches and never reads a cached value, so nothing changes unless asked;
+  `cache=True` uses `INTERFACE_CACHE_TTL` (**1 second**); a number is that TTL in
+  seconds. `cache=0` is a TTL of zero, so it enumerates and reseeds — which
+  is the whole of "force a refresh", and why there is no second argument for it.
+  `clear_interface_cache()` invalidates without a lookup.
+
+  Measured with 7 adapters: `interface_for` goes **0.98 ms → 0.010 ms**, and
+  `is_local_address` likewise. On a host with many adapters the uncached call
+  reaches 35–42 ms, which is slow enough that a packet flood can deny service
+  on its own — so this is an availability question, not only a speed one.
+
+  > **Prefer an event to a TTL when you have one.** A TTL is a guess about how
+  > long the answer stays true. If your program already knows the moment it can
+  > change — it binds a socket, or handles a netlink / `WM_NETWORKCHANGE` event
+  > — then `cache=math.inf` plus `clear_interface_cache()` at that moment is
+  > strictly better: no window of wrong answers, and no re-enumeration while
+  > nothing has changed. The 1 s default is sized to collapse a *burst* of
+  > calls rather than to hold a snapshot, bounding the cost at one syscall per
+  > second whatever the arrival rate.
+
+  A **cached call returns fresh `Interface` objects**, not the stored ones.
+  `Interface` is not frozen and both `.ips` (a list) and `.raw` (a dict) are
+  mutable, so handing back the stored objects would let one caller's
+  `iface.ips.append(...)` corrupt every later caller's view. The copy costs
+  0.004 ms against 0.969 ms to enumerate, and nothing deeper is copied because
+  nothing deeper is mutable.
 - **`interface_for(query, strict=True) -> Interface | None`** — first matching
   adapter in OS enumeration order. `query` accepts an `Interface`, exact
   `IPAddress`, exact `.ip` from an `IPInterface`, an `IPNetwork` containing at
@@ -1197,15 +1225,15 @@ patch below is installed.
 > `hasattr(socket.socket, "recvmsg")` or `getattr(socket, "CMSG_SPACE", None)` to
 > decide whether it is on POSIX now gets the POSIX answer on Windows. The
 > normalisation above is what keeps such code from misparsing the payload, but it
-> cannot fix a consumer that reads a field Windows does not report — `ipi_spec_dst`
+> cannot fix a caller that reads a field Windows does not report — `ipi_spec_dst`
 > comes back `0.0.0.0`, exactly as it already does on macOS.
 >
 > Known affected: **pydhcp 0.6.1 and earlier**, which read `ipi_spec_dst` for
 > their `SERVER_IDENTIFIER`. **Measured, they receive but allocate and reply to
-> nothing** — a zero-filled `spec_dst` does not degrade a consumer that resolves
+> nothing** — a zero-filled `spec_dst` does not degrade a caller that resolves
 > its interface from that field, it silences it. (An earlier version of this box
 > said "degrade to `0.0.0.0` rather than crashing", which was inferred from the
-> field's value rather than measured against the consumer.) `UdpEndpoint` is the
+> field's value rather than measured against it.) `UdpEndpoint` is the
 > supported way to get that address correctly on every platform. Set
 > `NETIMPS_NO_SOCKET_PATCH=1` to opt out entirely.
 
@@ -1397,8 +1425,27 @@ the wrapped socket, and the endpoint is a **context manager**
   posting to a closed loop, with the traceback going to stderr where no caller
   could see it.
 
-  **`asyncio` is imported lazily**, never by `import netimps`. A consumer using
+  **`asyncio` is imported lazily**, never by `import netimps`. A caller using
   only the value types pays nothing for it.
+- **`supports_pktinfo(family=AF_INET) -> bool`** — whether a UDP socket of that
+  family can report each datagram's arrival interface *on this host*. The
+  question to ask **before** choosing how to bind: with it, one wildcard socket
+  serves every address and still knows which one a datagram reached; without
+  it, the wildcard has to be expanded into a socket per address — and on Linux
+  that per-address socket receives no broadcasts at all.
+
+  ```python
+  socks = [bind("", 67)] if supports_pktinfo() else [bind(str(a), 67) for a in addrs]
+  ```
+
+  **Decided by asking a socket, never by testing a constant's name.**
+  `getattr(socket, "IP_PKTINFO", None)` is `None` on CPython 3.9–3.11 on *every*
+  platform — the constant arrived in 3.12 — while the kernel supported it
+  throughout, so a name test answers "no" on a platform that works. Cached per
+  family for the process, since it is a property of the platform and the
+  interpreter rather than of any socket. `False` rather than an exception when a
+  socket of that family cannot be created, so IPv6 being disabled is an answer
+  and not an error.
 - **`reply_socket(datagram, port=0, connreset=False)`** — a socket bound so
   replies leave from the address the client addressed. The point of pktinfo, in
   one call:

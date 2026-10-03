@@ -37,7 +37,7 @@ IS_WINDOWS = os.name == "nt"
 def test_a_short_bufsize_reports_truncation_rather_than_losing_it_silently():
     """A datagram larger than ``bufsize`` must say so.
 
-    pydhcp measured the consequence of not reporting it: with
+    The consequence of not reporting it, measured: with
     ``max_packet_size=576`` a 1102-octet datagram arrived cut to 576 and the
     decoder was handed a message whose option stream stops mid-option. The
     flag was always there in ``msg_flags``; it was simply dropped.
@@ -414,7 +414,7 @@ def test_set_buffer_size_rejects_a_negative_request():
 
 
 def test_mac_hex_matches_bytes_hex():
-    """A pure passthrough -- the reason a consumer subclassed this type."""
+    """A pure passthrough -- the reason callers subclassed this type."""
     mac = MACAddress("aa:bb:cc:dd:ee:ff")
     assert mac.hex() == "aabbccddeeff" == mac.packed.hex()
     assert mac.hex(":") == mac.packed.hex(":") == "aa:bb:cc:dd:ee:ff"

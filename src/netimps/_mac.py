@@ -151,8 +151,8 @@ class MACAddress:
 
         A pure passthrough to ``self.packed.hex``, which exists because this is
         a value object rather than a ``bytes`` subclass, so the method is not
-        inherited -- and callers reasonably expect it. (A downstream project was
-        subclassing this type partly to add it back.)
+        inherited -- and callers reasonably expect it, to the point of
+        subclassing the type to add it back.
 
         For the conventional colon- or hyphen-separated forms prefer
         :meth:`as_str`, which also offers the uppercase rendering; this is the

@@ -154,10 +154,10 @@ class AddressInUseError(OSError):
 
     The 3.14 row is the harmful one: ``PermissionError`` says "privilege
     problem", and on Windows there is no such thing for a port -- the address is
-    simply held. A consumer branching on the type then sends its user after an
-    elevation problem that cannot exist, which is why one downstream project
-    carries a wrapper that re-derives the fact by string-matching
-    :func:`bind_error_hint`'s message.
+    simply held. A caller branching on the type then sends its user after an
+    elevation problem that cannot exist -- and the alternative is a wrapper that
+    re-derives the fact by string-matching :func:`bind_error_hint`'s message,
+    which is worse.
 
     So :func:`bind` raises this instead, with ``errno`` normalised to
     ``EADDRINUSE``, the hint as the message, and the original exception chained
@@ -282,8 +282,8 @@ def bind(
         # of the two it objected to. Since this function started setting
         # `SO_EXCLUSIVEADDRUSE` for both values of `reuse_address`, the
         # stdlib-shaped spelling of "share this address" therefore stopped
-        # working here -- a regression a consumer caught, reported as
-        # "[WinError 10022] An invalid argument was supplied".
+        # working here, failing with "[WinError 10022] An invalid argument was
+        # supplied".
         takeover_requested = allow_address_takeover or any(
             level == _socket.SOL_SOCKET and name == _socket.SO_REUSEADDR and value
             for level, name, value in options
@@ -419,10 +419,9 @@ def bind_error_hint(
         #
         # Python maps WSAEACCES to PermissionError with errno EACCES, so the
         # winerror must be tested BEFORE the POSIX branch below or the generic
-        # "permission denied" wins and says the wrong thing. Measured
-        # downstream: binding over an exclusively-held socket reported
-        # "permission denied binding port 64514" -- a privilege message about
-        # an unprivileged port.
+        # "permission denied" wins and says the wrong thing. Measured: binding
+        # over an exclusively-held socket reported "permission denied binding
+        # port 64514" -- a privilege message about an unprivileged port.
         return (
             "%s is held exclusively by another socket, or blocked by a "
             "firewall or an excluded port range (WSAEACCES); it is in use, "
@@ -510,7 +509,11 @@ def _zone_names(iface: "Interface", zone: str) -> bool:
     return iface.name == zone
 
 
-def _interfaces_for_query(kind: str, wanted: Any) -> "Iterator[Interface]":
+def _interfaces_for_query(
+    kind: str,
+    wanted: Any,
+    cache: "Union[bool, float]" = False,
+) -> "Iterator[Interface]":
     from ._ifaddrs import get_interfaces
 
     if kind == "interface":
@@ -528,7 +531,12 @@ def _interfaces_for_query(kind: str, wanted: Any) -> "Iterator[Interface]":
         # mine".
         wanted = _without_zone(wanted)
 
-    for iface in get_interfaces():
+    # Called with no arguments when uncached, which is not mere tidiness: a test
+    # double for `get_interfaces` may take no keyword arguments, and passing
+    # `cache=False` to one would raise TypeError. The default path therefore
+    # keeps its original call shape.
+    enumerated = get_interfaces() if cache is False else get_interfaces(cache=cache)
+    for iface in enumerated:
         if kind == "mac":
             matches = iface.mac == wanted
         elif kind == "address":
@@ -546,7 +554,11 @@ def _interfaces_for_query(kind: str, wanted: Any) -> "Iterator[Interface]":
             yield iface
 
 
-def interfaces_for(query: _InterfaceQuery) -> "Iterator[Interface]":
+def interfaces_for(
+    query: _InterfaceQuery,
+    *,
+    cache: "Union[bool, float]" = False,
+) -> "Iterator[Interface]":
     """Yield every local interface matching ``query``, in OS order.
 
     ``query`` may be an :class:`Interface` (yielded directly), an address, an
@@ -570,10 +582,15 @@ def interfaces_for(query: _InterfaceQuery) -> "Iterator[Interface]":
     address yields nothing, which is the honest answer to a contradiction.
     """
     kind, wanted = _classify_interface_query(query)
-    yield from _interfaces_for_query(kind, wanted)
+    yield from _interfaces_for_query(kind, wanted, cache)
 
 
-def interface_for(query: _InterfaceQuery, strict: bool = True) -> "Optional[Interface]":
+def interface_for(
+    query: _InterfaceQuery,
+    strict: bool = True,
+    *,
+    cache: "Union[bool, float]" = False,
+) -> "Optional[Interface]":
     """Return the first local interface matching ``query``, or ``None``.
 
     The reverse of interface enumeration -- "a socket is bound here, which
@@ -591,6 +608,14 @@ def interface_for(query: _InterfaceQuery, strict: bool = True) -> "Optional[Inte
         single-address ``Interface`` so legacy callers can still attribute
         traffic. Network and MAC misses cannot be synthesized honestly and
         remain ``None``.
+    :param cache: reuse a recent enumeration rather than making the syscall --
+        ``True`` for :data:`netimps.INTERFACE_CACHE_TTL` seconds, or a number
+        for that TTL. **This is the argument a per-packet caller wants.** Each
+        call otherwise enumerates every adapter, measured at 35-42 ms on a host
+        with many of them.
+        ``cache=0`` is a TTL of zero, so it enumerates and reseeds -- which is
+        the whole of "force a refresh". :func:`netimps.clear_interface_cache`
+        invalidates without a lookup.
 
     The synthetic interface is named ``"<unknown>"`` and carries a host route
     (``/32`` or ``/128``), matching how degraded enumeration reports itself.
@@ -598,7 +623,7 @@ def interface_for(query: _InterfaceQuery, strict: bool = True) -> "Optional[Inte
     from ._ifaddrs import Interface
 
     kind, wanted = _classify_interface_query(query)
-    match = next(_interfaces_for_query(kind, wanted), None)
+    match = next(_interfaces_for_query(kind, wanted, cache), None)
     if match is not None or strict or kind != "address":
         return match
 
@@ -606,7 +631,11 @@ def interface_for(query: _InterfaceQuery, strict: bool = True) -> "Optional[Inte
     return Interface(name="<unknown>", ips=[built] if built else [])
 
 
-def is_local_address(address: "IPAddressLike") -> bool:
+def is_local_address(
+    address: "IPAddressLike",
+    *,
+    cache: "Union[bool, float]" = False,
+) -> bool:
     """Return whether ``address`` is loopback or assigned on this host.
 
     This is deliberately narrower than private, link-local, on-link, routable
@@ -616,13 +645,17 @@ def is_local_address(address: "IPAddressLike") -> bool:
     A ``%zone`` suffix is honoured rather than rejected (see
     :func:`interfaces_for`), so the address ``getsockname()`` hands back can be
     passed straight in.
+
+    :param cache: reuse a recent enumeration -- see :func:`interface_for`. A
+        loopback address short-circuits before any enumeration, so the cache
+        only matters for the addresses that actually reach the adapter scan.
     """
     from . import IPAddress, parse
 
     wanted = parse(address, IPAddress)
     if wanted.is_loopback:
         return True
-    return next(interfaces_for(wanted), None) is not None
+    return next(interfaces_for(wanted, cache=cache), None) is not None
 
 
 def _resolve_targets(
@@ -2097,10 +2130,10 @@ def disable_connreset(sock: "_socket.socket") -> bool:
     ``socket.SIO_UDP_CONNRESET`` on any version, and even given the documented
     value (``0x9800000C``) ``socket.ioctl`` refuses it -- that method whitelists
     a handful of commands and answers ``ValueError: invalid ioctl command`` for
-    the rest. So this goes through ``WSAIoctl`` by ``ctypes``. A downstream
-    project's own copy of this helper used the ``getattr`` route and was
-    therefore a **silent no-op on every platform**, which is the kind of thing
-    worth owning here once.
+    the rest. So this goes through ``WSAIoctl`` by ``ctypes``. The ``getattr``
+    route is the trap: it compiles, runs, and is a **silent no-op on every
+    platform**, which is why this lives here once rather than being rewritten
+    per caller.
 
     Best effort: a kernel or socket type that refuses the request leaves the
     socket as it was rather than raising, since this is an adjustment to

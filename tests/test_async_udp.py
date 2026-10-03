@@ -202,7 +202,7 @@ def test_a_closed_endpoint_refuses_to_start_a_notifier(factory):
 
 
 def test_arecv_does_not_disturb_the_synchronous_path():
-    """`recv()` is what pydhcp and pytftp use today; it must be untouched.
+    """The synchronous path is the one in use today; it must be untouched.
 
     Asserted by using both on one endpoint in one process: the async path sets
     the socket non-blocking, which a synchronous `recv` with a timeout has to
@@ -236,7 +236,7 @@ def test_netimps_does_not_import_asyncio():
     Two reasons, and the first is not hypothetical: importing asyncio from
     `__init__` would force the import ordering that produced the `os.sysconf`
     crash earlier in this release. The second is that most of this package is
-    value types, and a consumer using those should not pay for an event-loop
+    value types, and a caller using those should not pay for an event-loop
     import.
 
     A fresh interpreter, because by the time a test body runs pytest has already
@@ -284,7 +284,7 @@ def test_the_proactor_loop_really_lacks_add_reader():
 
 
 # --------------------------------------------------------------------------- #
-# Teardown and loop rebinding -- both found by a consumer reading the code     #
+# Teardown and loop rebinding                                                 #
 # --------------------------------------------------------------------------- #
 
 

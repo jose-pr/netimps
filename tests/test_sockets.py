@@ -1450,7 +1450,7 @@ def test_subprocess_helpers_never_read_the_callers_stdin(monkeypatch):
 
 
 def test_so_reuseaddr_in_options_is_honoured_not_refused():
-    """A regression a consumer caught, and it was mine.
+    """A regression against the previous release.
 
     Once `bind()` started setting `SO_EXCLUSIVEADDRUSE` for *both* values of
     `reuse_address`, Windows began refusing an `SO_REUSEADDR` that arrived

@@ -68,7 +68,7 @@ def test_every_subcommand_is_registered():
 def test_duho_is_optional():
     """The library must import without the cli extra.
 
-    duho is a CLI-only dependency; a consumer using netimps as a library
+    duho is a CLI-only dependency; a caller using netimps as a library
     should never be forced to install it.
     """
     script = _BLOCK_DUHO + "import netimps\nprint(len(netimps.__all__))\n"

@@ -36,16 +36,14 @@ def _jittered(
 
     **No mode can return a negative delay. Only the default mode treats
     ``max_delay`` as a ceiling on the final value**, and that difference is
-    forced by the specifications the symmetric modes exist to implement. RFC
-    8415 §15 applies its jitter *after* the cap -- ``if RT > MRT: RT = MRT +
-    RAND*MRT`` -- so a conforming delay may exceed ``MRT`` by up to ``RAND``;
-    RFC 2131 §4.1 likewise randomises +/-1 s around a 64 s maximum. Clamping
-    the symmetric modes at ``max_delay`` would leave them one-sided *precisely
-    at the cap*, which is where a backed-off client spends almost all of its
-    time -- measured, the spread at the cap became entirely negative with a
-    mean of -0.024 instead of ~0, silently reintroducing the synchronisation
-    the mode was chosen to prevent. So in the symmetric modes ``max_delay``
-    caps the **base** and the jitter spreads around it.
+    forced by the specifications the symmetric modes implement. RFC 8415 §15
+    applies its jitter *after* the cap -- ``if RT > MRT: RT = MRT + RAND*MRT``
+    -- so a conforming delay may exceed ``MRT`` by up to ``RAND``; RFC 2131 §4.1
+    likewise randomises +/-1 s around a 64 s maximum. Clamping the symmetric
+    modes at ``max_delay`` would leave them one-sided *precisely at the cap*,
+    where a backed-off client spends almost all of its time, which reintroduces
+    the synchronisation the mode was chosen to prevent. So in the symmetric
+    modes ``max_delay`` caps the **base** and the jitter spreads around it.
     """
     if jitter_seconds is not None:
         # Absolute and symmetric: RFC 2131 §4.1 asks for the retransmission
@@ -178,12 +176,10 @@ class Backoff:
                 timer.advance()        # loss: back off
 
     ``delay`` is **stable between calls to** :meth:`advance` or :meth:`reset`,
-    so arming a deadline, logging it and comparing against it all see one
-    value. A property that re-jittered on each read would be a trap for exactly
-    the code this exists for.
+    so arming a deadline, logging it and comparing against it all see one value;
+    a property that re-jittered on each read would be a trap here.
 
-    The guard rails are the ones a hand-rolled version tends to miss, and both
-    were taken from a consumer's working implementation: ``multiplier`` is
+    Two guard rails a hand-rolled version tends to miss: ``multiplier`` is
     floored at ``1.0``, so a timer can never *shrink* on loss, and ``max_delay``
     is floored at ``delay``, so a ceiling below the base cannot silently
     truncate the first wait.

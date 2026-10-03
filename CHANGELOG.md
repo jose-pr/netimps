@@ -203,6 +203,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`supports_pktinfo(family=AF_INET)`** -- whether a UDP socket of that family
+  can report each datagram's arrival interface on this host. The question a
+  server asks *before* deciding how to bind: with packet info one wildcard
+  socket serves every address and still knows which one a datagram reached,
+  while without it the wildcard must be expanded into a socket per address --
+  and on Linux that per-address socket receives no broadcasts at all.
+
+  Answered by asking a socket, not by testing a constant's name:
+  `getattr(socket, "IP_PKTINFO", None)` is `None` on CPython 3.9-3.11 on *every*
+  platform, while the kernel supported it throughout, so a name test says "no"
+  on a platform that works. Cached per family.
+
+- **An opt-in cache for the adapter enumeration**: `get_interfaces(cache=...)`,
+  and the same argument on `interface_for`, `interfaces_for` and
+  `is_local_address`, plus `clear_interface_cache()` and
+  `INTERFACE_CACHE_TTL`. `cache=False` is the default and changes nothing;
+  `cache=True` uses the 1-second default TTL; a number is that TTL. `cache=0` is
+  a TTL of zero, so it enumerates and reseeds -- the whole of "force a refresh",
+  which is why there is no second argument for it.
+
+  Measured on a 7-adapter host: `interface_for` goes **0.98 ms to 0.010 ms**
+  (97x), and `is_local_address` likewise. The uncached call reaches 35-42 ms
+  where there are many adapters, which is slow enough that a packet flood can
+  deny service on its own -- an availability problem, not only a slow one.
+
+  The default TTL is **1 second** because this cache is for collapsing a burst
+  of back-to-back calls, not for holding a snapshot: it bounds the cost at one
+  syscall per second whatever the arrival rate, ~0.1% overhead at 1000 packets
+  per second. `UdpEndpoint`'s own arrival-interface cache now uses the same
+  constant, down from a separate 30 s, so there is one number rather than two
+  that can disagree.
+
+  **Prefer an event to a TTL where you have one** -- `cache=math.inf` plus
+  `clear_interface_cache()` at the moment the answer changes is strictly better
+  than any TTL; a server has such a moment when it binds. A **cached call
+  returns fresh `Interface` objects**: `Interface` is
+  not frozen and `.ips`/`.raw` are mutable, so handing back the stored ones
+  would let one caller corrupt every later caller's view. The copy is 0.004 ms
+  against 0.969 ms to enumerate.
+
+  The uncached path still calls `get_interfaces()` with **no keyword argument**,
+  so an existing test double that takes none keeps working.
+
 - **`Backoff`** -- a retransmission **timer**: grows on loss, **resets on
   progress**. `backoff_delays` is a one-shot schedule for "retry this call a few
   times"; a long-lived session needs a current delay that advances on silence

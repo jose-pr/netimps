@@ -1,4 +1,4 @@
-"""The three findings pydhcp raised against bind() and UdpEndpoint."""
+"""Reported defects in bind() and UdpEndpoint, each pinned by a test."""
 
 import errno
 import os

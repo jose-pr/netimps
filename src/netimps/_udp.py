@@ -100,7 +100,7 @@ import time as _time
 from typing import Any, Dict, Iterable, NamedTuple, Optional, Tuple, Union, cast
 
 from ._iface_spec import InterfaceSpec
-from ._ifaddrs import Interface
+from ._ifaddrs import INTERFACE_CACHE_TTL, Interface
 from ._ip import AddressLike, IPAddress, IPv4Address, IPv6Address, _dst_argument
 from ._msg import CMSG_SPACE as _cmsg_space
 from ._msg import recvmsg as _recvmsg
@@ -452,7 +452,13 @@ class UdpEndpoint:
     #: an adapter can be renamed or re-addressed under a live server and the
     #: index alone would not reveal it; long enough that a packet burst costs one
     #: enumeration rather than one per datagram.
-    _IFACE_CACHE_TTL = 30.0
+    #:
+    #: Deliberately **the same constant** as the process-wide enumeration cache
+    #: rather than a second number, so two caches of the same fact cannot
+    #: disagree about how stale is too stale. One second bounds the cost at a
+    #: single enumeration per second whatever the arrival rate; a longer window
+    #: only widens the time a renamed adapter goes unnoticed.
+    _IFACE_CACHE_TTL = INTERFACE_CACHE_TTL
 
     def _interface_for(self, index: int) -> "Optional[Interface]":
         """Resolve an arrival index to an :class:`Interface`, with a cache.
@@ -1039,3 +1045,56 @@ class UdpEndpoint:
             self.supports_pktinfo,
             self.supports_src_pinning,
         )
+
+
+_PKTINFO_SUPPORT: "Dict[int, bool]" = {}
+
+
+def supports_pktinfo(family: int = _socket.AF_INET) -> bool:
+    """Whether a UDP socket of *family* can report each datagram's arrival
+    interface on this host.
+
+    The question a server asks **before** deciding how to bind: with packet
+    info, one wildcard socket serves every address and still knows which one a
+    datagram reached; without it the wildcard has to be expanded into a socket
+    per address, which on Linux then receives no broadcasts at all.
+
+    ::
+
+        if supports_pktinfo():
+            socks = [bind("", 67)]
+        else:
+            socks = [bind(str(a), 67) for a in addresses]
+
+    **Decided by asking a socket, not by testing a name**, which is the only
+    reliable way: ``getattr(socket, "IP_PKTINFO", None)`` is ``None`` on CPython
+    3.9-3.11 on *every* platform -- the constant arrived in 3.12 -- while the
+    kernel supported it throughout. A name test therefore reports "no" on a
+    platform that works, which silently pushes a server onto the per-address
+    path it did not need. :class:`UdpEndpoint` already used the documented
+    per-platform values rather than the constants for exactly this reason, and
+    this asks it the same way the endpoint does, on a throwaway socket.
+
+    The answer is **cached per family** for the life of the process, since it is
+    a property of the platform and the interpreter rather than of any socket.
+
+    Returns ``False`` rather than raising if a socket of that family cannot even
+    be created -- a v6 answer on a host with IPv6 disabled is "no", not an
+    error.
+    """
+    cached = _PKTINFO_SUPPORT.get(family)
+    if cached is not None:
+        return cached
+
+    try:
+        probe = _socket.socket(family, _socket.SOCK_DGRAM)
+    except OSError:
+        # No socket of this family at all, so nothing to report an arrival on.
+        _PKTINFO_SUPPORT[family] = False
+        return False
+    try:
+        answer = bool(UdpEndpoint(probe).supports_pktinfo)
+    finally:
+        probe.close()
+    _PKTINFO_SUPPORT[family] = answer
+    return answer

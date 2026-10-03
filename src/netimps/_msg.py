@@ -205,7 +205,7 @@ _WIN_PKTINFO_V4 = "=4sI"
 _POSIX_PKTINFO_V4 = "=I4s4s"
 
 #: ``IP_PKTINFO`` as this platform spells it. 19 on Windows, 8 on Linux, 26 on
-#: macOS -- so a consumer comparing against ``socket.IP_PKTINFO`` matches the
+#: macOS -- so a caller comparing against ``socket.IP_PKTINFO`` matches the
 #: local number, which is why the *type* is left alone while the payload is
 #: reshaped.
 _LOCAL_IP_PKTINFO = getattr(_socket, "IP_PKTINFO", 19 if _IS_WINDOWS else None)
@@ -244,7 +244,7 @@ def _to_posix_shape(
       it the broadcast address would silently corrupt exactly the field it
       wanted. Zero is visibly wrong; ``255.255.255.255`` is not.
 
-    So a consumer reading ``ipi_addr`` (field 3) gets the right answer, and one
+    So a caller reading ``ipi_addr`` (field 3) gets the right answer, and one
     reading ``ipi_spec_dst`` (field 2) gets ``0.0.0.0`` -- the same answer it
     already gets on macOS today. Neither silently misreads a different address,
     and neither raises ``struct.error`` on an 8-byte buffer any more.
