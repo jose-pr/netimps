@@ -769,6 +769,16 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
   > calls rather than to hold a snapshot, bounding the cost at one syscall per
   > second whatever the arrival rate.
 
+  **`interface_enumerations() -> int`** counts the real enumerations this
+  process has done — the syscall, never a cached hit, which is the number worth
+  watching once a lookup and an enumeration stop being the same event. Useful
+  as a metric (how often is this host re-reading its adapters?) and as the
+  assertion a test wants: `before = interface_enumerations()`, do the work,
+  expect `+1`. Both `raw` flags count into the one total, and the cache is keyed
+  by `raw`, so a process using both warms up twice.
+  `clear_interface_cache()` does not advance it — dropping a cache enumerates
+  nothing by itself.
+
   A **cached call returns fresh `Interface` objects**, not the stored ones.
   `Interface` is not frozen and both `.ips` (a list) and `.raw` (a dict) are
   mutable, so handing back the stored objects would let one caller's

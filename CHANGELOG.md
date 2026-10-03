@@ -203,6 +203,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`interface_enumerations() -> int`** -- how many times this process has
+  really enumerated its adapters. Counts the syscall and never a cached hit,
+  which is the number that matters once `cache=` makes a lookup and an
+  enumeration different events: the enumeration is the one a packet flood
+  multiplies. Worth exporting as a metric, and it is the assertion a test
+  wants -- read it, do the work, expect `+1`. Both `raw` flags count into one
+  total, and the cache is keyed by `raw`, so a process using both warms up
+  twice. `clear_interface_cache()` does not advance it.
+
+  Without it, a test checking the property `cache=` exists for had to
+  monkeypatch a private name -- including this package's own tests, which now
+  use the counter instead.
+
 - **`is_broadcast(address, interface=None, *, cache=False)`** -- the one
   per-packet entry point the enumeration cache had left out. Without an
   `interface` it consults every adapter's prefixes, since `10.0.0.255` is only a

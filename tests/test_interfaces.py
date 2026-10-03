@@ -622,19 +622,24 @@ def _clean_interface_cache():
     netimps.clear_interface_cache()
 
 
+class _Enumerations:
+    """How many real enumerations happen inside the block, via the public API.
+
+    Deliberately not a monkeypatch of the private `_enumerate_interfaces`: that
+    is what `interface_enumerations()` exists to replace, and a test coupled to
+    an internal cannot notice when the public counter stops working.
+    """
+
+    def __init__(self):
+        self._before = netimps.interface_enumerations()
+
+    def __len__(self):
+        return netimps.interface_enumerations() - self._before
+
+
 def _counting_enumerator(monkeypatch):
-    """Count how often the real enumeration runs."""
-    from netimps import _ifaddrs
-
-    calls = []
-    real = _ifaddrs._enumerate_interfaces
-
-    def counted(raw):
-        calls.append(raw)
-        return real(raw)
-
-    monkeypatch.setattr(_ifaddrs, "_enumerate_interfaces", counted)
-    return calls
+    """Count real enumerations from here on. `monkeypatch` is unused now."""
+    return _Enumerations()
 
 
 def test_the_default_does_not_cache_at_all(monkeypatch):
@@ -756,7 +761,7 @@ def test_raw_is_cached_separately(monkeypatch):
     calls = _counting_enumerator(monkeypatch)
     netimps.get_interfaces(cache=True)
     netimps.get_interfaces(raw=True, cache=True)
-    assert calls == [False, True]
+    assert len(calls) == 2, "raw and non-raw must be cached separately"
     plain = netimps.get_interfaces(cache=True)
     raw = netimps.get_interfaces(raw=True, cache=True)
     assert len(calls) == 2
@@ -908,14 +913,14 @@ def test_is_broadcast_with_an_interface_never_enumerates(monkeypatch):
         pytest.skip("no loopback interface resolved")
     calls = _counting_enumerator(monkeypatch)
     netimps.is_broadcast(netimps.parse("10.9.9.255"), iface)
-    assert calls == []
+    assert len(calls) == 0
 
 
 def test_the_limited_broadcast_short_circuits_before_any_enumeration(monkeypatch):
     """`255.255.255.255` needs no context, so it must not pay for one."""
     calls = _counting_enumerator(monkeypatch)
     assert netimps.is_broadcast("255.255.255.255") is True
-    assert calls == []
+    assert len(calls) == 0
 
 
 def test_reply_socket_does_not_enumerate_per_datagram(monkeypatch):
@@ -940,3 +945,65 @@ def test_reply_socket_does_not_enumerate_per_datagram(monkeypatch):
         for _ in range(5):
             endpoint.reply_socket(datagram).close()
     assert len(calls) <= 1, "enumerated more than once across five replies"
+
+
+def test_interface_enumerations_counts_syscalls_not_lookups():
+    """The property `cache=` exists for, made observable.
+
+    With a cache, a lookup and an enumeration stop being the same event, and the
+    enumeration is the one a packet flood multiplies -- so that is what this
+    counts. Twenty cached lookups must cost exactly one.
+    """
+    netimps.clear_interface_cache()
+    before = netimps.interface_enumerations()
+    for _ in range(20):
+        netimps.interface_for("127.0.0.1", cache=math.inf)
+    assert netimps.interface_enumerations() - before == 1
+
+
+def test_interface_enumerations_ignores_an_uncached_cache_drop():
+    """Dropping a cache enumerates nothing by itself; the next call pays."""
+    netimps.get_interfaces(cache=True)
+    before = netimps.interface_enumerations()
+    netimps.clear_interface_cache()
+    assert netimps.interface_enumerations() == before
+    netimps.get_interfaces(cache=True)
+    assert netimps.interface_enumerations() == before + 1
+
+
+@pytest.mark.parametrize(
+    "call, expected",
+    [
+        (lambda: netimps.get_interfaces(), 1),
+        (lambda: netimps.get_interfaces(cache=0), 1),
+        (lambda: netimps.is_broadcast(netimps.parse("10.9.9.255")), 1),
+        (lambda: netimps.is_broadcast("255.255.255.255"), 0),
+        (lambda: netimps.clear_interface_cache(), 0),
+    ],
+    ids=["uncached", "cache=0", "is_broadcast", "limited-broadcast", "clear"],
+)
+def test_interface_enumerations_per_call(call, expected):
+    before = netimps.interface_enumerations()
+    call()
+    assert netimps.interface_enumerations() - before == expected
+
+
+def test_interface_enumerations_counts_both_raw_flags_into_one_total():
+    """The cache is keyed by `raw`, so a process using both warms up twice --
+    documented, because a caller reasoning about cost needs to know."""
+    netimps.clear_interface_cache()
+    before = netimps.interface_enumerations()
+    netimps.get_interfaces(cache=True)
+    netimps.get_interfaces(raw=True, cache=True)
+    assert netimps.interface_enumerations() - before == 2
+    netimps.get_interfaces(cache=True)
+    netimps.get_interfaces(raw=True, cache=True)
+    assert netimps.interface_enumerations() - before == 2
+
+
+def test_interface_enumerations_only_increases():
+    before = netimps.interface_enumerations()
+    netimps.get_interfaces()
+    netimps.clear_interface_cache()
+    netimps.get_interfaces(cache=True)
+    assert netimps.interface_enumerations() >= before + 2

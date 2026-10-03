@@ -83,6 +83,7 @@ __all__ = [
     "iter_addresses",
     "is_broadcast",
     "clear_interface_cache",
+    "interface_enumerations",
     "INTERFACE_CACHE_TTL",
 ]
 
@@ -898,7 +899,45 @@ def clear_interface_cache() -> None:
         _INTERFACE_CACHE.clear()
 
 
+_ENUMERATIONS = 0
+
+
+def interface_enumerations() -> int:
+    """How many times this process has really enumerated its adapters.
+
+    Monotonic, and counts only the **syscall**, never a cached hit -- which is
+    the point: with ``cache=`` a lookup and an enumeration stop being the same
+    event, and the enumeration is the one a packet flood multiplies. A test
+    reads it either side of the code under test::
+
+        before = interface_enumerations()
+        for _ in range(20):
+            interface_for(address, cache=True)
+        assert interface_enumerations() - before == 1
+
+    It is also worth exporting as a metric: how often a long-running server
+    re-reads its adapters answers whether its cache is sized right.
+
+    Both ``raw=True`` and ``raw=False`` count into this one total. The cache is
+    keyed by ``raw``, so a process using both pays two enumerations to warm up
+    and will see this advance twice.
+
+    :func:`clear_interface_cache` does not advance it -- dropping a cache
+    enumerates nothing by itself; the next cached call is what pays.
+    """
+    return _ENUMERATIONS
+
+
 def _enumerate_interfaces(raw: bool) -> "List[Interface]":
+    global _ENUMERATIONS
+
+    # Counted under the cache lock rather than bare, because `+= 1` on an int is
+    # not atomic and this is the one number a caller may be asserting on. The
+    # lock is held for the increment only, never across the syscall below, which
+    # would serialise every thread behind the slowest platform call.
+    with _CACHE_LOCK:
+        _ENUMERATIONS += 1
+
     try:
         if _IS_WINDOWS:
             return _windows_interfaces(raw)

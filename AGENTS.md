@@ -112,7 +112,7 @@ map:
 | `parse`, `try_parse`, `is_valid` | build a type from a value (raising / `None` / `bool`) |
 | `MACAddress` | parse / classify / render MAC addresses |
 | `get_interfaces`, `Interface`, `iter_addresses` | native cross-platform NIC discovery; `cache=`/`clear_interface_cache` make a per-packet lookup affordable (97x measured) |
-| `clear_interface_cache`, `INTERFACE_CACHE_TTL` | invalidate the shared enumeration cache, and its default 1 s TTL |
+| `clear_interface_cache`, `INTERFACE_CACHE_TTL`, `interface_enumerations` | invalidate the shared enumeration cache, its default 1 s TTL, and a count of the enumerations actually performed |
 | `is_broadcast` | is this an IPv4 broadcast, limited or subnet (needs interface prefixes) |
 | `get_ip`, `is_link_scoped` | address resolution and scope classification |
 | `collapse`, `subtract` | CIDR set maths |
