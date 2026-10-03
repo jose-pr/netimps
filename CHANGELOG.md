@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.3.4] - 2026-10-03
+
 ### Fixed
 
 - **`Interface.primary_ip()` preferred a link-local address over a routable
@@ -1282,7 +1286,8 @@ below is simply what the package contains.
 - **`Host`**, **`retry()`/`backoff_delays()`**, and the named networks `APIPA`,
   `LOOPBACK_V4`, `LOOPBACK_V6`, `LINK_LOCAL_V6`.
 
-[Unreleased]: https://github.com/jose-pr/netimps/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/jose-pr/netimps/compare/v0.3.4...HEAD
+[0.3.4]: https://github.com/jose-pr/netimps/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/jose-pr/netimps/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/jose-pr/netimps/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/jose-pr/netimps/compare/v0.3.0...v0.3.1
