@@ -172,6 +172,7 @@ __all__ = [
     "patch_socket_module",
     "socket_patched",
     "retry",
+    "Backoff",
     "backoff_delays",
     # Scanning.
     "scan_ports",
@@ -517,7 +518,7 @@ from ._multicast import (  # noqa: E402
     multicast_socket,
 )
 from ._fqdn import Fqdn, FqdnLike  # noqa: E402
-from ._retry import backoff_delays, retry  # noqa: E402
+from ._retry import Backoff, backoff_delays, retry  # noqa: E402
 from ._msg import (  # noqa: E402
     CMSG_LEN,
     CMSG_SPACE,

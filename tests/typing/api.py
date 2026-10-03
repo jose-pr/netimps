@@ -35,6 +35,7 @@ from typing import Iterator, Optional, Tuple, Union
 from typing_extensions import assert_type
 
 from netimps import (
+    Backoff,
     Datagram,
     Fqdn,
     Host,
@@ -297,3 +298,12 @@ def _reply_address_is_a_socket_address(packet: Datagram) -> None:
         packet.sender,
         Union[Tuple[str, int], Tuple[str, int, int, int]],
     )
+
+
+# `Backoff` is a stateful timer, not an iterator: `.delay` and the two mutators
+# are floats, and `.attempt` an int.
+def _backoff_is_a_timer(timer: Backoff) -> None:
+    assert_type(timer.delay, float)
+    assert_type(timer.advance(), float)
+    assert_type(timer.reset(), float)
+    assert_type(timer.attempt, int)

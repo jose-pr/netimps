@@ -1530,6 +1530,73 @@ re-raised unwrapped**, so the traceback still points at the real problem.
 - Synchronous — it blocks. For async, drive **`backoff_delays(...)`** from your
   own loop; it yields the same schedule, `attempts - 1` values.
 
+**`backoff_delays(attempts=3, delay=0.5, multiplier=2.0, max_delay=30.0, jitter=0.1, *, jitter_seconds=None, symmetric=False)`**
+
+Two **opt-in symmetric modes** sit alongside the default, because a protocol's
+own specification can require what the default forbids — it only ever *shortens*
+a delay, so neither DHCP standard can be expressed with it:
+
+- **`jitter_seconds=`** — absolute and symmetric, uniform in
+  `[-jitter_seconds, +jitter_seconds]`. **RFC 2131 §4.1** (DHCPv4) asks for the
+  delay to be "randomized by the value of a uniform random number chosen from
+  the range -1 to +1" — seconds, not a fraction. Overrides `jitter`. The
+  amplitude is capped at the current delay so the value cannot go negative
+  before clamping; uncapped, a sub-second delay would have most of its
+  distribution piled on a single clamped value, which is neither uniform nor
+  symmetric. At RFC 2131's own 4 s floor against a 1 s amplitude the cap never
+  engages.
+- **`symmetric=True`** — spreads the fractional `jitter` both ways,
+  `delay * (1 ± jitter)`. **RFC 8415 §15** (DHCPv6) specifies
+  `RT = 2*RTprev + RAND*RTprev` with `RAND` uniform in `[-0.1, +0.1]`.
+
+> **In the symmetric modes `max_delay` caps the *base*, not the final value**,
+> so a delay may exceed it by up to the jitter amplitude. Both RFCs require
+> that: RFC 8415 applies its jitter *after* the cap (`if RT > MRT: RT = MRT +
+> RAND*MRT`) and RFC 2131 randomises ±1 s around its 64 s maximum. Clamping is
+> the obvious reading and is wrong invisibly — measured, the spread *at the cap*
+> became entirely negative with a mean of −0.024 instead of ~0, because every
+> positive excursion was trimmed back. A backed-off client spends nearly all of
+> its time at the cap, so that is exactly where the symmetry has to survive.
+> **No mode ever returns a negative delay**, and the default mode's hard ceiling
+> is unchanged.
+
+**`Backoff(delay=0.5, multiplier=2.0, max_delay=30.0, jitter=0.0, *, jitter_seconds=None, symmetric=False)`**
+
+A **retransmission timer**: grows on loss, **resets on progress**. This is the
+shape `backoff_delays` cannot express, and the one every protocol client in this
+family had hand-rolled:
+
+```python
+timer = Backoff(delay=timeout, max_delay=timeout * 8)
+while not done:
+    deadline = now() + timer.delay
+    if replied:
+        timer.reset()        # progress: back to the base
+    elif timer.attempt >= retries:
+        raise TransferTimeout(...)
+    else:
+        timer.advance()      # loss: back off
+```
+
+`backoff_delays` is a one-shot schedule for "retry this call a few times"; a
+long-lived session instead needs a current delay that advances on silence and
+returns to the base the moment the peer moves the transfer forward.
+
+- **`.delay`** is **stable between `advance()`/`reset()` calls**, so arming a
+  deadline, logging it and comparing against it all see one value. A property
+  that re-jittered on each read would be a trap for exactly the code this
+  exists for.
+- **`.advance()`** backs off one step and returns the new delay; **`.reset()`**
+  returns to the base; **`.attempt`** counts advances since the last reset.
+- **Jitter is off by default here**, the opposite of `backoff_delays`. Jitter
+  desynchronises many clients retrying together, and a point-to-point session
+  retransmitting to one peer has no herd to avoid — TFTP and TCP both specify
+  plain doubling. The symmetric modes are there for the protocols that do ask.
+- Two guard rails a hand-rolled version tends to miss: `multiplier` is floored
+  at `1.0`, so the timer can never *shrink* on repeated loss, and `max_delay` is
+  floored at `delay`, so a ceiling set below the base cannot silently truncate
+  the first wait.
+
 ## Host
 
 **`Host(value)`** — a host named by either an address or a hostname.

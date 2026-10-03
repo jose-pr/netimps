@@ -134,7 +134,8 @@ map:
 | `patch_socket_module`, `socket_patched` | install/remove the default-on `socket` patch that gives Windows the stdlib method names |
 | `Host` | hostname-or-address value type; `.fqdn` narrows a name to `Fqdn` |
 | `Fqdn`, `FqdnLike` | domain name as a value type: labels, `.domain`, `.tld`, `/` prepends (**inverted from `pathlib`**), `.resolve()`/`.ping()` |
-| `retry`, `backoff_delays` | bounded retry with exponential backoff |
+| `retry`, `backoff_delays` | bounded retry with exponential backoff; `jitter_seconds=`/`symmetric=` give the symmetric jitter RFC 2131 and RFC 8415 specify |
+| `Backoff` | a retransmission **timer** — grows on loss, resets on progress; the stateful shape a one-shot schedule cannot express |
 | `APIPA`, `LOOPBACK_V4`, `LOOPBACK_V6`, `LINK_LOCAL_V6` | named networks |
 | `get_route`, `Route`, `hop_count` | routing and distance |
 | `discover_mtu`, `get_pmtu`, `get_tcp_mss` | path MTU by ICMP/UDP/TCP, the kernel's cached guess, or the negotiated MSS |

@@ -18,6 +18,7 @@ from netimps import (
     Interface,
     MACAddress,
     UdpEndpoint,
+    Backoff,
     backoff_delays,
     bind,
     interface_for,
@@ -1132,3 +1133,303 @@ def test_mac_subclass_classmethods_bind_to_the_subclass():
 def test_mac_subclass_hex_passthrough():
     """.hex() is the one bytes method a consumer may need to re-add."""
     assert _WireMAC("aa:bb:cc:dd:ee:ff").hex("-").upper() == "AA-BB-CC-DD-EE-FF"
+
+
+# --------------------------------------------------------------------------- #
+# The two symmetric jitter modes, and the stateful Backoff timer              #
+# --------------------------------------------------------------------------- #
+
+
+def _seeded(seed=42):
+    import random
+
+    return random.Random(seed).random
+
+
+def _old_schedule(attempts, delay, multiplier, max_delay, jitter, rand):
+    """Verbatim copy of the pre-change loop, to pin the default schedule."""
+    current = delay
+    for _ in range(attempts - 1):
+        capped = min(current, max_delay)
+        if jitter:
+            capped -= capped * jitter * rand()
+        yield capped
+        current *= multiplier
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        dict(attempts=5, delay=0.5, multiplier=2.0, max_delay=30.0, jitter=0.1),
+        dict(attempts=8, delay=1.0, multiplier=3.0, max_delay=10.0, jitter=0.5),
+        dict(attempts=4, delay=0.25, multiplier=2.0, max_delay=30.0, jitter=0.0),
+        dict(attempts=1, delay=1.0, multiplier=2.0, max_delay=5.0, jitter=0.1),
+    ],
+)
+def test_the_default_schedule_is_unchanged(kwargs):
+    """Adding the modes must not have moved the default by a float.
+
+    Asserted against a copy of the old loop rather than against recorded
+    numbers, so it keeps meaning something if the defaults are ever retuned --
+    and including the `jitter=0` case, which must still draw no randomness.
+    """
+    assert list(backoff_delays(_random=_seeded(), **kwargs)) == list(
+        _old_schedule(rand=_seeded(), **kwargs)
+    )
+
+
+def test_jitter_seconds_is_absolute_and_spreads_both_ways():
+    """RFC 2131 §4.1: "randomized by the value of a uniform random number
+    chosen from the range -1 to +1" -- seconds, not a fraction.
+
+    The default mode can only ever *shorten*, so a DHCPv4 client could not use
+    it and pydhcp carried its own schedule. Both signs occurring is the whole
+    assertion; a mean near zero is the second half.
+    """
+    deltas = [
+        value - 10.0
+        for value in backoff_delays(
+            attempts=401,
+            delay=10.0,
+            multiplier=1.0,
+            max_delay=1000.0,
+            jitter_seconds=1.0,
+            _random=_seeded(1),
+        )
+    ]
+    assert any(d > 0 for d in deltas), "never longer -- not symmetric"
+    assert any(d < 0 for d in deltas), "never shorter"
+    assert all(-1.0 <= d <= 1.0 for d in deltas), (min(deltas), max(deltas))
+    assert abs(sum(deltas) / len(deltas)) < 0.1
+
+
+def test_symmetric_makes_the_fractional_jitter_two_sided():
+    """RFC 8415 §15: `RT = 2*RTprev + RAND*RTprev`, RAND uniform in [-0.1, +0.1]."""
+    fractions = [
+        value / 10.0 - 1.0
+        for value in backoff_delays(
+            attempts=401,
+            delay=10.0,
+            multiplier=1.0,
+            max_delay=1000.0,
+            jitter=0.1,
+            symmetric=True,
+            _random=_seeded(3),
+        )
+    ]
+    assert any(f > 0 for f in fractions)
+    assert any(f < 0 for f in fractions)
+    assert all(-0.1 <= f <= 0.1 for f in fractions), (min(fractions), max(fractions))
+    assert abs(sum(fractions) / len(fractions)) < 0.01
+
+
+def test_a_symmetric_delay_may_exceed_max_delay_because_the_rfcs_say_so():
+    """**The one place this diverges from the default mode's contract.**
+
+    RFC 8415 applies its jitter *after* the cap -- `if RT > MRT: RT = MRT +
+    RAND*MRT` -- and RFC 2131 randomises +/-1 s around its 64 s maximum. So in
+    the symmetric modes `max_delay` caps the **base**, not the result.
+
+    Clamping instead was the obvious reading, and it is wrong in a way that is
+    invisible: measured, the spread *at the cap* became entirely negative with a
+    mean of -0.024 rather than ~0, because every positive excursion was trimmed
+    back to the ceiling. A backed-off client spends nearly all its time at the
+    cap, so that is precisely where the symmetry has to survive -- clamping
+    would silently reintroduce the synchronisation the mode is chosen to
+    prevent.
+    """
+    values = list(
+        backoff_delays(
+            attempts=200,
+            delay=64.0,
+            multiplier=2.0,
+            max_delay=64.0,
+            jitter_seconds=1.0,
+            _random=_seeded(7),
+        )
+    )
+    assert any(v > 64.0 for v in values), "clamped at the cap -- symmetry lost"
+    assert all(v <= 65.0 for v in values), max(values)
+    assert all(v >= 0.0 for v in values)
+
+
+def test_the_default_mode_still_treats_max_delay_as_a_hard_ceiling():
+    """The divergence above must not have leaked into the default."""
+    values = list(
+        backoff_delays(
+            attempts=300,
+            delay=1.0,
+            multiplier=2.0,
+            max_delay=5.0,
+            jitter=0.1,
+            _random=_seeded(11),
+        )
+    )
+    assert all(0.0 <= v <= 5.0 for v in values), (min(values), max(values))
+
+
+def test_no_mode_can_produce_a_negative_delay():
+    """A negative sleep is the failure the clamp at zero exists for."""
+    for kwargs in (
+        dict(jitter_seconds=100.0),
+        dict(jitter=1.0, symmetric=True),
+        dict(jitter=1.0),
+    ):
+        values = list(
+            backoff_delays(
+                attempts=200,
+                delay=0.05,
+                multiplier=1.0,
+                max_delay=1000.0,
+                _random=_seeded(5),
+                **kwargs,
+            )
+        )
+        assert all(v >= 0.0 for v in values), (kwargs, min(values))
+
+
+def test_an_absolute_amplitude_is_capped_at_the_delay():
+    """Otherwise a sub-second delay loses its distribution entirely.
+
+    With `delay=0.1` and a requested +/-1 s, an uncapped draw is negative about
+    45% of the time and clamping at zero would pile all of that on a single
+    value -- neither symmetric nor uniform, which is a silently wrong schedule
+    rather than a refused one. Capping the amplitude at the delay keeps it
+    both. For RFC 2131's real schedule the cap never engages: it starts at 4 s
+    against a 1 s amplitude.
+    """
+    values = list(
+        backoff_delays(
+            attempts=201,
+            delay=0.1,
+            multiplier=1.0,
+            max_delay=1000.0,
+            jitter_seconds=1.0,
+            _random=_seeded(5),
+        )
+    )
+    assert all(0.0 <= v <= 0.2 + 1e-12 for v in values), (min(values), max(values))
+    assert sum(1 for v in values if v == 0.0) == 0
+
+
+def test_jitter_seconds_must_be_non_negative():
+    with pytest.raises(ValueError, match="jitter_seconds"):
+        list(backoff_delays(jitter_seconds=-1.0))
+
+
+def test_retry_passes_the_new_modes_through():
+    """`retry` shares the schedule, so the modes have to reach it."""
+    waits = []
+    calls = []
+
+    def flaky():
+        calls.append(1)
+        raise OSError("nope")
+
+    with pytest.raises(OSError):
+        netimps.retry(
+            flaky,
+            attempts=4,
+            delay=10.0,
+            multiplier=1.0,
+            max_delay=1000.0,
+            jitter_seconds=1.0,
+            _sleep=waits.append,
+            _random=_seeded(1),
+        )
+    assert len(calls) == 4
+    assert all(9.0 <= w <= 11.0 for w in waits), waits
+
+
+# --- Backoff: the stateful timer ------------------------------------------- #
+
+
+def test_backoff_grows_on_advance_and_resets_on_progress():
+    """The shape `backoff_delays` cannot express, and which every protocol
+    client here had hand-rolled: a retransmission timer.
+
+    Taken from pytftp's working implementation -- `_rto` doubling to a ceiling
+    on loss and returning to the base the moment the peer moves the transfer
+    forward.
+    """
+    timer = Backoff(delay=1.0, multiplier=2.0, max_delay=8.0)
+    assert timer.delay == 1.0
+    assert timer.attempt == 0
+    assert [timer.advance() for _ in range(5)] == [2.0, 4.0, 8.0, 8.0, 8.0]
+    assert timer.attempt == 5
+    assert timer.reset() == 1.0
+    assert timer.attempt == 0
+    assert timer.delay == 1.0
+
+
+def test_backoff_delay_is_stable_between_advances():
+    """Arming a deadline, logging it and comparing against it must see one
+    value. A property that re-jittered per read would be a trap for exactly
+    the code this exists for.
+    """
+    timer = Backoff(delay=1.0, jitter=0.5, max_delay=30.0, _random=_seeded())
+    first = timer.delay
+    # Repeated reads must not re-draw.
+    assert [timer.delay for _ in range(10)] == [first] * 10
+    timer.advance()
+    second = timer.delay
+    assert [timer.delay for _ in range(10)] == [second] * 10
+    # And the step really moved: the base doubled, so even with jitter the new
+    # value cannot still be in the old step's range.
+    assert second > first
+
+
+def test_backoff_never_shrinks_on_loss():
+    """A multiplier below 1 would make a session retransmit *faster* the worse
+    the link got, which is always a bug. Floored at 1.0."""
+    timer = Backoff(delay=1.0, multiplier=0.5, max_delay=8.0)
+    assert [timer.delay, timer.advance(), timer.advance()] == [1.0, 1.0, 1.0]
+
+
+def test_backoff_ceiling_cannot_truncate_the_base():
+    """`max_delay` under `delay` would silently shorten the very first wait
+    below what the caller asked for, so it is floored at the base."""
+    timer = Backoff(delay=4.0, multiplier=2.0, max_delay=1.0)
+    assert timer.delay == 4.0
+    assert timer.advance() == 4.0
+
+
+def test_backoff_jitter_is_off_by_default_unlike_backoff_delays():
+    """Deliberately the opposite default.
+
+    Jitter desynchronises many clients retrying together; a point-to-point
+    session retransmitting to one peer has no herd to avoid, and TFTP and TCP
+    both specify plain doubling.
+    """
+    timer = Backoff(delay=1.0, multiplier=2.0, max_delay=100.0)
+    assert [timer.delay, timer.advance(), timer.advance()] == [1.0, 2.0, 4.0]
+
+
+def test_backoff_accepts_the_symmetric_modes_too():
+    """A DHCP client wants the timer *and* the RFC jitter."""
+    timer = Backoff(
+        delay=4.0,
+        multiplier=2.0,
+        max_delay=64.0,
+        jitter_seconds=1.0,
+        _random=_seeded(9),
+    )
+    seen = [timer.delay] + [timer.advance() for _ in range(6)]
+    for value, base in zip(seen, [4, 8, 16, 32, 64, 64, 64]):
+        assert abs(value - base) <= 1.0, (value, base)
+
+
+def test_backoff_rejects_nonsense_arguments():
+    with pytest.raises(ValueError, match="delay"):
+        Backoff(delay=-1.0)
+    with pytest.raises(ValueError, match="jitter"):
+        Backoff(jitter=2.0)
+    with pytest.raises(ValueError, match="jitter_seconds"):
+        Backoff(jitter_seconds=-0.5)
+
+
+def test_backoff_repr_is_useful_in_a_log():
+    timer = Backoff(delay=1.0, multiplier=2.0, max_delay=8.0)
+    timer.advance()
+    text = repr(timer)
+    assert "Backoff(" in text and "attempt=1" in text

@@ -203,6 +203,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`Backoff`** -- a retransmission **timer**: grows on loss, **resets on
+  progress**. `backoff_delays` is a one-shot schedule for "retry this call a few
+  times"; a long-lived session needs a current delay that advances on silence
+  and returns to the base when the peer moves the transfer forward. Every
+  protocol client in this family had written its own, so the shape is taken from
+  the one already working rather than invented.
+
+  `.delay` is **stable between `advance()`/`reset()`**, so arming a deadline,
+  logging it and comparing against it all see one value -- a property that
+  re-jittered per read would be a trap for exactly this code. Jitter is **off by
+  default**, the opposite of `backoff_delays`: a point-to-point session
+  retransmitting to one peer has no thundering herd to avoid, and TFTP and TCP
+  both specify plain doubling. Two guard rails a hand-rolled version tends to
+  miss: `multiplier` is floored at `1.0` so the timer can never *shrink* on
+  repeated loss, and `max_delay` is floored at `delay` so a ceiling below the
+  base cannot silently truncate the first wait.
+
+- **`backoff_delays(jitter_seconds=)` and `(symmetric=)`**, also on `retry` --
+  the two **symmetric** jitter shapes that protocol specifications require and
+  the default cannot express, since it only ever shortens a delay:
+
+  - `jitter_seconds=` is absolute and symmetric, uniform in
+    `[-jitter_seconds, +jitter_seconds]` -- **RFC 2131 §4.1** (DHCPv4),
+    "randomized by the value of a uniform random number chosen from the range
+    -1 to +1". The amplitude is capped at the current delay so the value cannot
+    go negative before clamping; uncapped, a sub-second delay would pile much of
+    its distribution on a single clamped value, which is neither uniform nor
+    symmetric. At RFC 2131's own 4 s floor the cap never engages.
+  - `symmetric=True` spreads the fractional `jitter` both ways -- **RFC 8415
+    §15** (DHCPv6), `RT = 2*RTprev + RAND*RTprev`.
+
+  **In these modes `max_delay` caps the base, not the final value**, so a delay
+  may exceed it by up to the amplitude. Both RFCs require it: RFC 8415 applies
+  its jitter *after* the cap (`if RT > MRT: RT = MRT + RAND*MRT`) and RFC 2131
+  randomises around its 64 s maximum. Clamping was the obvious reading -- and
+  the one the request suggested -- and it is wrong invisibly: measured, the
+  spread *at the cap* became entirely negative with a mean of -0.024 instead of
+  ~0, because every positive excursion was trimmed back. A backed-off client
+  spends nearly all its time at the cap, so clamping would reintroduce exactly
+  the synchronisation the mode is chosen to prevent. No mode returns a negative
+  delay, and **the default schedule is unchanged** -- asserted against a copy of
+  the previous implementation rather than against recorded numbers.
+
 - **`UdpEndpoint.reply_socket(datagram, port=...)` accepts an iterable of
   ports**, tried in order, for a server that pins transfer ports to a range a
   firewall can allow (`tftp-hpa -R`, `dnsmasq --tftp-port-range`). Materialised
