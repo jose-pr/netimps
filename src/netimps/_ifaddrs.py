@@ -211,13 +211,39 @@ class Interface:
         """Pick the one entry that best represents this interface, or ``None``.
 
         Answers "which of this adapter's addresses do I use?" -- the question
-        ``IP_MULTICAST_IF``, a bind target and ``ping -S`` all ask. A
-        **non-loopback** entry wins; a loopback one is returned only when that
-        is genuinely all the interface has::
+        ``IP_MULTICAST_IF``, a bind target and ``ping -S`` all ask::
 
             iface.primary_ip()               # IPv4Interface('10.0.0.5/24')
             iface.primary_ip().ip            # IPv4Address('10.0.0.5')
             iface.primary_ip(ipv6=True)      # its IPv6 entry instead
+
+        **Ranked, not first-non-loopback: routable, then loopback, then
+        link-local**, keeping the OS order within a rank. The rank matters
+        because an interface commonly lists a link-local address *before* its
+        routable one -- ``fe80::`` is configured first on Linux and macOS NICs
+        -- and "the first entry that is not loopback" therefore picked an
+        address that is useless as a bind target and unreachable off-link.
+
+        **Loopback outranks link-local deliberately**, which is not the obvious
+        order. The only interface that carries both is the loopback adapter, and
+        there ``::1`` is the address every caller means; a real NIC has no
+        loopback entry, so the rank never takes anything from it. A NIC holding
+        *only* a link-local address -- before SLAAC completes, say -- still
+        yields it, because there is nothing else to yield. With
+        ``loopback_ok=False`` the loopback rank is skipped entirely, so such a
+        caller still gets the link-local in preference to ``None``.
+
+        Measured on a macOS loopback adapter, whose entries are
+        ``127.0.0.1/8``, ``::1/128``, ``fe80::1/64``: the old rule returned
+        ``fe80::1`` for ``ipv6=True`` where ``::1`` is wanted, and
+        ``bind(interface=...)`` then failed with "Can't assign requested
+        address". On a NIC listing ``fe80::`` before a global address it
+        returned the link-local in preference to the global one.
+
+        Link-local covers ``fe80::/10`` and IPv4 ``169.254.0.0/16`` -- APIPA is
+        the same problem wearing the other family's clothes, and an interface
+        holding both an APIPA address and a DHCP lease should answer with the
+        lease.
 
         Named *primary* rather than *ip* because this is a **selection**, not
         "the" address: an interface routinely has several, and the full lists
@@ -233,11 +259,28 @@ class Interface:
         the bare address that socket options take.
         """
         candidates = self.ipv6 if ipv6 else self.ipv4
+        if not candidates:
+            return None
+
+        # Three ranks rather than a loopback test, and stable within each so the
+        # OS order still decides between two equals.
+        routable, link_local, loopback = [], [], []
         for entry in candidates:
-            if not entry.ip.is_loopback:
-                return entry
-        if candidates and loopback_ok:
-            return candidates[0]
+            if entry.ip.is_loopback:
+                loopback.append(entry)
+            elif entry.ip.is_link_local:
+                link_local.append(entry)
+            else:
+                routable.append(entry)
+
+        if routable:
+            return routable[0]
+        if loopback and loopback_ok:
+            # Before link-local: the only interface holding both is loopback
+            # itself, where `::1` is what every caller means.
+            return loopback[0]
+        if link_local:
+            return link_local[0]
         return None
 
     @property

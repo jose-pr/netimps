@@ -7,7 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **`Interface.primary_ip()` preferred a link-local address over a routable
+  one.** It returned the first entry that was not loopback, and an interface
+  commonly lists its link-local address *first* -- `fe80::` is configured before
+  SLAAC or DHCPv6 completes on Linux and macOS NICs -- so a NIC with both
+  answered with an address that is useless as a bind target and unreachable
+  off-link. The IPv4 twin was real too and is fixed by the same change: an
+  interface holding an APIPA `169.254/16` address *and* a DHCP lease answered
+  with the APIPA one.
+
+  Now ranked **routable, then loopback, then link-local**, keeping OS order
+  within a rank. Loopback outranks link-local deliberately: the only interface
+  carrying both is the loopback adapter, where `::1` is what every caller means,
+  and a real NIC has no loopback entry so the rank takes nothing from it. A NIC
+  holding only a link-local address still yields it, and `loopback_ok=False`
+  skips the loopback rank rather than returning `None`.
+
+  Measured on a macOS loopback adapter (`127.0.0.1/8`, `::1/128`, `fe80::1/64`):
+  `primary_ip(ipv6=True)` returned `fe80::1`, and `bind(interface=...,
+  family=AF_INET6)` then failed with "Can't assign requested address".
+
+- **`bind(interface=...)` dropped the scope of a link-local address.** The same
+  `fe80::` address can exist on several adapters, so the kernel cannot tell
+  which is meant: BSD refuses the bare form outright, while Windows and Linux
+  accept it, which is why this surfaced only on macOS. The interface's index is
+  now passed as the scope id, the rule `UdpEndpoint.reply_socket` already
+  applied to a link-local destination.
+
+  **This half is unverified outside BSD by nature** -- Windows resolves the zone
+  itself from an unambiguous link-local address, reporting the same `scope_id`
+  with or without it, so no local test can distinguish the fix. The CI macOS
+  jobs are the check.
+
 
 ## [0.3.3] - 2026-10-03
 

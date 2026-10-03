@@ -1007,3 +1007,138 @@ def test_interface_enumerations_only_increases():
     netimps.clear_interface_cache()
     netimps.get_interfaces(cache=True)
     assert netimps.interface_enumerations() >= before + 2
+
+
+# --------------------------------------------------------------------------- #
+# primary_ip ranking, and the scope a link-local bind needs                   #
+# --------------------------------------------------------------------------- #
+
+
+def _iface(name, index, *addresses):
+    return netimps.Interface(
+        name=name,
+        index=index,
+        mac=None,
+        ips=[ipaddress.ip_interface(a) for a in addresses],
+        mtu=1500,
+    )
+
+
+def test_primary_ip_prefers_a_routable_address_over_link_local():
+    """The defect, and it is platform-independent.
+
+    An interface commonly lists its link-local address **first** -- `fe80::` is
+    configured before SLAAC or DHCPv6 finishes on Linux and macOS NICs -- and
+    the old rule was "the first entry that is not loopback". That returned an
+    address which is useless as a bind target and unreachable off-link, in
+    preference to the global address sitting right behind it.
+    """
+    nic = _iface("eth0", 2, "fe80::dead:beef/64", "2001:db8::5/64", "10.0.0.5/24")
+    assert str(nic.primary_ip(ipv6=True).ip) == "2001:db8::5"
+
+
+def test_primary_ip_prefers_loopback_over_link_local():
+    """`::1` is what a caller means by the loopback adapter.
+
+    Measured on a macOS loopback adapter, whose entries are `127.0.0.1/8`,
+    `::1/128`, `fe80::1/64`: the old rule picked `fe80::1`, and
+    `bind(interface=...)` then failed with "Can't assign requested address".
+
+    This is deliberately **not** the ranking the report proposed (global, then
+    link-local, then loopback) -- that order returns `fe80::1` here too, so it
+    would not have fixed the failure it was reported for. The only interface
+    carrying both a loopback and a link-local address is loopback itself, so
+    ranking loopback higher takes nothing from a real NIC.
+    """
+    lo0 = _iface("lo0", 1, "127.0.0.1/8", "::1/128", "fe80::1/64")
+    assert str(lo0.primary_ip(ipv6=True).ip) == "::1"
+    assert str(lo0.primary_ip().ip) == "127.0.0.1"
+
+
+def test_primary_ip_still_yields_link_local_when_that_is_all_there_is():
+    """A NIC before SLAAC completes has nothing else to offer."""
+    nic = _iface("eth0", 2, "fe80::1234/64")
+    assert str(nic.primary_ip(ipv6=True).ip) == "fe80::1234"
+
+
+def test_primary_ip_skips_the_loopback_rank_when_loopback_is_not_ok():
+    """`loopback_ok=False` asks for something bindable off-host, so a
+    link-local address beats `None`."""
+    lo0 = _iface("lo0", 1, "::1/128", "fe80::1/64")
+    assert str(lo0.primary_ip(ipv6=True, loopback_ok=False).ip) == "fe80::1"
+    only_loopback = _iface("lo0", 1, "::1/128")
+    assert only_loopback.primary_ip(ipv6=True, loopback_ok=False) is None
+
+
+def test_primary_ip_keeps_os_order_within_a_rank():
+    """Ranking must not reorder two addresses of equal standing."""
+    nic = _iface("eth0", 2, "2001:db8::1/64", "2001:db8::2/64")
+    assert str(nic.primary_ip(ipv6=True).ip) == "2001:db8::1"
+
+
+def test_primary_ip_treats_apipa_as_link_local_for_v4():
+    """169.254/16 is the same problem wearing the other family's clothes: an
+    interface holding both an APIPA address and a lease must answer with the
+    lease."""
+    nic = _iface("eth0", 2, "169.254.9.9/16", "10.0.0.5/24")
+    assert str(nic.primary_ip().ip) == "10.0.0.5"
+
+
+def test_primary_ip_is_none_for_an_interface_with_no_addresses():
+    assert _iface("eth0", 2).primary_ip() is None
+    assert _iface("eth0", 2).primary_ip(ipv6=True) is None
+
+
+def test_bind_scopes_a_link_local_interface_address():
+    """A link-local bind needs its zone or the kernel cannot know which adapter.
+
+    **This assertion is only load-bearing on BSD.** Measured: Windows resolves
+    the scope itself from an unambiguous link-local address, reporting
+    `scope_id` correctly with or without the zone in the address string, so this
+    test passes here either way. macOS refuses the bare form outright with
+    "Can't assign requested address", which is where the fix earns its keep.
+    """
+    candidates = [
+        iface
+        for iface in netimps.get_interfaces()
+        for entries in [[getattr(e, "ip", e) for e in iface.ips]]
+        if iface.index
+        and any(a.version == 6 and a.is_link_local for a in entries)
+        and not any(a.version == 6 and not a.is_link_local for a in entries)
+    ]
+    if not candidates:
+        pytest.skip("no link-local-only IPv6 adapter on this host")
+
+    iface = candidates[0]
+    sock = netimps.bind("", 0, family=socket.AF_INET6, interface=iface)
+    try:
+        name = sock.getsockname()
+        assert ipaddress.ip_address(name[0].split("%")[0]).is_link_local
+        assert name[3] == iface.index, (name, iface.index)
+    finally:
+        sock.close()
+
+
+def test_bind_does_not_scope_a_routable_interface_address():
+    """Only a link-local address takes a zone; adding one elsewhere would be a
+    different bug."""
+    candidates = [
+        iface
+        for iface in netimps.get_interfaces()
+        for entries in [[getattr(e, "ip", e) for e in iface.ips]]
+        if any(
+            a.version == 6 and not a.is_link_local and not a.is_loopback
+            for a in entries
+        )
+    ]
+    if not candidates:
+        pytest.skip("no routable IPv6 address on this host")
+    iface = candidates[0]
+    try:
+        sock = netimps.bind("", 0, family=socket.AF_INET6, interface=iface)
+    except OSError:
+        pytest.skip("the routable address is not bindable here")
+    try:
+        assert sock.getsockname()[3] == 0
+    finally:
+        sock.close()

@@ -29,6 +29,7 @@ import time as _time
 
 from ._iface_spec import InterfaceSpec, interface_address as _interface_address
 from ._iface_spec import _without_zone
+from ._iface_spec import interface_index as _interface_index
 from ._ifaddrs import Interface
 from ._ip import (
     AddressLike,
@@ -269,6 +270,18 @@ def bind(
         if resolved is None:
             raise ValueError("cannot resolve interface %r to an address" % (interface,))
         address = str(resolved)
+        if getattr(resolved, "version", None) == 6 and resolved.is_link_local:
+            # A link-local bind needs its zone, or the kernel has no way to know
+            # which adapter is meant -- the same address can exist on several,
+            # and BSD refuses the bare form outright with "Can't assign
+            # requested address". Windows and Linux happen to accept it, which
+            # is why this surfaced only on macOS. `%zone` in the address string
+            # is how a `sockaddr_in6` scope is spelled for `bind`, the same form
+            # `UdpEndpoint.reply_socket` already uses for a link-local
+            # destination.
+            zone = _interface_index(interface, strict=False)
+            if zone and "%" not in address:
+                address = "%s%%%d" % (address, int(zone))
 
     sock = _socket.socket(family, kind)
     try:

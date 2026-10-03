@@ -213,7 +213,7 @@ is deliberately not used.
 | `.ipv4` / `.ipv6` | the split views |
 | `.mtu` | link MTU in bytes, or `None` |
 | `.loopback` | the **kernel's** loopback flag, or `None` when it was not reported |
-| `.primary_ip(ipv6=False, loopback_ok=True)` | pick **one** entry from `.ips` (non-loopback preferred), or `None` |
+| `.primary_ip(ipv6=False, loopback_ok=True)` | pick **one** entry from `.ips`, ranked routable → loopback → link-local, or `None` |
 | `.is_loopback` | `.loopback` when known, otherwise derived from the addresses |
 | `.raw` | `None` unless `raw=True`; platform-specific leftovers |
 
@@ -240,6 +240,18 @@ is deliberately not used.
   has several. It returns the **same element type as `.ips`** (an
   `ip_interface`, carrying the prefix) and the result *is* one of them; use
   `.ip` for the bare address that socket options take.
+- **`primary_ip()` ranks: routable, then loopback, then link-local**, keeping OS
+  order within a rank. The rank is the point — an interface commonly lists its
+  link-local address *first*, since `fe80::` is configured before SLAAC or
+  DHCPv6 completes on Linux and macOS NICs, so "the first entry that is not
+  loopback" returned an address useless as a bind target and unreachable
+  off-link. APIPA `169.254/16` is the IPv4 twin and ranks below a DHCP lease.
+
+  **Loopback outranks link-local deliberately**: the only interface carrying
+  both is the loopback adapter, where `::1` is what every caller means, and a
+  real NIC has no loopback entry so the rank takes nothing from it. A NIC
+  holding *only* a link-local address still yields it, and `loopback_ok=False`
+  skips the loopback rank rather than returning `None`.
 - `__eq__` compares name, index, MAC, addresses and MTU, and the hash covers
   exactly those; `.loopback` and `.raw` are deliberately outside both.
 
@@ -741,6 +753,14 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
   and not a bug. The silent partial grant is the failure mode, hence the return
   value. Only ever grows, so it cannot undo earlier tuning; `None` skips a
   direction, and both `None` is a pure query.
+
+  > **A link-local `interface=` address is bound with its zone.** The same
+  > `fe80::` address can exist on several adapters, so the kernel cannot tell
+  > which is meant from the address alone: BSD refuses the bare form with
+  > "Can't assign requested address", while Windows and Linux happen to accept
+  > it — which is why this only ever failed on macOS. The interface's index goes
+  > in as the scope id, the same rule `UdpEndpoint.reply_socket` applies to a
+  > link-local destination.
 
 - **`bind_error_hint(exc, port=None) -> str | None`** — an actionable sentence
   for a bind failure, recognising POSIX errnos *and* Windows `10013`/`10048`.
