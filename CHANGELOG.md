@@ -33,17 +33,29 @@ Nothing yet.
   `primary_ip(ipv6=True)` returned `fe80::1`, and `bind(interface=...,
   family=AF_INET6)` then failed with "Can't assign requested address".
 
-- **`bind(interface=...)` dropped the scope of a link-local address.** The same
-  `fe80::` address can exist on several adapters, so the kernel cannot tell
-  which is meant: BSD refuses the bare form outright, while Windows and Linux
-  accept it, which is why this surfaced only on macOS. The interface's index is
-  now passed as the scope id, the rule `UdpEndpoint.reply_socket` already
-  applied to a link-local destination.
+- **`bind(interface=...)` dropped the scope of a link-local address**, and a
+  link-local bind then failed on **every POSIX platform** -- not only macOS, as
+  first reported. The same `fe80::` address can exist on several adapters, so
+  the kernel cannot tell which is meant. Measured on Linux against a real NIC:
 
-  **This half is unverified outside BSD by nature** -- Windows resolves the zone
-  itself from an unambiguous link-local address, reporting the same `scope_id`
-  with or without it, so no local test can distinguish the fix. The CI macOS
-  jobs are the check.
+  | spelling | result |
+  | --- | --- |
+  | `bind(("fe80::1", 0))` | `EINVAL` |
+  | `bind(("fe80::1%2", 0))` | `EINVAL` |
+  | `bind(("fe80::1%eth0", 0))` | `EINVAL` |
+  | `bind(("fe80::1", 0, 0, 2))` | **ok** |
+
+  So **the zone has to become the sockaddr's numeric scope id; it cannot stay in
+  the address string.** `bind()` now converts a `%zone` suffix -- name or index
+  -- into the 4-tuple form, which also means a caller writing
+  `bind("fe80::1%eth0", ...)` by hand gets a working bind for the first time.
+
+  Windows accepts all four spellings, which is why a Windows-only measurement
+  says nothing about this and why the first attempt at the fix -- putting
+  `%index` in the string, copying what `UdpEndpoint.reply_socket` does -- passed
+  locally and broke all six Linux CI jobs and both macOS jobs. `reply_socket`'s
+  own link-local path went through the same string form and is fixed by the same
+  change, since both now bind through one helper.
 
 
 ## [0.3.3] - 2026-10-03

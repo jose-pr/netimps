@@ -271,14 +271,13 @@ def bind(
             raise ValueError("cannot resolve interface %r to an address" % (interface,))
         address = str(resolved)
         if getattr(resolved, "version", None) == 6 and resolved.is_link_local:
-            # A link-local bind needs its zone, or the kernel has no way to know
-            # which adapter is meant -- the same address can exist on several,
-            # and BSD refuses the bare form outright with "Can't assign
-            # requested address". Windows and Linux happen to accept it, which
-            # is why this surfaced only on macOS. `%zone` in the address string
-            # is how a `sockaddr_in6` scope is spelled for `bind`, the same form
-            # `UdpEndpoint.reply_socket` already uses for a link-local
-            # destination.
+            # A link-local bind needs its zone: the same address can exist on
+            # several adapters, so the kernel cannot tell which is meant.
+            # Measured, POSIX refuses the bare form outright -- EINVAL on Linux,
+            # "Can't assign requested address" on macOS -- while Windows accepts
+            # it. The zone is attached here as `%index` and turned into the
+            # sockaddr's numeric scope id by `_sockaddr_for_bind`, which is the
+            # only spelling POSIX accepts.
             zone = _interface_index(interface, strict=False)
             if zone and "%" not in address:
                 address = "%s%%%d" % (address, int(zone))
@@ -356,7 +355,7 @@ def bind(
             sock.setsockopt(level, name, value)
 
         try:
-            sock.bind((address, port))
+            sock.bind(_sockaddr_for_bind(family, address, port))
         except OSError as exc:
             raise _as_in_use(exc, port) from exc
         if listen is not None and kind == _socket.SOCK_STREAM:
@@ -394,6 +393,47 @@ def _as_in_use(exc: "OSError", port: "Optional[int]") -> "OSError":
         except AttributeError:  # pragma: no cover - read-only on some builds
             pass
     return error
+
+
+def _sockaddr_for_bind(family: int, address: str, port: int) -> "Any":
+    """The ``bind`` argument for *address*, carrying an IPv6 zone correctly.
+
+    **A ``%zone`` suffix has to become the sockaddr's numeric scope id; it
+    cannot stay in the string.** Measured on Linux (kernel 6.x, CPython 3.13)
+    against a real NIC's ``fe80::`` address, binding each spelling:
+
+    ======================================  =========================
+    ``bind(("fe80::1%2", 0))``              ``OSError`` EINVAL
+    ``bind(("fe80::1%eth0", 0))``           ``OSError`` EINVAL
+    ``bind(("fe80::1", 0))``                ``OSError`` EINVAL
+    ``bind(("fe80::1", 0, 0, 2))``          **ok**
+    ======================================  =========================
+
+    So the 4-tuple is the only form that works, and the bare form fails too --
+    a link-local bind needs its zone on POSIX whatever the adapter. Windows
+    accepts every one of these, which is exactly why a Windows-only measurement
+    says nothing here.
+
+    The zone may be a name or an index, since both spellings reach this from
+    ``getsockname`` and from a caller writing the natural form.
+    """
+    if family != _socket.AF_INET6 or "%" not in address:
+        return (address, port)
+
+    host, _, zone = address.partition("%")
+    scope = 0
+    if zone.isdigit():
+        scope = int(zone)
+    else:
+        try:
+            scope = _socket.if_nametoindex(zone)
+        except (OSError, AttributeError, ValueError):
+            scope = 0
+    if not scope:
+        # An unresolvable zone is better bound bare than silently bound to
+        # "the kernel's choice", which scope id 0 means.
+        return (host, port)
+    return (host, port, 0, scope)
 
 
 def bind_error_hint(

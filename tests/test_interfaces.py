@@ -1092,11 +1092,14 @@ def test_primary_ip_is_none_for_an_interface_with_no_addresses():
 def test_bind_scopes_a_link_local_interface_address():
     """A link-local bind needs its zone or the kernel cannot know which adapter.
 
-    **This assertion is only load-bearing on BSD.** Measured: Windows resolves
-    the scope itself from an unambiguous link-local address, reporting
-    `scope_id` correctly with or without the zone in the address string, so this
-    test passes here either way. macOS refuses the bare form outright with
-    "Can't assign requested address", which is where the fix earns its keep.
+    **Load-bearing on every POSIX platform, and it fails without the fix.**
+    Measured on Linux against a real NIC: the bare form, `%index` in the string
+    and `%name` in the string all raise `EINVAL`, and only the 4-tuple scope id
+    binds. macOS reports the same refusal as "Can't assign requested address".
+
+    Windows is the outlier that makes a local-only run misleading: it resolves
+    the scope itself from an unambiguous link-local address and reports the same
+    `scope_id` either way, so this test passes there with or without the fix.
     """
     candidates = [
         iface
