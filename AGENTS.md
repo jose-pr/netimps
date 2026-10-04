@@ -134,7 +134,7 @@ map:
 | `UDPEndpoint.arecv`, `.datagrams` | `recv` awaited / `async for`; pktinfo survives even on the Windows Proactor loop |
 | `recvmsg`, `sendmsg`, `CMSG_LEN`, `CMSG_SPACE`, `has_recvmsg` | ancillary-data messaging on **every** platform, Windows included (via `WSARecvMsg`/`WSASendMsg`) |
 | `patch_socket_module`, `is_socket_patched` | install/remove the default-on `socket` patch that gives Windows the stdlib method names |
-| `Host` | hostname-or-address value type; `.fqdn` narrows a name to `FQDN` |
+| `Host` | hostname-or-address value type; `.fqdn()` narrows a name to `FQDN` |
 | `FQDN`, `FQDNLike` | domain name as a value type: labels, `.domain`, `.tld`, `/` prepends (**inverted from `pathlib`**), `.resolve()`/`.ping()` |
 | `retry`, `backoff_delays` | bounded retry with exponential backoff; `jitter_seconds=`/`symmetric=` give the symmetric jitter RFC 2131 and RFC 8415 specify |
 | `Backoff` | a retransmission **timer** — grows on loss, resets on progress; the stateful shape a one-shot schedule cannot express |

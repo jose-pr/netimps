@@ -449,6 +449,13 @@ Pass an explicit `rdtype` to opt out -- `rdtype="a"` on an address still
 attempts a literal (and empty) A lookup rather than being silently
 overridden.
 
+`rdtype=("a", "aaaa")` asks for **both address families at once**. The OS
+resolver answers with one `getaddrinfo` call, in the order it chose; every
+other backend is asked for `"a"` then `"aaaa"` and the answers are joined, and
+a backend that could not ask for one of the two fails the attempt unless the
+other answered. Only address types, each once, are accepted (`ValueError`
+otherwise). `Host.ip()` is built on it.
+
 Backends are tried in order, default `["dnspython", "wire", "system", "nslookup"]`:
 dnspython first (structured records, every `rdtype`, explicit `ns=`/`search=`
 control), then `wire` -- the standard-library DNS client, **only for an
@@ -1148,7 +1155,7 @@ ordered. Built from a dotted string or from separate labels, **leftmost first**:
 - **An address literal is refused**: `FQDN("10.0.0.1")` and `FQDN("::1")` raise
   `ValueError`. This is a *name* algebra — labels, a parent domain, a TLD are
   things an IP does not have. Use **`Host`** for a value that may be either, and
-  **`Host.fqdn`** to narrow (an `FQDN`, or `None` when it is an address).
+  **`Host.fqdn()`** to narrow (an `FQDN`, or the name an address reverses to).
   Digit-heavy real names are fine: `4.3.2.1.in-addr.arpa` and `0.pool.ntp.org`
   both parse.
 - **`.domain` is not the registrable domain.** `FQDN("example.com").domain` is
@@ -1232,12 +1239,17 @@ ordered. Built from a dotted string or from separate labels, **leftmost first**:
   `MACAddress`'s: `FQDN.parse(text)` raises `NetimpsValueError` for bad text and
   `TypeError` for a non-`str`; `FQDN.try_parse(text, default=None)` answers
   `default` for bad text only.
-- **Network helpers are pass-throughs, not new behaviour**: `.resolve(**kw)` →
-  `resolve()`, `.ping(**kw)` → `ping()`, `.ip(**kw)` → the first address or
-  `None`. A trailing dot survives the delegation, so a fully-qualified name
-  still bypasses the search list. Unlike `Host.ip()`, `.ip()` does **not**
-  cache: this type is immutable, and a cache on it would be a lie about
-  freshness.
+- **Network methods are named as actions and can block.**
+  **`.resolve(*, check=False, ipv6=None, ns=None, timeout=5.0, port=53,
+  tcp=False, search=True, backends=None, source=None) -> (FQDN, IPAddress | None)`**
+  answers `(self, ip)`, the same pair `Host.resolve()` gives, so the two types
+  interchangeable as `HostLike` answer `.resolve()` alike; `.ip(...)` with the
+  same options is the second element. `.ping(**kw)` → `ping()`. DNS records of
+  any type come from `resolve(name, rdtype)`, not from here. The options are
+  documented under `Host.ip()`; a trailing dot survives the delegation, so a
+  fully-qualified name still bypasses the search list. Unlike `Host.ip()`,
+  nothing is memoised: this type is immutable, and a cache on it would be a lie
+  about freshness.
 - **Validation**: 253 printable octets for the name (not the oft-quoted 255 —
   the wire form spends an octet per label length prefix and one on the root) and
   63 per label; an empty name or an empty inner label (`a..b`) raises. Non-ASCII
@@ -1754,22 +1766,50 @@ returns to the base the moment the peer moves the transfer forward.
 **`Host(value)`** — a host named by either an address or a hostname.
 
 `str(host)` is **always the original text**, so a URL can still be rebuilt when
-resolution fails — the case a bare `get_ip()` handles badly, since it returns
-`None` and loses the name.
+resolution fails: a failed lookup returns `None` for the address and the
+`Host` keeps the name.
+
+Which call looks anything up:
+
+| Call | host is a name | host is an address |
+| --- | --- | --- |
+| `.ip()` | forward lookup | the literal, no lookup |
+| `.fqdn()` | the name as written, no lookup | reverse lookup |
+| `.resolve()` | `(name, forward lookup)` | `(reverse lookup, literal)` |
 
 - `Host.parse(text)` / `Host.try_parse(text, default=None)` — text only
   (`TypeError` otherwise); the one text refused is empty or blank, with
   `NetimpsValueError`. The constructor is the lenient entry: it takes `None`,
   `""` and any object, and keeps its text.
 - `.is_address` — already a literal, no DNS needed.
-- `.fqdn` — this host as an **`FQDN`**, or `None` when it is an address (or not
-  a syntactically possible name). The bridge between the two types: `Host` is
-  the union "address *or* name", while `FQDN` is the name algebra that refuses
-  an address outright. `Host("www.example.com").fqdn.domain` →
-  `FQDN('example.com')`; `Host("10.0.0.5").fqdn` → `None`.
-- `.ip(refresh=False)` — resolve to an address or `None`. **Cached, including
-  failure**, since the common use is several lookups on one object; pass
-  `refresh=True` to retry.
+- **`.fqdn(*, check=False, ipv6=None, <resolver options>) -> FQDN | None`** —
+  this host as an **`FQDN`**: the name itself, or the name an address reverses
+  to (without its root dot). The bridge between the two types: `Host` is the
+  union "address *or* name", while `FQDN` is the name algebra that refuses an
+  address outright. `Host("www.example.com").fqdn().domain` →
+  `FQDN('example.com')` with no I/O. A name is returned **as written**, not as
+  the canonical name after search-list expansion. `None` when no name was found
+  or the text is not a possible name; `check=True` raises `ResolutionError` for
+  the first and `NetimpsValueError` for the second. `ipv6` is accepted and
+  unused, so one options dict serves all three methods. Not memoised.
+- **`.ip(*, check=False, ipv6=None, ns=None, timeout=5.0, port=53, tcp=False,
+  search=True, backends=None, source=None, refresh=False) -> IPAddress | None`**
+  — a literal as parsed, a name looked up. `ipv6=True` asks for AAAA, `False`
+  for A, `None` for either in one lookup, in the OS's own order. `check=True`
+  raises `ResolutionError` instead of returning `None` — for an empty answer, a
+  resolver outage or an empty host (`resolve(strict=True)` alone re-raises only
+  the outage). **With none of `ns`, `port`, `tcp`, `source` or `backends`, the
+  OS resolver alone answers**, as the standard library's lookups do: a missed
+  name costs milliseconds, where the full chain behind `netimps.resolve` costs
+  seconds. Naming any of them selects `resolve()`'s own chain rules. `timeout`
+  and `search` apply either way. Every option is keyword-only.
+- **A call that passes no option memoises its answer, a miss included**, since
+  the common use is several lookups on one object. A call that passes any
+  option, or `refresh=True`, neither reads nor writes the memo.
+- **`.resolve(*, check=False, ipv6=None, <resolver options>) -> (FQDN | None,
+  IPAddress | None)`** — the pair `(fqdn, ip)`, always a pair, so
+  `fqdn, ip = host.resolve()` never fails to unpack; a half that was not found
+  is `None`, or raises with `check=True`.
 - Compares equal to a plain `str`, and hashes by its text.
 
 ## Command line

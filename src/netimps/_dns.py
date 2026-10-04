@@ -323,7 +323,7 @@ def _resolve_system_once(
 
 def resolve_system(
     query: "HostLike",
-    rdtype: Optional[str] = None,
+    rdtype: "Optional[Union[str, Tuple[str, ...]]]" = None,
     timeout: Optional[float] = 5.0,
     search: Union[bool, List[str]] = True,
 ) -> "List[Any]":
@@ -391,6 +391,11 @@ def resolve_system(
     not a DNS outcome to report as "no records".
     """
     query = _dst_argument(query)
+    if isinstance(rdtype, (tuple, list)):
+        # Both families in one getaddrinfo call, in the order the OS chose.
+        _address_rdtypes(rdtype)
+        family = _socket.AF_UNSPEC if len(rdtype) > 1 else _family_of(rdtype[0])
+        return _search_system(query, family, timeout, search)
     if not rdtype:
         rdtype = _auto_rdtype(query)
     rdtype = rdtype.lower()
@@ -417,8 +422,36 @@ def resolve_system(
             % (_ADDRESS_RDTYPES + ("ptr",), rdtype)
         )
 
-    family = _socket.AF_INET6 if rdtype == "aaaa" else _socket.AF_INET
+    return _search_system(query, _family_of(rdtype), timeout, search)
 
+
+def _family_of(rdtype: str) -> int:
+    return _socket.AF_INET6 if rdtype.lower() == "aaaa" else _socket.AF_INET
+
+
+def _address_rdtypes(rdtype: "Union[Tuple[str, ...], List[str]]") -> "Tuple[str, ...]":
+    """``rdtype`` as a tuple of lower-case address types, or ``ValueError``."""
+    types = tuple(str(item).lower() for item in rdtype)
+    if (
+        not types
+        or len(set(types)) != len(types)
+        or any(item not in _ADDRESS_RDTYPES for item in types)
+    ):
+        raise ValueError(
+            "a tuple rdtype names address records, each once, from %r; got %r"
+            % (_ADDRESS_RDTYPES, tuple(rdtype))
+        )
+    return types
+
+
+def _search_system(
+    query: str,
+    family: int,
+    timeout: Optional[float],
+    search: "Union[bool, List[str]]",
+) -> "List[Any]":
+    """The candidates ``search`` implies for ``query``, each asked of the OS
+    resolver for ``family``, until one has an answer."""
     if isinstance(search, (list, tuple)) and not query.endswith("."):
         candidates = [query]
         candidates.extend(
@@ -756,7 +789,7 @@ def resolve_nslookup(
 
 def resolve(
     query: "HostLike",
-    rdtype: Optional[str] = None,
+    rdtype: "Optional[Union[str, Tuple[str, ...]]]" = None,
     ns: Optional[Union[str, List[str]]] = None,
     timeout: Optional[float] = 5.0,
     port: int = 53,
@@ -817,6 +850,9 @@ def resolve(
         default as before this was configurable. Pass an explicit ``rdtype``
         to opt out. ``"a"``/``"aaaa"``/``"ptr"`` reach every backend; other
         types are ``dnspython``-only (see :func:`resolve_dnspython`).
+        ``("a", "aaaa")`` asks for both families at once: the OS resolver
+        answers in one call, in the order it chose, and every other backend
+        is asked for ``"a"`` and then ``"aaaa"`` with the answers joined.
     :param ns: nameserver(s) to query instead of the system resolver. Honoured
         by ``dnspython`` and ``nslookup`` (a single nameserver for the
         latter); excludes ``system`` from the chain, since it cannot honour a
@@ -854,7 +890,11 @@ def resolve(
     is a caller bug rather than a resolution outcome.
     """
     query = _dst_argument(query)
-    if not rdtype:
+    both: "Optional[Tuple[str, ...]]" = None
+    if isinstance(rdtype, (tuple, list)):
+        both = _address_rdtypes(rdtype)
+        rdtype = both[0]
+    elif not rdtype:
         rdtype = _auto_rdtype(query)
     rdtype = rdtype.lower()
     if isinstance(backends, str):
@@ -879,7 +919,11 @@ def resolve(
                 # a different question from the one asked.
                 continue
             attempt = _partial(
-                resolve_system, query, rdtype, timeout=timeout, search=search
+                resolve_system,
+                query,
+                rdtype=both if both is not None and len(both) > 1 else rdtype,
+                timeout=timeout,
+                search=search,
             )
         elif name == "dnspython":
             sources = [source] if isinstance(source, str) else list(source or [])
@@ -888,7 +932,7 @@ def resolve(
             attempt = _partial(
                 resolve_dnspython,
                 query,
-                rdtype,
+                rdtype=rdtype,
                 ns=ns,
                 timeout=timeout,
                 port=port,
@@ -902,7 +946,7 @@ def resolve(
             attempt = _partial(
                 resolve_wire,
                 query,
-                rdtype,
+                rdtype=rdtype,
                 ns=ns,
                 timeout=timeout,
                 port=port,
@@ -920,7 +964,7 @@ def resolve(
             attempt = _partial(
                 resolve_nslookup,
                 query,
-                rdtype,
+                rdtype=rdtype,
                 ns=single_ns,
                 timeout=timeout,
                 search=search,
@@ -928,6 +972,8 @@ def resolve(
         else:  # pragma: no cover -- `unknown` above already rejected these
             continue
 
+        if both is not None and len(both) > 1 and name != "system":
+            attempt = _each_rdtype(attempt, both)
         attempted = True
         try:
             result = attempt()
@@ -974,6 +1020,152 @@ def resolve(
     # between "no such name" and "could not ask" is one most callers do not act
     # on differently. `strict=True` is for the ones that do.
     return []
+
+
+def _each_rdtype(
+    attempt: "Callable[..., List[Any]]", types: "Tuple[str, ...]"
+) -> "Callable[[], List[Any]]":
+    """``attempt`` run once per record type, the answers joined in order.
+
+    ``attempt`` takes the record type as its ``rdtype`` keyword. A backend that
+    could not ask for one type fails the whole attempt unless another type did
+    answer: half an answer from a resolver that errored is still an answer, but
+    an empty one is not evidence the name is absent.
+    """
+
+    def run() -> "List[Any]":
+        found: "List[Any]" = []
+        error: "Optional[ResolutionError]" = None
+        for kind in types:
+            try:
+                found.extend(attempt(rdtype=kind))
+            except ResolutionError as exc:
+                error = error or exc
+        if error is not None and not found:
+            raise error
+        return found
+
+    return run
+
+
+def _query(
+    query: str,
+    rdtype: "Union[str, Tuple[str, ...]]",
+    *,
+    check: bool,
+    ns: "Optional[Union[str, List[str]]]",
+    timeout: Optional[float],
+    port: int,
+    tcp: bool,
+    search: "Union[bool, List[str]]",
+    backends: "Optional[Union[str, List[str]]]",
+    source: "Optional[Union[str, List[str]]]",
+) -> "List[Any]":
+    """The one place :class:`~netimps.Host` and :class:`~netimps.FQDN` reach
+    :func:`resolve`.
+
+    With no resolver option the OS resolver alone answers: it is what the
+    standard library's own lookups use, and a missed name costs it a few
+    milliseconds where the full chain costs seconds. Naming a nameserver, port,
+    transport, source address or ``backends`` hands the choice to
+    :func:`resolve` and its chain.
+
+    ``check`` re-raises a resolver outage (``strict=True``); the caller turns an
+    empty answer into the error, since only it knows what was asked.
+    """
+    if backends is None and not (ns or port != 53 or tcp or source):
+        backends = "system"
+    return resolve(
+        query,
+        rdtype,
+        ns=ns,
+        timeout=timeout,
+        port=port,
+        tcp=tcp,
+        search=search,
+        backends=backends,
+        strict=check,
+        source=source,
+    )
+
+
+def lookup_ip(
+    name: str,
+    *,
+    check: bool = False,
+    ipv6: "Optional[bool]" = None,
+    ns: "Optional[Union[str, List[str]]]" = None,
+    timeout: Optional[float] = 5.0,
+    port: int = 53,
+    tcp: bool = False,
+    search: "Union[bool, List[str]]" = True,
+    backends: "Optional[Union[str, List[str]]]" = None,
+    source: "Optional[Union[str, List[str]]]" = None,
+) -> "Optional[Any]":
+    """The first address ``name`` resolves to (internal; ``name`` is not a literal).
+
+    ``ipv6`` picks the record type: ``True`` AAAA, ``False`` A, ``None`` both
+    in one lookup. ``None`` is the answer for a miss, or
+    :class:`ResolutionError` with ``check=True``.
+    """
+    rdtype: "Union[str, Tuple[str, ...]]" = (
+        "aaaa" if ipv6 is True else "a" if ipv6 is False else ("a", "aaaa")
+    )
+    answers = _query(
+        name,
+        rdtype,
+        check=check,
+        ns=ns,
+        timeout=timeout,
+        port=port,
+        tcp=tcp,
+        search=search,
+        backends=backends,
+        source=source,
+    )
+    for answer in answers:
+        if isinstance(answer, (_ipaddress.IPv4Address, _ipaddress.IPv6Address)):
+            return answer
+    if check:
+        raise ResolutionError("%s has no address record" % (name,))
+    return None
+
+
+def lookup_fqdn(
+    address: str,
+    *,
+    check: bool = False,
+    ns: "Optional[Union[str, List[str]]]" = None,
+    timeout: Optional[float] = 5.0,
+    port: int = 53,
+    tcp: bool = False,
+    search: "Union[bool, List[str]]" = True,
+    backends: "Optional[Union[str, List[str]]]" = None,
+    source: "Optional[Union[str, List[str]]]" = None,
+) -> "Optional[Any]":
+    """The name ``address`` reverses to, as an ``FQDN`` without its root dot, or
+    ``None`` (internal; ``address`` is a literal)."""
+    from ._fqdn import FQDN
+
+    answers = _query(
+        address,
+        "ptr",
+        check=check,
+        ns=ns,
+        timeout=timeout,
+        port=port,
+        tcp=tcp,
+        search=search,
+        backends=backends,
+        source=source,
+    )
+    for answer in answers:
+        name = FQDN.try_parse(str(answer))
+        if name is not None:
+            return name
+    if check:
+        raise ResolutionError("%s has no reverse name" % (address,))
+    return None
 
 
 # --- the DNS protocol, standard library only ---------------------------------

@@ -10,6 +10,7 @@ the round-trip tests are what keep that from regressing.
 import copy
 import ipaddress
 import pickle
+import socket
 
 import pytest
 
@@ -112,10 +113,18 @@ def test_interface_has_no_loopback_attribute():
 
 def test_a_host_still_memoises_though_it_cannot_be_assigned(monkeypatch):
     """The memo is written around the guard; losing that makes every call re-resolve."""
-    host = Host("10.0.0.5")
+    calls = []
+
+    def counting(name, *args, **kwargs):
+        calls.append(name)
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.0.2.9", 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", counting)
+    host = Host("db.internal")
     first = host.ip()
-    assert first == ipaddress.ip_address("10.0.0.5")
+    assert first == ipaddress.ip_address("192.0.2.9")
     assert host.ip() is first
+    assert len(calls) == 1
 
 
 def test_enumerated_interfaces_are_read_only():

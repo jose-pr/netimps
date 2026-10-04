@@ -18,6 +18,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `DNSDecodeError(NetimpsValueError)` is the DNS codec's error, formerly the
   private `WireError(ValueError)`.
 
+- **`Host.resolve()` and `FQDN.resolve()` return the pair `(fqdn, ip)`**, and
+  `Host.ip()`, `Host.fqdn()` and `FQDN.ip()` take the resolver options
+  (`ns`, `timeout`, `port`, `tcp`, `search`, `backends`, `source`), `ipv6=` and
+  `check=`. `check=True` raises `ResolutionError` where `None` would be
+  returned: an empty answer, an outage or an empty host. `ip()` of a name looks
+  it up and of an address does not; `fqdn()` of an address looks it up and of a
+  name does not. With none of `ns`, `port`, `tcp`, `source` or `backends` the OS
+  resolver alone answers, as `get_ip` did; naming one selects `resolve()`'s own
+  chain. `resolve()` accepts `rdtype=("a", "aaaa")` for both families at once.
+
 - **`MACAddress.__format__` and `__bytes__`**: `f"{mac:-X}"` is `mac.format("-", upper=True)` and `bytes(mac)` is the six octets.
   **`FQDN.encode()`, `bytes(name)`, `FQDN.decode(data)` and `FQDN.decode_at(data, offset)`**
   write and read the RFC 1035 wire form; `decode_at` follows compression
@@ -63,6 +73,9 @@ probe says so in its prefix.
 | `Fqdn.wire` (property) | `FQDN.encode()`, `bytes(name)` |
 | `Fqdn.unicode` (property) | `FQDN.to_unicode()` |
 | `Fqdn.as_fully_qualified()` | `FQDN.fully_qualified()` |
+| `Host.fqdn` (property) | `Host.fqdn()` (method; reverse lookup for an address) |
+| `Host.ip(refresh)` | `Host.ip(*, check, ipv6, refresh, <resolver options>)` |
+| `Fqdn.resolve() -> records` | `FQDN.resolve() -> (fqdn, ip)`; records come from `netimps.resolve(name, rdtype)` |
 
 ### Changed
 
@@ -74,6 +87,11 @@ probe says so in its prefix.
   `Interface.loopback` is gone: read `is_loopback`. A cached
   `get_interfaces(cache=...)` call now hands back the stored `Interface`
   objects in a fresh list, copying only `raw`.
+- **`Host.fqdn` is a method, and `Host.ip` takes keyword-only options.**
+  `host.fqdn` becomes `host.fqdn()`; `host.ip(True)` becomes
+  `host.ip(refresh=True)`, and a refresh no longer rewrites the memo. A call
+  that passes any option neither reads nor writes it. `FQDN.resolve()` no
+  longer returns DNS records: call `netimps.resolve(name, rdtype)` for those.
 - **`MACAddress.try_parse` and `FQDN.try_parse` take text only.** They answer
   `None` (or the new `default=`) for text that does not parse, and raise
   `TypeError` for anything that is not a `str` -- `MACAddress.try_parse(None)`,

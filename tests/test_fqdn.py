@@ -482,20 +482,20 @@ def test_exported_from_the_package():
 # --------------------------------------------------------------------------- #
 
 
-def test_host_fqdn_narrows_a_name_and_refuses_an_address(no_such_host):
-    assert Host("www.example.com").fqdn == FQDN("www.example.com")
-    assert Host("10.0.0.5").fqdn is None
-    assert Host("::1").fqdn is None
-    # A syntactically impossible name answers None rather than raising from a
-    # property.
-    assert Host("a..b").fqdn is None
+def test_host_fqdn_narrows_a_name_and_asks_the_resolver_for_an_address(no_such_host):
+    """A name is returned as written; an address is reverse-looked-up, and with
+    no PTR record there is no name to give."""
+    assert Host("www.example.com").fqdn() == FQDN("www.example.com")
+    assert Host("10.0.0.5").fqdn() is None
+    # A syntactically impossible name answers None rather than raising.
+    assert Host("a..b").fqdn() is None
 
 
 def test_host_keeps_its_own_contract(no_such_host):
     """The bridge is additive: Host still reports the original text."""
     host = Host("WWW.Example.COM")
     assert str(host) == "WWW.Example.COM"
-    assert host.fqdn == FQDN("www.example.com")
+    assert host.fqdn() == FQDN("www.example.com")
 
 
 # --------------------------------------------------------------------------- #
@@ -503,20 +503,22 @@ def test_host_keeps_its_own_contract(no_such_host):
 # --------------------------------------------------------------------------- #
 
 
-def test_resolve_is_a_pass_through(monkeypatch):
-    """No logic of its own -- that would belong in `_dns`, not here."""
+def test_resolve_is_the_name_and_its_address(monkeypatch):
+    """`resolve()` answers `(fqdn, ip)`, the same shape `Host.resolve()` does."""
     seen = {}
 
-    def fake_resolve(query, **kwargs):
-        seen["query"] = query
-        seen["kwargs"] = kwargs
-        return ["sentinel"]
+    def fake_resolve(query, rdtype, **kwargs):
+        seen.update(query=query, rdtype=rdtype, kwargs=kwargs)
+        return [netimps.parse("192.0.2.7")]
 
     monkeypatch.setattr(netimps._dns, "resolve", fake_resolve)
-    result = FQDN("www.example.com").resolve(rdtype="aaaa", strict=True)
-    assert result == ["sentinel"]
+    name = FQDN("www.example.com")
+    result = name.resolve(ipv6=True, ns="192.0.2.53")
+    assert result == (name, netimps.parse("192.0.2.7"))
+    assert result[0] is name
     assert seen["query"] == "www.example.com"
-    assert seen["kwargs"] == {"rdtype": "aaaa", "strict": True}
+    assert seen["rdtype"] == "aaaa"
+    assert seen["kwargs"]["ns"] == "192.0.2.53"
 
 
 def test_resolve_passes_the_fully_qualified_form_through(monkeypatch):
@@ -526,7 +528,7 @@ def test_resolve_passes_the_fully_qualified_form_through(monkeypatch):
     monkeypatch.setattr(
         netimps._dns,
         "resolve",
-        lambda query, **kw: seen.setdefault("query", query) and [],
+        lambda query, *a, **kw: seen.setdefault("query", query) and [],
     )
     FQDN("example.com.").resolve()
     assert seen["query"] == "example.com."
@@ -546,11 +548,12 @@ def test_ping_is_a_pass_through(monkeypatch):
 
 
 def test_ip_returns_the_first_answer_or_none(monkeypatch):
+    first, second = netimps.parse("192.0.2.1"), netimps.parse("192.0.2.2")
     monkeypatch.setattr(
-        netimps._dns, "resolve", lambda query, **kw: ["first", "second"]
+        netimps._dns, "resolve", lambda query, *a, **kw: [first, second]
     )
-    assert FQDN("example.com").ip() == "first"
-    monkeypatch.setattr(netimps._dns, "resolve", lambda query, **kw: [])
+    assert FQDN("example.com").ip() == first
+    monkeypatch.setattr(netimps._dns, "resolve", lambda query, *a, **kw: [])
     assert FQDN("example.com").ip() is None
 
 
@@ -559,7 +562,9 @@ def test_ip_does_not_cache_unlike_host(monkeypatch):
     on it would be a lie about freshness."""
     calls = []
     monkeypatch.setattr(
-        netimps._dns, "resolve", lambda query, **kw: calls.append(query) or ["a"]
+        netimps._dns,
+        "resolve",
+        lambda query, *a, **kw: calls.append(query) or [netimps.parse("192.0.2.1")],
     )
     f = FQDN("example.com")
     f.ip()

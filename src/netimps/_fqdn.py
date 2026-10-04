@@ -41,7 +41,7 @@ An address literal is **rejected**::
 
 :class:`netimps.Host` is the type for "an address *or* a name"; this one is a
 name algebra, and labels, a parent domain and a TLD are things an IP does not
-have. ``Host.fqdn`` bridges the two.
+have. ``Host.fqdn()`` bridges the two.
 
 What this deliberately does not do
 ----------------------------------
@@ -71,7 +71,11 @@ from typing import (
     Union,
     overload,
 )
+from ipaddress import IPv4Address, IPv6Address
+
 from ._exceptions import DNSDecodeError, NetimpsValueError
+
+_IPAddress = Union[IPv4Address, IPv6Address]
 
 __all__ = ["FQDN", "FQDNLike"]
 
@@ -480,16 +484,47 @@ class FQDN:
 
     # -- network convenience, delegating rather than reimplementing ---------
 
-    def resolve(self, **kwargs: "Any") -> "List[Any]":
-        """Look this name up. Straight through to :func:`netimps.resolve`.
+    def resolve(
+        self,
+        *,
+        check: bool = False,
+        ipv6: "Optional[bool]" = None,
+        ns: "Optional[Union[str, List[str]]]" = None,
+        timeout: "Optional[float]" = 5.0,
+        port: int = 53,
+        tcp: bool = False,
+        search: "Union[bool, List[str]]" = True,
+        backends: "Optional[Union[str, List[str]]]" = None,
+        source: "Optional[Union[str, List[str]]]" = None,
+    ) -> "Tuple[FQDN, Optional[_IPAddress]]":
+        """The pair ``(self, ip)``: this name, and the address it resolves to.
 
-        Every keyword that function takes works here, ``strict=`` included. The
-        fully-qualified form is passed on as such, so a name built with a
-        trailing dot keeps bypassing the search list.
+        The same shape as :meth:`netimps.Host.resolve`, so the two types
+        answer ``.resolve()`` alike. The name is returned as it is -- no
+        reverse lookup, and not the canonical name after search-list expansion.
+        ``ip`` is ``None`` when nothing was found, or :class:`ResolutionError`
+        is raised with ``check=True``. The fully-qualified form is asked as
+        such, so a name with a trailing dot keeps bypassing the search list.
+
+        The resolver options are those of :meth:`netimps.Host.ip`, including
+        the rule that with none of ``ns``, ``port``, ``tcp``, ``source`` or
+        ``backends`` only the OS resolver answers. DNS records of any type come
+        from :func:`netimps.resolve`.
         """
-        from ._dns import resolve
-
-        return resolve(str(self), **kwargs)
+        return (
+            self,
+            self.ip(
+                check=check,
+                ipv6=ipv6,
+                ns=ns,
+                timeout=timeout,
+                port=port,
+                tcp=tcp,
+                search=search,
+                backends=backends,
+                source=source,
+            ),
+        )
 
     def ping(self, **kwargs: "Any") -> "Any":
         """Ping this name. Straight through to :func:`netimps.ping`."""
@@ -497,15 +532,39 @@ class FQDN:
 
         return ping(str(self), **kwargs)
 
-    def ip(self, **kwargs: "Any") -> "Optional[Any]":
+    def ip(
+        self,
+        *,
+        check: bool = False,
+        ipv6: "Optional[bool]" = None,
+        ns: "Optional[Union[str, List[str]]]" = None,
+        timeout: "Optional[float]" = 5.0,
+        port: int = 53,
+        tcp: bool = False,
+        search: "Union[bool, List[str]]" = True,
+        backends: "Optional[Union[str, List[str]]]" = None,
+        source: "Optional[Union[str, List[str]]]" = None,
+    ) -> "Optional[_IPAddress]":
         """The first address this name resolves to, or ``None``.
 
-        The convenience spelling of ``self.resolve()[0]``, matching
-        :meth:`netimps.Host.ip`'s shape -- though **not** its caching, since
-        this type is immutable and a cache on it would be a lie about freshness.
+        Always a lookup, which can block, and **never memoised**: this type is
+        immutable, and a cache on it would be a lie about freshness.
+        :meth:`netimps.Host.ip` documents the options.
         """
-        found = self.resolve(**kwargs)
-        return found[0] if found else None
+        from ._dns import lookup_ip
+
+        return lookup_ip(
+            str(self),
+            check=check,
+            ipv6=ipv6,
+            ns=ns,
+            timeout=timeout,
+            port=port,
+            tcp=tcp,
+            search=search,
+            backends=backends,
+            source=source,
+        )
 
     # -- presentation and classification -----------------------------------
 

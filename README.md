@@ -34,7 +34,7 @@ nothing to compile and no wheel to miss for your platform.
   from `pathlib`** because DNS puts the significant label last — `.name` is the
   leftmost label and `/` *prepends*. **`name in domain`** works like the stdlib's
   `address in network`, and `f + "/path"` gives a plain string. Refuses an address
-  literal; `Host.fqdn` bridges the two.
+  literal; `Host.fqdn()` bridges the two.
 - **The socket helpers everyone rewrites** — `get_source_ip`, `get_free_port`,
   `tcp_check`, `wait_for_port`.
 - **Local membership lookups** — `get_interface()` gives the first adapter for
@@ -180,7 +180,7 @@ netimps.retry(lambda: netimps.tcp_check("example.com", 443), attempts=3)
 | `get_source_ip`, `get_free_port`, `tcp_check`, `wait_for_port` | socket helpers |
 | `UDPEndpoint`, `Datagram` | UDP receive with arrival interface (`IP_PKTINFO`), every platform |
 | `recvmsg`, `sendmsg`, `CMSG_LEN`, `CMSG_SPACE` | ancillary-data messaging, Windows included |
-| `Host` | hostname-or-address value type; `.fqdn` narrows a name |
+| `Host` | hostname-or-address value type; `.fqdn()` narrows a name |
 | `FQDN`, `FQDNLike` | domain name value type with label algebra (inverted from `pathlib`) |
 | `retry`, `backoff_delays` | bounded retry with exponential backoff |
 | `LINK_LOCAL_V4`, `LOOPBACK_V4`, `LOOPBACK_V6`, `LINK_LOCAL_V6` | named networks |

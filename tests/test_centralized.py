@@ -898,7 +898,7 @@ def test_host_caches_failure_too(monkeypatch):
 
     def failing(name, *args, **kwargs):
         calls.append(name)
-        raise OSError("no such host")
+        raise socket.gaierror(socket.EAI_NONAME, "no such host")
 
     monkeypatch.setattr(netimps._ip._socket, "getaddrinfo", failing)
     host = Host("nope.invalid")

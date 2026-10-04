@@ -23,7 +23,7 @@ from typing import (
     overload,
 )
 
-from ._exceptions import NetimpsValueError
+from ._exceptions import NetimpsValueError, ResolutionError
 
 # `_fqdn` imports nothing from this module at import time (it reaches for
 # `IPAddress` inside the one function that needs it), which is what lets
@@ -600,53 +600,193 @@ class Host:
 
         return is_valid(self.value, IPAddress)
 
-    @property
-    def fqdn(self) -> "Optional[FQDN]":
-        """This host as an :class:`FQDN`, or ``None`` if it is an address.
+    def fqdn(
+        self,
+        *,
+        check: bool = False,
+        ipv6: "Optional[bool]" = None,
+        ns: "Optional[Union[str, List[str]]]" = None,
+        timeout: "Optional[float]" = 5.0,
+        port: int = 53,
+        tcp: bool = False,
+        search: "Union[bool, List[str]]" = True,
+        backends: "Optional[Union[str, List[str]]]" = None,
+        source: "Optional[Union[str, List[str]]]" = None,
+    ) -> "Optional[FQDN]":
+        """This host as an :class:`FQDN`: the name itself, or the name an address
+        reverses to.
 
-        The bridge between the two types. :class:`Host` is the union -- "an
-        address *or* a name" -- while :class:`FQDN` is a name algebra that
-        refuses an address outright, so this is the narrowing::
+        **A name is returned as written, with no lookup**; an address costs a
+        reverse (PTR) lookup, which can block::
 
-            Host("www.example.com").fqdn.domain   # FQDN('example.com')
-            Host("10.0.0.5").fqdn                 # None
+            Host("www.example.com").fqdn().domain   # FQDN('example.com'), no I/O
+            Host("10.0.0.5").fqdn()                 # FQDN('db.internal'), or None
 
-        ``None`` is also the answer for a name that is syntactically not one
-        (over-long, an empty inner label), since the alternative would be
-        raising from a property.
+        The bridge between the two types: :class:`Host` is "an address *or* a
+        name", while :class:`FQDN` is a name algebra that refuses an address.
+        The name is the one written, **not** the canonical name after
+        search-list expansion, and a reverse answer comes back without its root
+        dot.
+
+        ``None`` is the answer when nothing was found, and also for text that is
+        not a syntactically possible name (over-long, an empty inner label).
+        With ``check=True`` the first raises :class:`ResolutionError` and the
+        second :class:`NetimpsValueError`.
+
+        The resolver options mean what they do for :meth:`ip`. ``ipv6`` is
+        accepted so one options dict serves :meth:`ip`, :meth:`fqdn` and
+        :meth:`resolve`, and is not used here. Nothing is memoised.
         """
+        text = self.value
         if self.is_address:
-            return None
-        return FQDN.try_parse(self.value)
+            from ._dns import lookup_fqdn
 
-    def ip(self, refresh: bool = False) -> "Optional[IPAddress]":
+            return lookup_fqdn(
+                text,
+                check=check,
+                ns=ns,
+                timeout=timeout,
+                port=port,
+                tcp=tcp,
+                search=search,
+                backends=backends,
+                source=source,
+            )
+        return FQDN.parse(text) if check else FQDN.try_parse(text)
+
+    def ip(
+        self,
+        *,
+        check: bool = False,
+        ipv6: "Optional[bool]" = None,
+        ns: "Optional[Union[str, List[str]]]" = None,
+        timeout: "Optional[float]" = 5.0,
+        port: int = 53,
+        tcp: bool = False,
+        search: "Union[bool, List[str]]" = True,
+        backends: "Optional[Union[str, List[str]]]" = None,
+        source: "Optional[Union[str, List[str]]]" = None,
+        refresh: bool = False,
+    ) -> "Optional[IPAddress]":
         """Resolve to an address, or ``None``.
 
-        A literal is parsed directly; a hostname goes to DNS. **The result is
-        cached**, including a failure, because the common use is several
-        lookups in a row on the same object. Pass ``refresh=True`` to retry --
-        a name that failed once may resolve later.
-        """
-        if refresh:
-            object.__setattr__(self, "_attempted", False)
-            object.__setattr__(self, "_resolved", None)
-        if self._attempted:
-            return self._resolved
+        **A literal is returned as parsed, with no lookup**; a name is looked
+        up, which can block.
 
-        object.__setattr__(self, "_attempted", True)
-        if not self.value:
-            object.__setattr__(self, "_resolved", None)
+        :param check: raise :class:`ResolutionError` instead of returning
+            ``None`` when nothing was found -- an empty answer, an outage, or an
+            empty host.
+        :param ipv6: ``True`` asks for AAAA, ``False`` for A, ``None`` for either
+            in one lookup, in the order the OS chose.
+        :param ns: nameserver(s) to ask instead of the OS's.
+        :param timeout: seconds per backend attempt.
+        :param port: nameserver port.
+        :param tcp: query over TCP.
+        :param search: expand an unqualified name through a search list: the
+            system's (``True``), none (``False``) or the list given.
+        :param backends: which of ``"dnspython"``, ``"wire"``, ``"system"``,
+            ``"nslookup"``, and in what order; see :func:`netimps.resolve`.
+        :param source: the local address the query is sent from.
+        :param refresh: ignore the memo and ask again.
+
+        **With none of ``ns``, ``port``, ``tcp``, ``source`` or ``backends`` the
+        OS resolver alone answers**, as the standard library's lookups do. A
+        missed name then costs milliseconds, where the full chain behind
+        :func:`netimps.resolve` costs seconds. Naming any of them hands the
+        choice to that chain.
+
+        **A call that passes no option memoises its answer, a miss included**,
+        because the common use is several lookups in a row on the same object.
+        A call that passes any option, or ``refresh=True``, neither reads nor
+        writes the memo.
+        """
+        text = self.value
+        if not text:
+            if check:
+                raise ResolutionError("there is no host to resolve")
             return None
 
         from ._parse import try_parse
 
-        literal = try_parse(self.value, IPAddress)
-        object.__setattr__(
-            self,
-            "_resolved",
-            literal if literal is not None else get_ip(self.value),
+        literal = try_parse(text, IPAddress)
+        if literal is not None:
+            return literal
+
+        plain = not (
+            check
+            or refresh
+            or ipv6 is not None
+            or ns
+            or timeout != 5.0
+            or port != 53
+            or tcp
+            or search is not True
+            or backends is not None
+            or source
         )
-        return self._resolved
+        if plain and self._attempted:
+            return self._resolved
+
+        from ._dns import lookup_ip
+
+        found = lookup_ip(
+            text,
+            check=check,
+            ipv6=ipv6,
+            ns=ns,
+            timeout=timeout,
+            port=port,
+            tcp=tcp,
+            search=search,
+            backends=backends,
+            source=source,
+        )
+        if plain:
+            object.__setattr__(self, "_attempted", True)
+            object.__setattr__(self, "_resolved", found)
+        return found
+
+    def resolve(
+        self,
+        *,
+        check: bool = False,
+        ipv6: "Optional[bool]" = None,
+        ns: "Optional[Union[str, List[str]]]" = None,
+        timeout: "Optional[float]" = 5.0,
+        port: int = 53,
+        tcp: bool = False,
+        search: "Union[bool, List[str]]" = True,
+        backends: "Optional[Union[str, List[str]]]" = None,
+        source: "Optional[Union[str, List[str]]]" = None,
+    ) -> "Tuple[Optional[FQDN], Optional[IPAddress]]":
+        """The pair ``(fqdn, ip)``; whichever half was not found is ``None``.
+
+        =====================  =================================  ==================
+        host is                ``fqdn``                           ``ip``
+        =====================  =================================  ==================
+        a name                 the name as written                forward lookup
+        an address             reverse lookup                     the literal
+        =====================  =================================  ==================
+
+        The result is always a pair, so ``fqdn, ip = host.resolve()`` never
+        fails to unpack. With ``check=True`` a half that could not be found
+        raises :class:`ResolutionError` instead. The options are
+        :meth:`ip`'s, and a name does its one lookup only.
+        """
+        options = dict(
+            check=check,
+            ns=ns,
+            timeout=timeout,
+            port=port,
+            tcp=tcp,
+            search=search,
+            backends=backends,
+            source=source,
+        )
+        return (
+            self.fqdn(ipv6=ipv6, **options),  # type: ignore[arg-type]
+            self.ip(ipv6=ipv6, **options),  # type: ignore[arg-type]
+        )
 
     def __str__(self) -> str:
         return self.value

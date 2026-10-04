@@ -262,8 +262,23 @@ while current is not None:
     assert_type(current.hostname, str)
     current = current.domain
 
-# Host narrows to a name, or None for an address.
-assert_type(Host("www.example.com").fqdn, Optional[FQDN])
+# Host narrows to a name; an address costs a reverse lookup, which may find none.
+assert_type(Host("www.example.com").fqdn(), Optional[FQDN])
+assert_type(Host("www.example.com").fqdn(check=True, ns="192.0.2.53"), Optional[FQDN])
+
+# The three resolving methods, and the pair `resolve()` always returns.
+assert_type(Host("db.internal").ip(), Optional[IPAddress])
+assert_type(
+    Host("db.internal").ip(check=True, ipv6=True, backends=["system"], refresh=True),
+    Optional[IPAddress],
+)
+assert_type(Host("db.internal").resolve(), Tuple[Optional[FQDN], Optional[IPAddress]])
+host_name, host_ip = Host("db.internal").resolve(check=True, tcp=True)
+assert_type(host_name, Optional[FQDN])
+assert_type(host_ip, Optional[IPAddress])
+assert_type(fqdn.ip(), Optional[IPAddress])
+assert_type(fqdn.resolve(), Tuple[FQDN, Optional[IPAddress]])
+assert_type(fqdn.resolve(ipv6=False, timeout=None), Tuple[FQDN, Optional[IPAddress]])
 
 # FQDN's text interop and the containment predicate.
 assert_type(fqdn + "/path", str)
