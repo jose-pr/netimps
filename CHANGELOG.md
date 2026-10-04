@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `DNSDecodeError(NetimpsValueError)` is the DNS codec's error, formerly the
   private `WireError(ValueError)`.
 
+- **`UDPEndpoint.aclose()`, `async with UDPEndpoint(...)`.** `aclose()` is
+  `close()` for a coroutine: it waits for the reader thread `arecv` may have
+  started to leave, with the loop running, where `close()` joins it on the
+  calling thread. `close()` and `aclose()` are each complete on return and
+  harmless when called again, in either order.
+
 - **`Host.resolve()` and `FQDN.resolve()` return the pair `(fqdn, ip)`**, and
   `Host.ip()`, `Host.fqdn()` and `FQDN.ip()` take the resolver options
   (`ns`, `timeout`, `port`, `tcp`, `search`, `backends`, `source`), `ipv6=` and

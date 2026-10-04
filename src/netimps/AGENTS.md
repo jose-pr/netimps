@@ -1444,7 +1444,15 @@ request came from.
 outgoing interface; `address` accepts `HostLike` and `src` the usual loose
 interface spec (`Interface`, MAC, adapter name or address). `close()` closes
 the wrapped socket, and the endpoint is a **context manager**
-(`with UDPEndpoint(bind("", 67)) as endpoint:`).
+(`with UDPEndpoint(bind("", 67)) as endpoint:`) and an **async context
+manager** (`async with UDPEndpoint(bind("", 67)) as endpoint:`).
+
+**`close()` and `await aclose()` are each complete on return** — the reader
+thread, if `arecv` started one, has left and the socket is closed — **and
+harmless when called again**, in either order. From a coroutine use `aclose()`:
+`close()` joins the thread on the calling thread and so holds up every other
+task on the loop until it has gone, while `aclose()` waits for it with the loop
+running.
 
 `recv` and `send` raise the builtin `TimeoutError` when a timeout set on the
 wrapped socket expires, on every supported Python (before 3.10
@@ -1519,7 +1527,7 @@ wrapped socket expires, on every supported Python (before 3.10
   One waiter at a time: this is a receive loop's method, and two coroutines
   awaiting one endpoint would race for the same datagram however the waiting were
   arranged. The thread, where there is one, is created on the first `await` and
-  joined by `close()`. `recv()` is unaffected — the synchronous path is untouched.
+  joined by `close()` or `aclose()`. `recv()` is unaffected — the synchronous path is untouched.
 
   **Cancelling the awaiting task is a clean shutdown**, which is the ordinary
   server one: cancel the receive task, then close the endpoint. A cancelled

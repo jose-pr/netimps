@@ -428,3 +428,152 @@ def test_rebinding_leaves_no_thread_behind(factory):
         if t not in before and t.name == "netimps-readnotify" and t.is_alive()
     ]
     assert leaked == []
+
+
+def _notifier_threads():
+    return [t.name for t in threading.enumerate() if "netimps-" in t.name]
+
+
+@pytest.mark.parametrize("factory", LOOP_FACTORIES, ids=LOOP_IDS)
+def test_async_with_leaves_no_thread_behind(factory):
+    """`async with` closes the endpoint, and the reader thread is gone on exit.
+
+    No sleep between the exit and the check: `close()` joins the thread, and
+    `aclose()` must wait for it too, so an endpoint that was awaited on never
+    leaves the thread to be reaped later. On a Proactor loop the thread exists
+    only because `arecv` started it, which is why the endpoint receives first.
+    """
+
+    async def body():
+        sock = bind("127.0.0.1", 0)
+        port = sock.getsockname()[1]
+        sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            async with UDPEndpoint(sock) as endpoint:
+                task = asyncio.ensure_future(endpoint.arecv(1500))
+                await asyncio.sleep(0.05)
+                sender.sendto(b"x", ("127.0.0.1", port))
+                packet = await asyncio.wait_for(task, 10)
+        finally:
+            sender.close()
+        return packet.data, sock.fileno(), _notifier_threads()
+
+    data, fileno, threads = _run(body, factory)
+    assert data == b"x"
+    assert fileno == -1, "the socket must be closed on exit"
+    assert threads == []
+
+
+@pytest.mark.parametrize("factory", LOOP_FACTORIES, ids=LOOP_IDS)
+def test_async_with_closes_after_a_cancelled_arecv(factory):
+    """The ordinary shutdown: cancel the receive task, leave the block."""
+
+    async def body():
+        async with UDPEndpoint(bind("127.0.0.1", 0)) as endpoint:
+            task = asyncio.ensure_future(endpoint.arecv(1500))
+            await asyncio.sleep(0.05)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        return _notifier_threads()
+
+    assert _run(body, factory) == []
+
+
+@pytest.mark.parametrize("factory", LOOP_FACTORIES, ids=LOOP_IDS)
+def test_close_and_aclose_are_complete_and_harmless_twice(factory):
+    """Each is complete on return, and any order of repeats is a no-op."""
+
+    async def body():
+        results = []
+        for first, second in (
+            ("aclose", "aclose"),
+            ("close", "close"),
+            ("close", "aclose"),
+            ("aclose", "close"),
+        ):
+            endpoint = UDPEndpoint(bind("127.0.0.1", 0))
+            port = endpoint.socket.getsockname()[1]
+            sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                task = asyncio.ensure_future(endpoint.arecv(1500))
+                await asyncio.sleep(0.05)
+                sender.sendto(b"x", ("127.0.0.1", port))
+                await asyncio.wait_for(task, 10)
+            finally:
+                sender.close()
+            for name in (first, second):
+                outcome = getattr(endpoint, name)()
+                if asyncio.iscoroutine(outcome):
+                    await outcome
+                # Complete on return: the socket is closed and the thread gone.
+                results.append((name, endpoint.socket.fileno(), _notifier_threads()))
+        return results
+
+    for name, fileno, threads in _run(body, factory):
+        assert fileno == -1, "%s left the socket open" % name
+        assert threads == [], "%s left the reader thread running" % name
+
+
+@pytest.mark.parametrize("factory", LOOP_FACTORIES, ids=LOOP_IDS)
+def test_aclose_on_an_endpoint_that_never_awaited(factory):
+    """No notifier was ever made, so only the socket is left to close."""
+
+    async def body():
+        endpoint = UDPEndpoint(bind("127.0.0.1", 0))
+        await endpoint.aclose()
+        return endpoint.socket.fileno()
+
+    assert _run(body, factory) == -1
+
+
+@pytest.mark.parametrize("factory", LOOP_FACTORIES, ids=LOOP_IDS)
+def test_aclose_waits_for_the_thread_without_blocking_the_loop(factory):
+    """A slow-to-leave thread is waited for, and other tasks run meanwhile.
+
+    `close()` joins on the calling thread, which from a coroutine freezes every
+    other task for as long as the thread takes. The reader thread leaves in
+    microseconds, so a stand-in that stays alive for 50 ms is what makes the
+    wait observable: `aclose()` must outlast it, and a ticker task must keep
+    advancing while it does.
+    """
+    import time
+
+    from netimps._aio import ReadNotifier
+
+    class SlowThread:
+        def __init__(self):
+            self.until = time.monotonic() + 0.05
+
+        def is_alive(self):
+            return time.monotonic() < self.until
+
+        def join(self, timeout=None):  # pragma: no cover - aclose must not call it
+            raise AssertionError("aclose() blocked on join()")
+
+    async def body():
+        endpoint = UDPEndpoint(bind("127.0.0.1", 0))
+        notifier = ReadNotifier(endpoint.socket)
+        notifier._thread = SlowThread()
+        endpoint._notifier = notifier
+        ticks = []
+
+        async def ticker():
+            while True:
+                ticks.append(1)
+                await asyncio.sleep(0)
+
+        watcher = asyncio.ensure_future(ticker())
+        await asyncio.sleep(0)
+        start = time.monotonic()
+        await endpoint.aclose()
+        elapsed = time.monotonic() - start
+        watcher.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await watcher
+        return elapsed, len(ticks), endpoint.socket.fileno()
+
+    elapsed, ticks, fileno = _run(body, factory)
+    assert elapsed >= 0.05, "aclose() returned before the thread had left"
+    assert ticks > 3, "the loop was blocked while aclose() waited"
+    assert fileno == -1

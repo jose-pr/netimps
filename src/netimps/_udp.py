@@ -1062,11 +1062,26 @@ class UDPEndpoint:
 
         The notifier goes first: its thread selects on this socket, and closing
         the socket underneath it would turn an orderly shutdown into a caught
-        ``OSError``.
+        ``OSError``. Complete on return, and harmless when called again. From a
+        coroutine use :meth:`aclose`, which does not block the loop.
         """
         notifier, self._notifier = self._notifier, None
         if notifier is not None:
             notifier.close()
+        self.socket.close()
+
+    async def aclose(self) -> None:
+        """:meth:`close`, awaited: the loop keeps running while the notifier's
+        thread leaves.
+
+        Complete on return -- the thread is gone and the socket is closed --
+        and harmless when called again, or after :meth:`close`. Use it from a
+        coroutine; :meth:`close` would block the loop for as long as the thread
+        takes to stop.
+        """
+        notifier, self._notifier = self._notifier, None
+        if notifier is not None:
+            await notifier.aclose()
         self.socket.close()
 
     def __enter__(self) -> "UDPEndpoint":
@@ -1074,6 +1089,12 @@ class UDPEndpoint:
 
     def __exit__(self, *exc) -> None:
         self.close()
+
+    async def __aenter__(self) -> "UDPEndpoint":
+        return self
+
+    async def __aexit__(self, *exc) -> None:
+        await self.aclose()
 
     def __repr__(self) -> str:
         try:

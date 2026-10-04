@@ -29,6 +29,7 @@ import select as _select
 import socket as _socket
 import sys as _sys
 import threading as _threading
+import time as _time
 from typing import Any, Optional
 
 __all__ = ["ReadNotifier"]
@@ -192,6 +193,13 @@ class ReadNotifier:
         ``_closed`` was set first, which is what makes closing permanent and
         rebinding not.
         """
+        thread = self._signal_stop()
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=5.0)
+        self._release()
+
+    def _signal_stop(self) -> "Optional[_threading.Thread]":
+        """Tell the thread to leave, without waiting for it. Returns the thread."""
         if self._stop is not None:
             self._stop.set()
         # Both, because the thread may be blocked in either place: `_request`
@@ -203,9 +211,10 @@ class ReadNotifier:
                 self._wake_w.send(b"\0")
             except OSError:  # pragma: no cover - already torn down
                 pass
-        thread = self._thread
-        if thread is not None and thread.is_alive():
-            thread.join(timeout=5.0)
+        return self._thread
+
+    def _release(self) -> None:
+        """Drop the stopped thread's state and close the wake sockets."""
         self._thread = None
         self._stop = None
         self._loop = None
@@ -252,9 +261,26 @@ class ReadNotifier:
                     return
 
     def close(self) -> None:
-        """Stop the thread, if there is one, and release the wake socket."""
+        """Stop the thread, if there is one, and release the wake socket.
+
+        Complete on return, and harmless when called again. It blocks the
+        caller until the thread has left, so from a coroutine use
+        :meth:`aclose`.
+        """
         self._closed = True
         self._retire_thread()
+        self._pending = None
+
+    async def aclose(self) -> None:
+        """:meth:`close`, without blocking the loop while the thread leaves."""
+        import asyncio
+
+        self._closed = True
+        thread = self._signal_stop()
+        deadline = _time.monotonic() + 5.0
+        while thread is not None and thread.is_alive() and _time.monotonic() < deadline:
+            await asyncio.sleep(0.001)
+        self._release()
         self._pending = None
 
 

@@ -315,6 +315,13 @@ assert_type(is_broadcast("255.255.255.255"), bool)
 assert_type(max_udp_payload(1500), int)
 
 
+# `aclose()` is a coroutine and `async with` yields the endpoint itself.
+async def _async_closing(endpoint: UDPEndpoint) -> None:
+    assert_type(await endpoint.aclose(), None)
+    async with endpoint as entered:
+        assert_type(entered, UDPEndpoint)
+
+
 # `reply_socket`'s `port` takes an int *or* any iterable of ints, and still
 # returns a concrete socket. Checked from a consumer's config, because the
 # widening is only useful if a caller's own `range`/`list`/generator type-checks.
