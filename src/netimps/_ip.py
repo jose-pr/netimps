@@ -184,10 +184,11 @@ def _dst_argument(value) -> str:
     address? the first host address?) -- a caller who meant a specific
     address should say so.
 
-    Anything else (a plain string, an :class:`IPv4Address`/
-    :class:`IPv6Address`, a :class:`Host`, an int) is handled by ``str()``,
-    which already does the right thing for all of those -- ``Host.__str__``
-    in particular returns the original text, not a parsed/resolved form.
+    A string, an :class:`IPv4Address`/:class:`IPv6Address`, a :class:`Host` and
+    an :class:`FQDN` stand for the text they hold. **Anything else raises
+    :class:`TypeError`**, through the same allowlist as :func:`split_host`: a
+    ``str()`` fallback read ``None`` as the host named ``"None"``, an answer
+    that looks right and is not.
     """
     if isinstance(value, (IPv4Network, IPv6Network)):
         raise TypeError(
@@ -196,7 +197,9 @@ def _dst_argument(value) -> str:
         )
     if isinstance(value, (IPv4Interface, IPv6Interface)):
         return str(value.ip)
-    return str(value)
+    if isinstance(value, (IPv4Address, IPv6Address)):
+        return str(value)
+    return _host_text(value)
 
 
 def collapse(networks: "Iterable[IPNetworkLike]") -> "List[IPNetwork]":

@@ -86,6 +86,7 @@ from netimps import (
     tcp_check,
     get_hostname,
     discover_mtu,
+    get_free_port,
     get_tcp_mss,
     has_dns,
     ping,
@@ -441,6 +442,7 @@ assert_type(ping("h", tries=3, method="tcp", port=80), PingResult)
 assert_type(ping("h").rtt, Optional[float])
 assert_type(discover_mtu("h", tries=3, ipv6=False, ttl=64), Optional[int])
 assert_type(get_tcp_mss("h", 80, timeout=1.0, ipv6=True), Optional[int])
+assert_type(get_free_port(IPv6Address("::1"), family=None), int)
 assert_type(wait_for_port("h", 80, deadline=5.0, timeout=1.0), bool)
 assert_type(split_host("example.com:80", default_port=443), Tuple[str, Optional[int]])
 assert_type(is_broadcast("10.0.0.255"), bool)

@@ -241,14 +241,13 @@ def test_zero_timeout_still_finds_an_open_port(listener):
     ]
 
 
-def test_floor_timeout_clamps_zero_and_rejects_negative():
-    from netimps._scan import _MIN_TIMEOUT, _floor_timeout
+def test_checked_timeout_passes_zero_on_and_rejects_negative():
+    from netimps._scan import _checked_timeout
 
-    assert _floor_timeout(0) == _MIN_TIMEOUT
-    assert _floor_timeout(0.5) == 0.5
-    assert _MIN_TIMEOUT > 0
+    assert _checked_timeout(0) == 0
+    assert _checked_timeout(0.5) == 0.5
     with pytest.raises(ValueError, match="must not be negative"):
-        _floor_timeout(-1)
+        _checked_timeout(-1)
 
 
 @pytest.mark.parametrize(

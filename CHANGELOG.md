@@ -273,6 +273,33 @@ probe says so in its prefix.
 
 ### Fixed
 
+- **A destination of `None` raises `TypeError`.** `tcp_check(None, 80)`,
+  `get_source_ip(None)` and every other `dst` parameter asked the resolver for
+  the host named `"None"` and answered `False` or `None`; `dst` takes the same
+  allowlist as `split_host` (a string, an address, an interface, a `Host` or an
+  `FQDN`), so an `int`, `bytes` or `None` raises. `Host(None)` is still the
+  empty host.
+
+- **`bind` reads `options` once, and `reuse_port=True` shares a UDP port on
+  Windows.** A generator passed as `options` was used up by a scan for an
+  address-takeover request, so none of its options were applied. On Windows the
+  flag was a no-op and the second bind of a port raised `AddressInUseError`; a
+  datagram socket now takes the address-sharing path, as on Linux and macOS two
+  sockets that both pass it bind one port (another process can take the port
+  over there too). A stream socket on Windows and every bind without the flag
+  stay exclusive.
+
+- **`get_free_port` infers the family as `bind` does** and takes any host:
+  `get_free_port("::1")` raised `gaierror`.
+
+- **`wait_for_port` no longer shortens an `interval` above one second**: it
+  backed off to a flat second after the first wait, so `interval=5` polled
+  sixteen times in twenty seconds instead of four. **`is_local_host` reads the
+  `inet_aton` spellings** (`127.1`, `2130706433`, `0x7f.0.0.1`) as the address
+  they spell. **One timeout floor:** the scanners floored to 1 ms and
+  `tcp_check` again to 50 ms; the scanners now pass the timeout on and the
+  floor is `tcp_check`'s 50 ms.
+
 - **`discover_mtu` reports what it measured.** It resolved the name a second
   time for the header overhead and ignored `ipv6=`, so a 1480-byte IPv4 path
   was reported as 1500 when the name's first record was IPv6; the target, the

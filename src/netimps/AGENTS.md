@@ -56,7 +56,9 @@ or an `IPv4Interface`/`IPv6Interface` (its `.ip` is used, dropping the `/prefix`
 which every consumer of a destination -- a subprocess argument, a socket
 call, a DNS query -- would otherwise read as garbage). A network
 (`IPv4Network`/`IPv6Network`) raises `TypeError`, since it has no single
-address to send to. `resolve`'s `query` accepts the same forms.
+address to send to. **Anything else raises `TypeError`**, `None` included: it
+is never read as the host named `"None"`. `resolve`'s `query` accepts the same
+forms.
 
 **Every `port` a network helper takes is validated** before a socket sees it:
 `tcp_check`, `wait_for_port`, `scan_ports`, `scan_hosts`, `get_pmtu`,
@@ -906,9 +908,12 @@ at least 3 there.
   `ConnectionResetError` on a later receive) and leaves other sockets alone;
   `True` keeps the platform's reporting. `interface` accepts the usual union
   (`Interface`, MAC, adapter name, address) and **raises `ValueError`** if
-  unresolvable rather than silently binding the wildcard. `reuse_port` is a
-  **no-op where `SO_REUSEPORT` does not exist** (Windows), not an error;
-  `listen` is ignored for datagram sockets. The socket is closed before any
+  unresolvable rather than silently binding the wildcard. `options` is read
+  once, so a generator is honoured. `reuse_port=True` shares the port with other
+  sockets that ask: `SO_REUSEPORT` on POSIX, and on **Windows**, which has no such
+  option, a datagram socket takes the address-sharing path (`SO_REUSEADDR`), so
+  two sockets that both pass it bind one port and another process can take the
+  port over; a stream socket there stays exclusive. `listen` is ignored for datagram sockets. The socket is closed before any
   exception propagates, so a failed call leaks nothing. A failed bind raises
   `OSError` whose message already leads with the `bind_error_hint` text where
   that recognises the failure; an address that is taken is always
@@ -1081,7 +1086,8 @@ at least 3 there.
   `NetimpsValueError`; loopback answers before interface discovery.
 - **`is_local_host(host, *, resolve=False, cache=False) -> bool`** — whether a
   host string names this machine. True for a literal `is_local_address` accepts
-  (zone ignored, v4-mapped judged as v4), for `localhost` and `*.localhost`, and
+  (zone ignored, v4-mapped judged as v4, and the short and numeric spellings
+  `inet_aton` reads, such as `127.1` and `2130706433`), for `localhost` and `*.localhost`, and
   for this machine's own host name (case and trailing dot ignored); a `:port` or
   brackets are accepted and ignored. **A name is not resolved unless
   `resolve=True`**, which asks the OS resolver and is true when any address it
@@ -1105,8 +1111,9 @@ at least 3 there.
   contains a colon**, so every name was probed as IPv4 and a v6-only one
   answered `None`. The returned address carries **no `%zone`** — the zone
   identifies the adapter, and `get_interface` is the way back to it.
-- **`get_free_port(src="127.0.0.1", *, family=AF_INET) -> int`** — bind port 0 and
-  read it back. **Inherently racy** — the port frees the instant it returns; if
+- **`get_free_port(src="127.0.0.1", *, family=None) -> int`** — bind port 0 and
+  read it back. `src` is any `HostLike` and `family` follows it as `bind`'s
+  does (an IPv6 address gives `AF_INET6`). **Inherently racy** — the port frees the instant it returns; if
   you can, bind port 0 in the server itself instead. `SO_REUSEADDR` is
   deliberately *not* set (it would hand back a `TIME_WAIT` port).
 - **`tcp_check(dst, port, *, timeout=3.0) -> bool`** — the honest reachability
@@ -1125,7 +1132,8 @@ at least 3 there.
   rather than taken literally: `settimeout(0)` means non-blocking, which
   reported every open port as closed. `timeout=None` blocks.
 - **`wait_for_port(dst, port, *, deadline=30.0, interval=0.1, timeout=None)`**
-  — poll until it answers. Backs off to 1s. `deadline` bounds the whole wait
+  — poll until it answers. Backs off, growing by half each round, to the larger
+  of 1s and `interval`, so an interval above a second is never shortened. `deadline` bounds the whole wait
   and is honoured even when individual connects block — it cannot overrun by
   more than one attempt, because `tcp_check` bounds *itself* overall rather
   than per resolved address. `timeout` is one attempt's connect timeout and
@@ -1279,10 +1287,9 @@ accepts a scheme name too; passing both raises `ValueError`.
   does **not** fall back to the 36-port `"common"` set, which would sweep a
   network the caller just said to probe on no ports; `scan_hosts`
   distinguishes an empty list from omission.
-- **`timeout` is floored to 1ms** — `settimeout(0)` is *non-blocking* and
-  reported every port closed — and a **negative** `timeout` raises
-  `ValueError`. Note the scanners floor at 1ms while `tcp_check` floors at
-  50ms.
+- **`timeout` is floored to 50 ms**, once, by `tcp_check` — `settimeout(0)` is
+  *non-blocking* and reported every port closed — and a **negative** `timeout`
+  raises `ValueError`.
 - **`host` is resolved once per scan**, not once per port. That is a
   correctness fix, not only a speed one: a rate-limited resolver turned open
   ports into "closed". A name that does not resolve returns `[]` after a single

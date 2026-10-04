@@ -228,9 +228,13 @@ def bind(
     :param allow_address_takeover: set ``SO_REUSEADDR`` on Windows too, where
         it means something else entirely. Default ``False``; on POSIX it adds
         nothing, since ``reuse_address`` already sets exactly that option.
-    :param reuse_port: sets ``SO_REUSEPORT``. **A no-op where the option does
-        not exist** (Windows) rather than an error, so the same call works
-        everywhere.
+    :param reuse_port: share the port with other sockets that ask the same.
+        POSIX sets ``SO_REUSEPORT``. **Windows has no such option**: for a
+        datagram socket the flag takes the address-sharing path
+        (``SO_REUSEADDR``, as ``allow_address_takeover=True`` does), so two
+        sockets that both pass it bind one port; there, sharing also lets
+        another process take the port over. A stream socket on Windows is
+        unchanged and stays exclusive.
     :param connreset: Windows only, and only for UDP. ``False`` turns
         ``SIO_UDP_CONNRESET`` off, so that an ICMP port-unreachable provoked by
         an earlier send stops being reported as
@@ -272,6 +276,8 @@ def bind(
     # use, so one union is accepted everywhere rather than this one entry point
     # being stricter than its neighbours.
     address = _dst_argument(address) if address != "" else ""
+    # Read once: a generator is exhausted by the first pass.
+    options = tuple(options)
 
     if interface is not None:
         resolved = _interface_address(
@@ -315,9 +321,13 @@ def bind(
         # stdlib-shaped spelling of "share this address" therefore stopped
         # working here, failing with "[WinError 10022] An invalid argument was
         # supplied".
-        takeover_requested = allow_address_takeover or any(
-            level == _socket.SOL_SOCKET and name == _socket.SO_REUSEADDR and value
-            for level, name, value in options
+        takeover_requested = (
+            allow_address_takeover
+            or _shares_by_address(reuse_port, kind, exclusive)
+            or any(
+                level == _socket.SOL_SOCKET and name == _socket.SO_REUSEADDR and value
+                for level, name, value in options
+            )
         )
         if takeover_requested:
             sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
@@ -383,6 +393,20 @@ def bind(
         sock.close()
         raise
     return sock
+
+
+def _shares_by_address(reuse_port: bool, kind: int, exclusive: "Optional[int]") -> bool:
+    """Whether ``reuse_port`` has to be spelled as address sharing here.
+
+    Windows has no ``SO_REUSEPORT``: the way two datagram sockets share a port
+    there is ``SO_REUSEADDR``. A stream socket keeps the exclusive default.
+    """
+    return (
+        reuse_port
+        and kind == _socket.SOCK_DGRAM
+        and exclusive is not None
+        and getattr(_socket, "SO_REUSEPORT", None) is None
+    )
 
 
 def _infer_family(address: str, kind: int) -> int:
@@ -789,7 +813,8 @@ def is_local_host(
 
     True for a literal that :func:`is_local_address` accepts (loopback, or
     assigned to an interface; a ``%zone`` is ignored, and a v4-mapped address is
-    judged as the v4 address inside), for ``localhost`` and any ``*.localhost``
+    judged as the v4 address inside; the short and numeric IPv4 spellings that
+    ``inet_aton`` reads, such as ``127.1`` and ``2130706433``, are literals), for ``localhost`` and any ``*.localhost``
     (RFC 6761), and for this machine's own host name, compared without case and
     without a trailing dot.
 
@@ -812,6 +837,13 @@ def is_local_host(
         return False
 
     address = try_parse(name, IPAddress)
+    if address is None:
+        # inet_aton text (127.1, 2130706433, 0x7f.0.0.1) is a literal to the
+        # socket layer, which sends it to the address it spells.
+        try:
+            address = parse(_socket.inet_ntoa(_socket.inet_aton(name)), IPAddress)
+        except (OSError, ValueError):
+            address = None
     if address is not None:
         return is_local_address(unmap(address), cache=cache)
 
@@ -966,7 +998,9 @@ def max_udp_payload(mtu: int, *, ipv6: bool = False) -> int:
     return max(0, mtu - overhead)
 
 
-def get_free_port(src: str = "127.0.0.1", *, family: int = _socket.AF_INET) -> int:
+def get_free_port(
+    src: "HostLike" = "127.0.0.1", *, family: "Optional[int]" = None
+) -> int:
     """Return a port number that was free a moment ago.
 
     Binds port 0, reads back whatever the OS assigned, and closes::
@@ -986,10 +1020,17 @@ def get_free_port(src: str = "127.0.0.1", *, family: int = _socket.AF_INET) -> i
     ``SO_REUSEADDR`` is deliberately **not** set: it would let the OS hand back
     a port still in ``TIME_WAIT``, which then fails or steals traffic when the
     caller binds it for real.
+
+    ``src`` is any host, as for :func:`bind`, and ``family`` follows it the way
+    it does there: an IPv6 address gives ``AF_INET6``, an IPv4 one or the
+    default ``AF_INET``.
     """
+    address = _dst_argument(src)
+    if family is None:
+        family = _infer_family(address, _socket.SOCK_STREAM)
     sock = _socket.socket(family, _socket.SOCK_STREAM)
     try:
-        sock.bind((src, 0))
+        sock.bind(_sockaddr_for_bind(family, address, 0))
         return int(sock.getsockname()[1])
     finally:
         sock.close()
@@ -1100,8 +1141,9 @@ def wait_for_port(
     ``dst`` accepts the same forms as :func:`tcp_check` (address objects,
     ``IPv4Interface``/``IPv6Interface``).
 
-    :param interval: delay between attempts. Backs off up to 1s so a long wait
-        does not spin.
+    :param interval: delay between attempts. Backs off, growing by half each
+        round, up to the larger of 1s and ``interval`` so a long wait does not
+        spin and an interval above a second is never shortened.
     :param deadline: seconds the whole wait may take.
     :param timeout: per-attempt connect timeout; defaults to ``interval``
         bounded to at least 1s.
@@ -1130,7 +1172,8 @@ def wait_for_port(
         if remaining <= 0:
             return False
         _time.sleep(min(delay, remaining))
-        delay = min(delay * 1.5, 1.0)  # gentle backoff, capped
+        # Backing off never shortens the interval the caller asked for.
+        delay = min(delay * 1.5, max(interval, 1.0))
 
 
 class Route:

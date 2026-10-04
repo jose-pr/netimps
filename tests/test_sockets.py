@@ -1733,3 +1733,175 @@ def test_the_windows_ping_limit_is_65500_payload_bytes(monkeypatch):
     monkeypatch.setattr(_sockets, "_IS_WINDOWS", True)
     assert _sockets._icmp_packet_limit(28) == 65528
     assert _sockets._icmp_packet_limit(48) == 65535
+
+
+# --------------------------------------------------------------------------- #
+# bind options, port sharing, free ports, destinations, waiting, local hosts   #
+# --------------------------------------------------------------------------- #
+
+
+def test_bind_honours_a_one_shot_options_iterable():
+    """``options`` is an ``Iterable``: a generator is read once, not twice.
+
+    A scan for an address-takeover request used up the generator, so the
+    option was never applied.
+    """
+    wanted = ((socket.SOL_SOCKET, socket.SO_BROADCAST, 1) for _ in range(1))
+    sock = netimps.bind("127.0.0.1", 0, options=wanted)
+    try:
+        assert sock.getsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST) != 0
+    finally:
+        sock.close()
+
+
+def test_bind_reuse_port_shares_a_udp_port_on_every_platform():
+    """Windows has no ``SO_REUSEPORT``; the flag takes its address-sharing path."""
+    first = netimps.bind("127.0.0.1", 0, reuse_port=True)
+    try:
+        port = first.getsockname()[1]
+        second = netimps.bind("127.0.0.1", port, reuse_port=True)
+        second.close()
+    finally:
+        first.close()
+
+
+def test_bind_without_reuse_port_stays_exclusive():
+    first = netimps.bind("127.0.0.1", 0)
+    try:
+        port = first.getsockname()[1]
+        with pytest.raises(netimps.AddressInUseError):
+            netimps.bind("127.0.0.1", port)
+    finally:
+        first.close()
+
+
+@pytest.mark.skipif(
+    not hasattr(socket, "SO_EXCLUSIVEADDRUSE"), reason="the Windows stream rule"
+)
+def test_bind_reuse_port_leaves_a_stream_socket_exclusive_on_windows():
+    first = netimps.bind("127.0.0.1", 0, kind=socket.SOCK_STREAM, reuse_port=True)
+    try:
+        port = first.getsockname()[1]
+        with pytest.raises(netimps.AddressInUseError):
+            netimps.bind("127.0.0.1", port, kind=socket.SOCK_STREAM, reuse_port=True)
+    finally:
+        first.close()
+
+
+def _has_ipv6_loopback():
+    try:
+        with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as probe:
+            probe.bind(("::1", 0))
+        return True
+    except OSError:
+        return False
+
+
+@pytest.mark.skipif(not _has_ipv6_loopback(), reason="no IPv6 loopback")
+def test_get_free_port_follows_the_address_family_like_bind():
+    port = get_free_port("::1")
+    assert 0 < port < 65536
+    assert get_free_port(netimps.IPv6Address("::1")) > 0
+    assert get_free_port(family=socket.AF_INET6, src="::1") > 0
+
+
+def test_get_free_port_accepts_a_host_and_an_interface():
+    assert get_free_port(netimps.IPv4Address("127.0.0.1")) > 0
+    assert get_free_port(IPv4Interface("127.0.0.1/8")) > 0
+    assert get_free_port(netimps.Host("127.0.0.1")) > 0
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: netimps.tcp_check(None, 80),
+        lambda: netimps.wait_for_port(None, 80, deadline=0.1),
+        lambda: netimps.get_source_ip(None),
+        lambda: netimps.get_route(None),
+        lambda: netimps.ping(None),
+        lambda: netimps.resolve(None),
+        lambda: netimps.scan_ports(None, [80]),
+        lambda: netimps.count_hops(None),
+        lambda: netimps.discover_mtu(None),
+        lambda: netimps.get_pmtu(None),
+        lambda: netimps.get_tcp_mss(None, 80),
+        lambda: netimps.bind(None),
+        lambda: netimps.tcp_check(5, 80),
+        lambda: netimps.tcp_check(b"127.0.0.1", 80),
+    ],
+)
+def test_a_destination_that_is_not_a_host_raises_type_error(monkeypatch, call):
+    """``None`` was read as the host named ``"None"``: a plausible answer, wrong."""
+    asked = []
+
+    def refuse(host, *args, **kwargs):
+        asked.append(host)
+        raise socket.gaierror("not asked in this test")
+
+    monkeypatch.setattr(socket, "getaddrinfo", refuse)
+    with pytest.raises(TypeError):
+        call()
+    assert asked == []
+
+
+def test_host_still_takes_none():
+    assert str(netimps.Host(None)) == ""
+
+
+class _Clock:
+    """A clock that only moves when ``sleep`` is called."""
+
+    def __init__(self):
+        self.now = 0.0
+        self.sleeps = []
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+def test_wait_for_port_never_waits_less_than_its_interval(monkeypatch):
+    """The back-off cap was a flat second, shortening an interval above it."""
+    clock = _Clock()
+    monkeypatch.setattr(_sockets, "_time", clock)
+    monkeypatch.setattr(_sockets, "tcp_check", lambda *a, **k: False)
+    assert netimps.wait_for_port("h", 80, deadline=20, interval=5.0) is False
+    assert clock.sleeps[:3] == [5.0, 5.0, 5.0]
+    assert min(clock.sleeps[:-1]) >= 5.0
+
+
+def test_wait_for_port_still_backs_off_to_one_second(monkeypatch):
+    clock = _Clock()
+    monkeypatch.setattr(_sockets, "_time", clock)
+    monkeypatch.setattr(_sockets, "tcp_check", lambda *a, **k: False)
+    netimps.wait_for_port("h", 80, deadline=10, interval=0.1)
+    assert clock.sleeps[0] == 0.1
+    assert max(clock.sleeps) == 1.0
+
+
+@pytest.mark.parametrize(
+    "spelling", ["127.1", "2130706433", "0x7f.0.0.1", "0177.0.0.1"]
+)
+def test_is_local_host_reads_the_spellings_the_socket_layer_sends_to_loopback(
+    spelling,
+):
+    """``inet_aton`` text is a literal: each of these is ``127.0.0.1``."""
+    assert netimps.is_local_host(spelling) is True
+
+
+def test_is_local_host_does_not_widen_to_a_remote_short_form():
+    assert netimps.is_local_host("8.8") is False
+    assert netimps.is_local_host("example.com") is False
+
+
+def test_one_timeout_floor_serves_a_scan_and_a_check():
+    """The scan floored to 1 ms and ``tcp_check`` again to 50 ms."""
+    from netimps import _scan
+
+    assert _scan._checked_timeout(0) == 0
+    assert _sockets._connect_timeout(_scan._checked_timeout(0)) == _sockets._MIN_TIMEOUT
+    with pytest.raises(ValueError):
+        _scan._checked_timeout(-1)

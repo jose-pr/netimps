@@ -687,9 +687,10 @@ def ping(
        echo requests while serving traffic normally. Prefer a TCP connect to
        the port you actually care about when you can.
     """
-    if not dst:
+    text = _dst_argument(dst)
+    if not text:
         return PingResult(False, dst, attempts=0)
-    dst = _dst_argument(dst)
+    dst = text
 
     # A destination that begins with "-" is read by the binary as an option,
     # not a host. Windows `ping -?` then prints usage and exits 0, which used to

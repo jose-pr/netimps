@@ -88,30 +88,18 @@ PORT_RANGES = {
 #: Above ~200 the OS starts refusing sockets on some platforms.
 _DEFAULT_WORKERS = 100
 
-#: The smallest timeout a probe is allowed to run with. ``settimeout(0)`` puts
-#: a socket in **non-blocking** mode rather than meaning "do not wait", so a
-#: zero timeout reports every port -- open or not -- as closed. 1ms is the
-#: smallest value that still blocks, and is far below any real connect.
-_MIN_TIMEOUT = 0.001
 
+def _checked_timeout(timeout: float) -> float:
+    """``timeout`` as a float, refusing a negative one.
 
-def _floor_timeout(timeout: float) -> float:
-    """Clamp a probe timeout away from zero.
-
-    A caller passing ``timeout=0`` means "be quick", which is a reasonable
-    request; what ``socket.settimeout(0)`` delivers is a non-blocking socket
-    whose ``connect`` raises ``BlockingIOError`` immediately, so every port
-    reads as closed -- a full scan's worth of confidently wrong answers.
-    :func:`netimps.ping` already rounds a sub-second POSIX timeout **up** so
-    it never becomes 0; this is the same precedent for the socket path.
-
-    A negative timeout has no such reading -- ``settimeout`` rejects it -- so
-    it raises :class:`ValueError` rather than being silently floored.
+    A zero is passed on: the floor that keeps ``settimeout(0)`` (non-blocking,
+    every port reads as closed) from being taken literally is applied once, by
+    :func:`netimps.tcp_check`, which every probe goes through.
     """
     value = float(timeout)
     if value < 0:
         raise ValueError("timeout must not be negative: %r" % (timeout,))
-    return max(value, _MIN_TIMEOUT)
+    return value
 
 
 def _probe_addresses(host: "HostLike") -> "List[str]":
@@ -254,9 +242,9 @@ def scan_ports(
         iterable means "nothing to scan" and returns ``[]``.
     :param timeout: per-port connect timeout. This bounds the whole scan
         (``timeout`` x rounds), so keep it small on a large range -- but not so
-        small that a slow host reads as closed. Floored to 1ms, since
-        ``settimeout(0)`` means *non-blocking* and would report every port
-        closed; a negative value raises.
+        small that a slow host reads as closed. Floored to 50 ms, as in
+        :func:`tcp_check`, since ``settimeout(0)`` means *non-blocking* and
+        would report every port closed; a negative value raises.
     :param workers: concurrent connections. These tasks are I/O-bound, so the
         useful number is far above the CPU count; very high values can exhaust
         file descriptors or trip rate limiting.
@@ -275,7 +263,7 @@ def scan_ports(
     targets = _resolve_ports(ports)
     if not targets:
         return []
-    timeout = _floor_timeout(timeout)
+    timeout = _checked_timeout(timeout)
 
     addresses = _probe_addresses(host)
     if not addresses:
@@ -314,7 +302,7 @@ def scan_hosts(
         empty ``ports`` means "nothing to scan" and returns ``[]`` -- it does
         not fall back to the default set, which would sweep 36 ports across
         the network a caller just said to probe on none.
-    :param timeout: per-connection timeout, floored to 1ms as in
+    :param timeout: per-connection timeout, floored to 50 ms as in
         :func:`scan_ports`; a negative value raises.
     :param workers: total concurrent connections across all hosts.
 
@@ -353,7 +341,7 @@ def scan_hosts(
     targets = _resolve_ports(spec)
     if not targets:
         return []
-    timeout = _floor_timeout(timeout)
+    timeout = _checked_timeout(timeout)
 
     # A /31 or /32 has no separate network/broadcast address, and .hosts()
     # already accounts for that.
