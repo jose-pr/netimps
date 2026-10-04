@@ -36,6 +36,8 @@ from typing_extensions import assert_type
 
 from netimps import (
     Backoff,
+    backoff_delays,
+    retry,
     Datagram,
     FQDN,
     Host,
@@ -375,6 +377,13 @@ def _backoff_is_a_timer(timer: Backoff) -> None:
     assert_type(timer.advance(), float)
     assert_type(timer.reset(), float)
     assert_type(timer.attempt, int)
+
+
+# `retry` returns what its callable returns, and `backoff_delays` is an
+# iterator of floats.
+assert_type(retry(lambda: 1), int)
+assert_type(retry(lambda: "text", 5, delay=0.1), str)
+assert_type(backoff_delays(3), Iterator[float])
 
 
 # The hierarchy is part of the typing contract: a handler written against a

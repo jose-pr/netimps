@@ -10,7 +10,7 @@ Re-exported from :mod:`netimps`.
 from __future__ import annotations
 
 import time as _time
-from typing import Any, Callable, Iterator, Optional, Tuple, Type
+from typing import Callable, Iterator, Optional, Tuple, Type, TypeVar
 
 __all__ = ["retry", "backoff_delays", "Backoff"]
 
@@ -19,6 +19,49 @@ __all__ = ["retry", "backoff_delays", "Backoff"]
 #: ``ValueError`` and ``TypeError`` mean the *call* is wrong, and repeating it
 #: only wastes the caller's time.
 DEFAULT_RETRYABLE: "Tuple[Type[BaseException], ...]" = (OSError,)
+
+_T = TypeVar("_T")
+
+
+def _normalise(
+    delay: float,
+    multiplier: float,
+    max_delay: float,
+    jitter: float,
+    jitter_seconds: "Optional[float]",
+) -> "Tuple[float, float, float, float, Optional[float]]":
+    """The schedule arguments as floats, refusing what no schedule can mean.
+
+    The one rule set behind :func:`retry`, :func:`backoff_delays` and
+    :class:`Backoff`, applied when the arguments are passed:
+
+    * ``delay`` is not negative, and ``max_delay`` is at least ``delay`` (a
+      ceiling below the base would cut the first wait short);
+    * ``multiplier`` is at least 1, since a back-off that shrinks the wait on
+      repeated loss is always a bug;
+    * ``jitter`` is a fraction from 0 to 1, and ``jitter_seconds`` is not
+      negative.
+
+    :raises ValueError: for any other value, ``nan`` included.
+    """
+    base = float(delay)
+    growth = float(multiplier)
+    ceiling = float(max_delay)
+    if not base >= 0:
+        raise ValueError("delay must be non-negative, got %r" % (delay,))
+    if not growth >= 1:
+        raise ValueError("multiplier must be at least 1, got %r" % (multiplier,))
+    if not ceiling >= base:
+        raise ValueError(
+            "max_delay must be at least delay (%r), got %r" % (delay, max_delay)
+        )
+    if not 0 <= jitter <= 1:
+        raise ValueError("jitter must be between 0 and 1, got %r" % (jitter,))
+    if jitter_seconds is not None and not jitter_seconds >= 0:
+        raise ValueError(
+            "jitter_seconds must be non-negative, got %r" % (jitter_seconds,)
+        )
+    return base, growth, ceiling, float(jitter), jitter_seconds
 
 
 def _jittered(
@@ -123,6 +166,12 @@ def backoff_delays(
         ``delay * (1 ± jitter)``, which is what **RFC 8415 §15** (DHCPv6)
         specifies as ``RT = 2*RTprev + RAND*RTprev``.
 
+    Every argument is checked when the function is called, not at the first
+    ``next()``: ``attempts`` below 1, a negative ``delay``, a ``multiplier``
+    below 1, a ``max_delay`` below ``delay`` and a ``jitter`` outside 0 to 1
+    raise :class:`ValueError`. :func:`retry` and :class:`Backoff` apply the
+    same rules.
+
     Delays are capped at ``max_delay``. **The default jitter is applied after
     the cap and only ever reduces the wait**, so ``max_delay`` is a genuine
     ceiling -- the right default for generic retries, where overshooting a
@@ -143,15 +192,21 @@ def backoff_delays(
     """
     if attempts < 1:
         raise ValueError("attempts must be at least 1, got %r" % (attempts,))
-    if delay < 0:
-        raise ValueError("delay must be non-negative, got %r" % (delay,))
-    if not 0 <= jitter <= 1:
-        raise ValueError("jitter must be between 0 and 1, got %r" % (jitter,))
-    if jitter_seconds is not None and jitter_seconds < 0:
-        raise ValueError(
-            "jitter_seconds must be non-negative, got %r" % (jitter_seconds,)
-        )
+    base, growth, ceiling, fraction, amplitude = _normalise(
+        delay, multiplier, max_delay, jitter, jitter_seconds
+    )
+    return _delays(attempts, base, growth, ceiling, fraction, amplitude, symmetric)
 
+
+def _delays(
+    attempts: int,
+    delay: float,
+    multiplier: float,
+    max_delay: float,
+    jitter: float,
+    jitter_seconds: "Optional[float]",
+    symmetric: bool,
+) -> "Iterator[float]":
     draw = _draw()
     current = delay
     for _ in range(attempts - 1):
@@ -189,10 +244,11 @@ class Backoff:
     so arming a deadline, logging it and comparing against it all see one value;
     a property that re-jittered on each read would be a trap here.
 
-    Two guard rails a hand-rolled version tends to miss: ``multiplier`` is
-    floored at ``1.0``, so a timer can never *shrink* on loss, and ``max_delay``
-    is floored at ``delay``, so a ceiling below the base cannot silently
-    truncate the first wait.
+    Two guard rails a hand-rolled version tends to miss, both refused with
+    :class:`ValueError` when the timer is built: a ``multiplier`` below ``1``,
+    which would *shrink* the wait on loss, and a ``max_delay`` below ``delay``,
+    which would truncate the first wait. :func:`backoff_delays` and
+    :func:`retry` refuse the same arguments.
 
     Jitter is **off by default here**, the opposite of
     :func:`backoff_delays`. Its purpose is to desynchronise many clients
@@ -226,24 +282,14 @@ class Backoff:
         jitter_seconds: "Optional[float]" = None,
         symmetric: bool = False,
     ) -> None:
-        if delay < 0:
-            raise ValueError("delay must be non-negative, got %r" % (delay,))
-        if not 0 <= jitter <= 1:
-            raise ValueError("jitter must be between 0 and 1, got %r" % (jitter,))
-        if jitter_seconds is not None and jitter_seconds < 0:
-            raise ValueError(
-                "jitter_seconds must be non-negative, got %r" % (jitter_seconds,)
-            )
-        self._base = float(delay)
-        # Never below 1.0: a "backoff" that shrinks the wait on repeated loss
-        # is always a bug, and silently accepting 0.5 would make a session
-        # retransmit faster the worse the link got.
-        self._multiplier = max(1.0, float(multiplier))
-        # Never below the base, so a ceiling set under it cannot truncate the
-        # very first wait into something shorter than the caller asked for.
-        self._max_delay = max(self._base, float(max_delay))
-        self._jitter = jitter
-        self._jitter_seconds = jitter_seconds
+        base, growth, ceiling, fraction, amplitude = _normalise(
+            delay, multiplier, max_delay, jitter, jitter_seconds
+        )
+        self._base = base
+        self._multiplier = growth
+        self._max_delay = ceiling
+        self._jitter = fraction
+        self._jitter_seconds = amplitude
         self._symmetric = symmetric
         self._random = _draw()
         self._current = self._base
@@ -293,7 +339,7 @@ class Backoff:
 
 
 def retry(
-    func: "Callable[[], object]",
+    func: "Callable[[], _T]",
     attempts: int = 3,
     *,
     delay: float = 0.5,
@@ -304,7 +350,7 @@ def retry(
     on_retry: "Optional[Callable[[int, BaseException, float], None]]" = None,
     jitter_seconds: "Optional[float]" = None,
     symmetric: bool = False,
-) -> "Any":
+) -> "_T":
     """Call ``func()``, retrying transient failures with exponential backoff.
 
     ::
@@ -332,6 +378,9 @@ def retry(
     ``attempts`` counts *total* calls, not retries: ``attempts=1`` calls once
     and never sleeps. Delay grows by ``multiplier`` each round, capped at
     ``max_delay``, with ``jitter`` applied to avoid a thundering herd.
+
+    The schedule arguments are checked before the first call, by the rules of
+    :func:`backoff_delays`; ``attempts`` below 1 raises :class:`ValueError`.
 
     Synchronous by design -- it blocks. For async, drive :func:`backoff_delays`
     from your own loop.

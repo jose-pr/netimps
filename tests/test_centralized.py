@@ -1403,19 +1403,20 @@ def test_backoff_delay_is_stable_between_advances(monkeypatch):
     assert second > first
 
 
-def test_backoff_never_shrinks_on_loss():
+def test_backoff_refuses_a_multiplier_that_would_shrink_the_wait():
     """A multiplier below 1 would make a session retransmit *faster* the worse
-    the link got, which is always a bug. Floored at 1.0."""
-    timer = Backoff(delay=1.0, multiplier=0.5, max_delay=8.0)
+    the link got, which is always a bug; it is refused when the timer is built."""
+    with pytest.raises(ValueError, match="multiplier"):
+        Backoff(delay=1.0, multiplier=0.5, max_delay=8.0)
+    timer = Backoff(delay=1.0, multiplier=1.0, max_delay=8.0)
     assert [timer.delay, timer.advance(), timer.advance()] == [1.0, 1.0, 1.0]
 
 
-def test_backoff_ceiling_cannot_truncate_the_base():
-    """`max_delay` under `delay` would silently shorten the very first wait
-    below what the caller asked for, so it is floored at the base."""
-    timer = Backoff(delay=4.0, multiplier=2.0, max_delay=1.0)
-    assert timer.delay == 4.0
-    assert timer.advance() == 4.0
+def test_backoff_refuses_a_ceiling_below_the_base():
+    """`max_delay` under `delay` would shorten the very first wait below what
+    the caller asked for, so it is refused rather than applied or floored."""
+    with pytest.raises(ValueError, match="max_delay"):
+        Backoff(delay=4.0, multiplier=2.0, max_delay=1.0)
 
 
 def test_backoff_jitter_is_off_by_default_unlike_backoff_delays():
@@ -1457,3 +1458,75 @@ def test_backoff_repr_is_useful_in_a_log():
     timer.advance()
     text = repr(timer)
     assert "Backoff(" in text and "attempt=1" in text
+
+
+# --------------------------------------------------------------------------- #
+# retry, backoff_delays and Backoff: one rule set, checked when it is passed   #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        dict(multiplier=0.5),
+        dict(multiplier=-2),
+        dict(delay=-1.0),
+        dict(delay=4.0, max_delay=1.0),
+        dict(jitter=2.0),
+        dict(jitter_seconds=-1.0),
+        dict(delay=float("nan")),
+    ],
+)
+def test_the_three_entry_points_refuse_the_same_arguments(arguments):
+    """``backoff_delays`` was lazy, so a bad argument surfaced at the first
+    ``next()``; ``Backoff`` silently floored what the other two accepted."""
+    with pytest.raises(ValueError):
+        netimps.backoff_delays(3, **arguments)
+    with pytest.raises(ValueError):
+        netimps.Backoff(**arguments)
+    called = []
+    with pytest.raises(ValueError):
+        netimps.retry(lambda: called.append(1), **arguments)
+    assert called == []
+
+
+@pytest.mark.parametrize("attempts", [0, -1])
+def test_attempts_below_one_raise_when_passed(attempts):
+    with pytest.raises(ValueError, match="attempts"):
+        netimps.backoff_delays(attempts)
+    called = []
+    with pytest.raises(ValueError, match="attempts"):
+        netimps.retry(lambda: called.append(1), attempts)
+    assert called == []
+
+
+def test_backoff_delays_and_backoff_agree_on_every_valid_schedule():
+    for delay, multiplier, ceiling in [
+        (1.0, 2.0, 8.0),
+        (4.0, 1.0, 4.0),
+        (0.5, 3.0, 30.0),
+    ]:
+        schedule = list(
+            netimps.backoff_delays(
+                6, delay, multiplier=multiplier, max_delay=ceiling, jitter=0
+            )
+        )
+        timer = netimps.Backoff(delay, multiplier=multiplier, max_delay=ceiling)
+        seen = [timer.delay]
+        for _ in range(4):
+            seen.append(timer.advance())
+        assert seen == schedule
+
+
+def test_a_multiplier_of_one_is_a_constant_delay():
+    assert list(netimps.backoff_delays(4, 2.0, multiplier=1.0, jitter=0)) == [2.0] * 3
+
+
+def test_retry_hooks_are_annotated():
+    import inspect
+
+    from netimps import _retry
+
+    assert "_sleep" in _retry.__annotations__
+    assert "_random" in _retry.__annotations__
+    assert inspect.signature(netimps.retry).return_annotation != "Any"

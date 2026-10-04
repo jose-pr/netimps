@@ -273,6 +273,17 @@ probe says so in its prefix.
 
 ### Fixed
 
+- **`retry`, `backoff_delays` and `Backoff` share one set of argument rules,
+  checked when they are called.** `backoff_delays` was a generator, so
+  `attempts=0` or a negative `delay` raised at the first `next()`;
+  `backoff_delays(3, 1.0, multiplier=0.5)` yielded a shrinking `[1.0, 0.5]`
+  and `backoff_delays(2, 4.0, max_delay=1.0)` cut the first wait to `[1.0]`
+  while `Backoff` floored the multiplier and the ceiling instead. All three now
+  raise `ValueError` for `attempts` below 1, a negative `delay`, a `multiplier`
+  below 1, a `max_delay` below `delay`, a `jitter` outside 0 to 1 and a negative
+  `jitter_seconds`. `retry` is typed `Callable[[], T] -> T` (it returned
+  `Any`).
+
 - **`scan_hosts` bounds the work, not one factor of it, and does not build it
   up front.** The guard counted hosts only and every host-port pair was built
   and queued before the first probe: a /22 with the common ports peaked at

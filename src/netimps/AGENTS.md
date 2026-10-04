@@ -1993,10 +1993,10 @@ wrapped socket expires, on every supported Python (before 3.10
 
 ## Retry
 
-**`retry(func, attempts=3, *, delay=0.5, multiplier=2.0, max_delay=30.0, jitter=0.1, retryable=(OSError,), on_retry=None, jitter_seconds=None, symmetric=False)`**
+**`retry(func: Callable[[], T], attempts=3, *, delay=0.5, multiplier=2.0, max_delay=30.0, jitter=0.1, retryable=(OSError,), on_retry=None, jitter_seconds=None, symmetric=False) -> T`**
 
 Calls `func()`, retrying transient failures with exponential backoff. Returns
-whatever `func` returns; if every attempt fails **the last exception is
+whatever `func` returns (the return type is `func`'s); if every attempt fails **the last exception is
 re-raised unwrapped**, so the traceback still points at the real problem.
 
 - **Only `OSError` is retried by default** — that covers the socket family and
@@ -2006,6 +2006,11 @@ re-raised unwrapped**, so the traceback still points at the real problem.
   to retry instead of `OSError` itself, e.g.
   `retryable=(ConnectionError, TimeoutError)`.
 - `attempts` counts *total* calls: `attempts=1` calls once and never sleeps.
+- **Arguments are checked when `retry`, `backoff_delays` or `Backoff` is called**,
+  by one rule set, and raise `ValueError`: `attempts` below 1 (not for
+  `Backoff`, which has none), a negative `delay`, a `multiplier` below 1, a
+  `max_delay` below `delay`, a `jitter` outside 0 to 1, a negative
+  `jitter_seconds`. `backoff_delays` does not defer them to the first `next()`.
 - `jitter` spreads retries so simultaneous failures do not resynchronise into a
   thundering herd. Applied **after** the cap and only ever shortens, so
   `max_delay` is a real ceiling.
@@ -2076,10 +2081,10 @@ returns to the base the moment the peer moves the transfer forward.
   desynchronises many clients retrying together, and a point-to-point session
   retransmitting to one peer has no herd to avoid — TFTP and TCP both specify
   plain doubling. The symmetric modes are there for the protocols that do ask.
-- Two guard rails a hand-rolled version tends to miss: `multiplier` is floored
-  at `1.0`, so the timer can never *shrink* on repeated loss, and `max_delay` is
-  floored at `delay`, so a ceiling set below the base cannot silently truncate
-  the first wait.
+- Two guard rails a hand-rolled version tends to miss, both refused with
+  `ValueError` when the timer is built: a `multiplier` below `1`, which would
+  *shrink* the wait on repeated loss, and a `max_delay` below `delay`, which
+  would truncate the first wait. `backoff_delays` and `retry` refuse the same.
 
 ## Host
 
