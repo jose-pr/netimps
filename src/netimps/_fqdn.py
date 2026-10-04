@@ -455,14 +455,15 @@ class FQDN:
         suffix = other if isinstance(other, FQDN) else FQDN(other)
         if len(self._labels) <= len(suffix._labels):
             return False
-        return self._labels[-len(suffix._labels) :] == suffix._labels
+        return self._key()[-len(suffix._labels) :] == suffix._key()
 
     def relative_to(self, other: "FQDNLike") -> "FQDN":
         """The labels of this name that are not part of ``other``.
 
         ``FQDN("www.example.com").relative_to("example.com")`` is
         ``FQDN('www')``, always relative (never fully qualified -- a fragment
-        of a name has no root).
+        of a name has no root). Labels compare case-blind and the remainder
+        keeps this name's spelling.
 
         :raises ValueError: if this name is not under ``other``, mirroring
             ``PurePath.relative_to``.
@@ -903,32 +904,39 @@ class FQDN:
     def __hash__(self) -> int:
         return hash((self._key(), self._absolute))
 
+    def _order_key(self) -> "Tuple[Tuple[str, ...], bool]":
+        """The one key every comparison derives from: reversed folded labels,
+        then absoluteness. Equal exactly when ``==`` is true."""
+        return (tuple(reversed(self._key())), self._absolute)
+
     def __lt__(self, other: object) -> bool:
         """Ordered on **reversed** labels, so sorting groups by TLD.
 
         ``sorted`` then gives ``com`` names together, and within them the
         registrants together -- which is almost always what a list of names
         wants. It is *not* the same as sorting ``str(f)``: that would put
-        ``a.org`` before ``b.com``.
+        ``a.org`` before ``b.com``. The same labels sort relative before fully
+        qualified, and all four operators come from one key, so none of them
+        contradicts ``==``.
         """
         if not isinstance(other, FQDN):
             return NotImplemented
-        return tuple(reversed(self._key())) < tuple(reversed(other._key()))
+        return self._order_key() < other._order_key()
 
     def __le__(self, other: object) -> bool:
         if not isinstance(other, FQDN):
             return NotImplemented
-        return self == other or self < other
+        return self._order_key() <= other._order_key()
 
     def __gt__(self, other: object) -> bool:
         if not isinstance(other, FQDN):
             return NotImplemented
-        return not self <= other
+        return self._order_key() > other._order_key()
 
     def __ge__(self, other: object) -> bool:
         if not isinstance(other, FQDN):
             return NotImplemented
-        return not self < other
+        return self._order_key() >= other._order_key()
 
 
 def _rebuild_fqdn(labels: "Tuple[str, ...]", absolute: bool) -> "FQDN":

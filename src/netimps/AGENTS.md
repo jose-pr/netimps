@@ -1340,7 +1340,10 @@ ordered. Built from a dotted string or from separate labels, **leftmost first**:
   nearest first.
 - **Ordered on *reversed* labels**, so `sorted()` groups by TLD then registrant
   — `['a.com', 'b.com', 'a.org']`, not the text order `['a.com', 'a.org',
-  'b.com']`.
+  'b.com']`. All four operators come from one key (reversed folded labels, then
+  absoluteness), so the order agrees with `==`: `example.com` sorts before
+  `example.com.`. `is_subdomain_of` and `relative_to` compare case-blind, and
+  `relative_to` returns the remainder in this name's spelling.
 - **Equality is case-insensitive** (RFC 4343) and `__hash__` agrees. It does
   **not** coerce a `str`, for the same reason `MACAddress` does not; use
   `FQDN.try_parse(text) == name`.

@@ -341,6 +341,13 @@ probe says so in its prefix.
   stdlib methods do on POSIX. A blocking socket and a non-blocking one
   behave as before.
 
+- **`FQDN` compares by its case-folded key everywhere.** `is_subdomain_of`
+  and `relative_to` were case-sensitive where `==` and `hash` were not
+  (`FQDN("www.Example.com").is_subdomain_of("example.com")` was `False`), and
+  `example.com` against `example.com.` answered `a > b` and `b > a` together.
+  The four ordering operators now derive from one key, reversed folded labels
+  then absoluteness.
+
 ## [0.3.4] - 2026-10-03
 
 ### Fixed

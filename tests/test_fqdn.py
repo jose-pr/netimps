@@ -767,3 +767,57 @@ def test_wire_length_explains_the_253_vs_255_gap():
     assert f.wire_length == 17
     assert f.wire_length == len(str(f)) + 2
     assert FQDN("a").wire_length == 3
+
+
+# --------------------------------------------------------------------------- #
+# Case and qualification in comparison                                         #
+# --------------------------------------------------------------------------- #
+
+
+def test_is_subdomain_of_and_relative_to_compare_case_blind():
+    """RFC 4343. Equality folds case; a containment test that slices the stored
+    labels answered False for `www.Example.com` under `example.com`."""
+    assert FQDN("www.Example.com").is_subdomain_of("example.com")
+    assert FQDN("www.example.com").is_subdomain_of(FQDN("EXAMPLE.COM."))
+    assert not FQDN("Example.com").is_subdomain_of("example.com")
+    # The remainder keeps the caller's spelling.
+    assert FQDN("WWW.EXAMPLE.COM").relative_to("example.com") == FQDN("WWW")
+    assert FQDN("WWW.EXAMPLE.COM").relative_to("example.com").labels == ("WWW",)
+    assert not FQDN("www.example.org").is_subdomain_of("EXAMPLE.com")
+    with pytest.raises(ValueError):
+        FQDN("www.example.org").relative_to("EXAMPLE.com")
+
+
+@pytest.mark.parametrize(
+    "a, b",
+    [
+        ("example.com", "example.com."),
+        ("Example.COM", "example.com"),
+        ("a.com", "B.com"),
+        ("a.org", "b.com"),
+        ("x.a.com", "a.com."),
+    ],
+)
+def test_ordering_agrees_with_equality(a, b):
+    """VALUES: neither `a < b` nor `b < a` means `a == b`, and the four
+    operators are one order. The root-dot pair used to give `a > b` and
+    `b > a` together."""
+    x, y = FQDN(a), FQDN(b)
+    lt, gt, le, ge = x < y, x > y, x <= y, x >= y
+    assert (x == y) == (not lt and not gt)
+    assert not (lt and gt)
+    assert le == (lt or x == y)
+    assert ge == (gt or x == y)
+    assert (y < x) == gt and (y > x) == lt
+    assert (y <= x) == ge and (y >= x) == le
+    # And the hash/eq law the order is built on.
+    if x == y:
+        assert hash(x) == hash(y)
+
+
+def test_a_relative_name_sorts_before_the_same_name_fully_qualified():
+    assert FQDN("example.com") < FQDN("example.com.")
+    assert sorted([FQDN("example.com."), FQDN("example.com")]) == [
+        FQDN("example.com"),
+        FQDN("example.com."),
+    ]
