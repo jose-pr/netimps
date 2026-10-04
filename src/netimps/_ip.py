@@ -613,6 +613,7 @@ class Host:
         search: "Union[bool, List[str]]" = True,
         backends: "Optional[Union[str, List[str]]]" = None,
         source: "Optional[Union[str, List[str]]]" = None,
+        cache: "Union[bool, float]" = False,
     ) -> "Optional[FQDN]":
         """This host as an :class:`FQDN`: the name itself, or the name an address
         reverses to.
@@ -652,6 +653,7 @@ class Host:
                 search=search,
                 backends=backends,
                 source=source,
+                cache=cache,
             )
         return FQDN.parse(text) if check else FQDN.try_parse(text)
 
@@ -667,6 +669,7 @@ class Host:
         search: "Union[bool, List[str]]" = True,
         backends: "Optional[Union[str, List[str]]]" = None,
         source: "Optional[Union[str, List[str]]]" = None,
+        cache: "Union[bool, float]" = False,
         refresh: bool = False,
     ) -> "Optional[IPAddress]":
         """Resolve to an address, or ``None``.
@@ -688,6 +691,12 @@ class Host:
         :param backends: which of ``"dnspython"``, ``"wire"``, ``"system"``,
             ``"nslookup"``, and in what order; see :func:`netimps.resolve`.
         :param source: the local address the query is sent from.
+        :param cache: reuse a recent answer, a miss included, from the shared
+            resolution cache: ``False`` (the default) never reads or writes it,
+            ``True`` keeps an answer for :data:`RESOLUTION_CACHE_TTL` seconds, a
+            number is that many. Unlike the memo below it is shared by every
+            :class:`Host` and :class:`FQDN`, and is keyed on the name and every
+            option; see :func:`netimps.resolve`.
         :param refresh: ask again, and replace the memo with the new answer --
             a name that failed once may resolve later.
 
@@ -699,7 +708,8 @@ class Host:
 
         **A call that passes no option memoises its answer, a miss included**,
         because the common use is several lookups in a row on the same object.
-        A call that passes any option neither reads nor writes the memo.
+        A call that passes any option, ``cache=`` included, neither reads nor
+        writes the memo.
         """
         text = self.value
         if not text:
@@ -723,6 +733,7 @@ class Host:
             or search is not True
             or backends is not None
             or source
+            or cache is not False
         )
         if plain and self._attempted and not refresh:
             return self._resolved
@@ -740,6 +751,7 @@ class Host:
             search=search,
             backends=backends,
             source=source,
+            cache=cache,
         )
         if plain:
             object.__setattr__(self, "_attempted", True)
@@ -758,6 +770,7 @@ class Host:
         search: "Union[bool, List[str]]" = True,
         backends: "Optional[Union[str, List[str]]]" = None,
         source: "Optional[Union[str, List[str]]]" = None,
+        cache: "Union[bool, float]" = False,
     ) -> "Tuple[Optional[FQDN], Optional[IPAddress]]":
         """The pair ``(fqdn, ip)``; whichever half was not found is ``None``.
 
@@ -783,6 +796,7 @@ class Host:
                 search=search,
                 backends=backends,
                 source=source,
+                cache=cache,
             ),
             self.ip(
                 check=check,
@@ -794,6 +808,7 @@ class Host:
                 search=search,
                 backends=backends,
                 source=source,
+                cache=cache,
             ),
         )
 

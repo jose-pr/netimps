@@ -34,6 +34,7 @@ import ipaddress as _ipaddress
 import os as _os
 import socket as _socket
 import struct as _struct
+import threading as _threading
 import time as _time
 from functools import partial as _partial
 from typing import (
@@ -58,6 +59,8 @@ from ._ip import HostLike, IPv4Address, IPv6Address, _dst_argument
 from ._parse import try_parse
 
 __all__ = [
+    "RESOLUTION_CACHE_TTL",
+    "clear_resolution_cache",
     "resolve",
     "resolve_dnspython",
     "resolve_system",
@@ -933,6 +936,85 @@ def resolve_nslookup(
     return []
 
 
+#: Seconds an answer is kept when a lookup passes ``cache=True``. Resolver
+#: answers carry TTLs of their own that the backends do not expose, so this is a
+#: fixed middle: long enough that a loop resolving one upstream per packet asks
+#: once, short enough that a changed record is seen within the half minute.
+#: Pass a number to choose your own.
+RESOLUTION_CACHE_TTL = 30.0
+
+#: The cache never grows past this many entries; the oldest go first.
+_RESOLUTION_CACHE_LIMIT = 1024
+
+_CACHE_LOCK = _threading.Lock()
+#: key -> (monotonic stamp, answer). An empty tuple is a cached miss.
+_RESOLUTION_CACHE: "Dict[Tuple[Any, ...], Tuple[float, Tuple[Any, ...]]]" = {}
+
+
+def clear_resolution_cache() -> None:
+    """Drop every cached answer, so the next ``cache=`` lookup asks again.
+
+    For a caller that *knows* a record changed and should not wait out the TTL.
+    Harmless when nothing is cached.
+    """
+    with _CACHE_LOCK:
+        _RESOLUTION_CACHE.clear()
+
+
+def _freeze(value: "Any") -> "Any":
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze(item) for item in value)
+    if isinstance(value, str):
+        return value.lower()
+    return value
+
+
+def _cache_key(
+    query: str,
+    rdtype: "Optional[Union[str, Tuple[str, ...]]]",
+    ns: "Any",
+    timeout: "Optional[float]",
+    port: int,
+    tcp: bool,
+    search: "Any",
+    backends: "Any",
+    strict: bool,
+    source: "Any",
+) -> "Tuple[Any, ...]":
+    """Every argument that can change the answer, in a hashable form.
+
+    Names and addresses compare without case, since DNS does; the trailing root
+    dot is not folded away, because it also decides whether a search list applies.
+    """
+    return (
+        query.lower(),
+        _freeze(rdtype) if rdtype else None,
+        _freeze(ns),
+        timeout,
+        port,
+        tcp,
+        _freeze(search),
+        _freeze(backends),
+        strict,
+        _freeze(source),
+    )
+
+
+def _cache_get(key: "Tuple[Any, ...]", ttl: float) -> "Optional[Tuple[Any, ...]]":
+    with _CACHE_LOCK:
+        entry = _RESOLUTION_CACHE.get(key)
+        if entry is not None and (_time.monotonic() - entry[0]) < ttl:
+            return entry[1]
+    return None
+
+
+def _cache_put(key: "Tuple[Any, ...]", answer: "List[Any]") -> None:
+    with _CACHE_LOCK:
+        _RESOLUTION_CACHE[key] = (_time.monotonic(), tuple(answer))
+        while len(_RESOLUTION_CACHE) > _RESOLUTION_CACHE_LIMIT:
+            del _RESOLUTION_CACHE[next(iter(_RESOLUTION_CACHE))]
+
+
 @overload
 def resolve(
     query: "HostLike",
@@ -946,6 +1028,7 @@ def resolve(
     backends: "Optional[Union[str, List[str]]]" = None,
     strict: bool = False,
     source: Optional[Union[str, List[str]]] = None,
+    cache: "Union[bool, float]" = False,
 ) -> "List[IPv4Address]": ...
 
 
@@ -962,6 +1045,7 @@ def resolve(
     backends: "Optional[Union[str, List[str]]]" = None,
     strict: bool = False,
     source: Optional[Union[str, List[str]]] = None,
+    cache: "Union[bool, float]" = False,
 ) -> "List[IPv6Address]": ...
 
 
@@ -978,6 +1062,7 @@ def resolve(
     backends: "Optional[Union[str, List[str]]]" = None,
     strict: bool = False,
     source: Optional[Union[str, List[str]]] = None,
+    cache: "Union[bool, float]" = False,
 ) -> "List[str]": ...
 
 
@@ -994,6 +1079,7 @@ def resolve(
     backends: "Optional[Union[str, List[str]]]" = None,
     strict: bool = False,
     source: Optional[Union[str, List[str]]] = None,
+    cache: "Union[bool, float]" = False,
 ) -> "List[Any]": ...
 
 
@@ -1009,6 +1095,7 @@ def resolve(
     backends: "Optional[Union[str, List[str]]]" = None,
     strict: bool = False,
     source: Optional[Union[str, List[str]]] = None,
+    cache: "Union[bool, float]" = False,
 ) -> "List[Any]":
     """Resolve ``query``, trying each backend in ``backends`` until one gives
     a definitive answer.
@@ -1085,6 +1172,15 @@ def resolve(
         list -- the queries go out from. Honoured by ``wire`` (each nameserver
         gets the address of its family) and ``dnspython`` (one address only);
         excludes ``system`` and ``nslookup``, which cannot choose it.
+    :param cache: reuse a recent answer. ``False`` (the default) neither reads
+        nor writes the cache; ``True`` keeps an answer for
+        :data:`RESOLUTION_CACHE_TTL` seconds and a number is that many.
+        Keyed on the name and **every** option, so a different ``ns`` or
+        ``rdtype`` is a different entry. **An empty answer is cached like any
+        other**, so a name that does not resolve is asked once per TTL; an
+        outage (every backend failed to ask) and an exception are not cached.
+        Call :func:`clear_resolution_cache` when the answer is known to have
+        changed. Process-wide and thread-safe.
     :param strict: raise instead of returning ``[]`` when no backend could
         *ask* -- every applicable one failed with a :class:`ResolutionError`
         (resolver unreachable, timeout, ``nslookup`` missing). Off by default,
@@ -1101,6 +1197,42 @@ def resolve(
     is a caller bug rather than a resolution outcome.
     """
     query = _dst_argument(query)
+    if cache is False:
+        return _resolve_chain(
+            query, rdtype, ns, timeout, port, tcp, search, backends, strict, source
+        )[0]
+    key = _cache_key(
+        query, rdtype, ns, timeout, port, tcp, search, backends, strict, source
+    )
+    ttl = RESOLUTION_CACHE_TTL if cache is True else float(cache)
+    hit = _cache_get(key, ttl)
+    if hit is not None:
+        return list(hit)
+    result, definitive = _resolve_chain(
+        query, rdtype, ns, timeout, port, tcp, search, backends, strict, source
+    )
+    if definitive:
+        _cache_put(key, result)
+    return result
+
+
+def _resolve_chain(
+    query: str,
+    rdtype: "Optional[Union[str, Tuple[str, ...]]]",
+    ns: "Optional[Union[str, List[str]]]",
+    timeout: Optional[float],
+    port: int,
+    tcp: bool,
+    search: "Union[bool, List[str]]",
+    backends: "Optional[Union[str, List[str]]]",
+    strict: bool,
+    source: "Optional[Union[str, List[str]]]",
+) -> "Tuple[List[Any], bool]":
+    """The chain behind :func:`resolve`: ``(answer, definitive)``.
+
+    *definitive* is false only for the empty list returned because every
+    applicable backend failed to *ask*, which is an outage and not an answer.
+    """
     both: "Optional[Tuple[str, ...]]" = None
     if isinstance(rdtype, (tuple, list)):
         both = _address_rdtypes(rdtype)
@@ -1194,7 +1326,7 @@ def resolve(
             last_error = exc
             continue
         if result:
-            return result
+            return result, True
         # An empty answer is definitive for *this* backend's mechanism only,
         # so the chain keeps going; `answered` is what makes the final result
         # [] rather than a raise.
@@ -1221,7 +1353,7 @@ def resolve(
             )
         )
     if answered:
-        return []
+        return [], True
     assert last_error is not None
     if strict:
         raise last_error
@@ -1230,7 +1362,7 @@ def resolve(
     # `if not resolve(host):` has always got, and because the distinction
     # between "no such name" and "could not ask" is one most callers do not act
     # on differently. `strict=True` is for the ones that do.
-    return []
+    return [], False
 
 
 def _each_rdtype(
@@ -1271,6 +1403,7 @@ def _query(
     search: "Union[bool, List[str]]",
     backends: "Optional[Union[str, List[str]]]",
     source: "Optional[Union[str, List[str]]]",
+    cache: "Union[bool, float]",
 ) -> "List[Any]":
     """The one place :class:`~netimps.Host` and :class:`~netimps.FQDN` reach
     :func:`resolve`.
@@ -1297,6 +1430,7 @@ def _query(
         backends=backends,
         strict=check,
         source=source,
+        cache=cache,
     )
 
 
@@ -1312,6 +1446,7 @@ def lookup_ip(
     search: "Union[bool, List[str]]" = True,
     backends: "Optional[Union[str, List[str]]]" = None,
     source: "Optional[Union[str, List[str]]]" = None,
+    cache: "Union[bool, float]" = False,
 ) -> "Optional[Any]":
     """The first address ``name`` resolves to (internal; ``name`` is not a literal).
 
@@ -1333,6 +1468,7 @@ def lookup_ip(
         search=search,
         backends=backends,
         source=source,
+        cache=cache,
     )
     for answer in answers:
         if isinstance(answer, (_ipaddress.IPv4Address, _ipaddress.IPv6Address)):
@@ -1353,6 +1489,7 @@ def lookup_fqdn(
     search: "Union[bool, List[str]]" = True,
     backends: "Optional[Union[str, List[str]]]" = None,
     source: "Optional[Union[str, List[str]]]" = None,
+    cache: "Union[bool, float]" = False,
 ) -> "Optional[Any]":
     """The name ``address`` reverses to, as an ``FQDN`` without its root dot, or
     ``None`` (internal; ``address`` is a literal)."""
@@ -1369,6 +1506,7 @@ def lookup_fqdn(
         search=search,
         backends=backends,
         source=source,
+        cache=cache,
     )
     for answer in answers:
         name = FQDN.try_parse(str(answer))

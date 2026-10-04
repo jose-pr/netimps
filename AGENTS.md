@@ -114,6 +114,7 @@ map:
 | `MACAddress` | parse / classify / render MAC addresses |
 | `get_interfaces`, `Interface`, `iter_addresses` | native cross-platform NIC discovery; `cache=`/`clear_interface_cache` make a per-packet lookup affordable (97x measured) |
 | `clear_interface_cache`, `INTERFACE_CACHE_TTL`, `interface_enumerations` | invalidate the shared enumeration cache, its default 1 s TTL, and a count of the enumerations actually performed |
+| `clear_resolution_cache`, `RESOLUTION_CACHE_TTL` | invalidate the `cache=` resolution cache (negative answers included), and its default 30 s TTL |
 | `is_broadcast` | is this an IPv4 broadcast, limited or subnet (needs interface prefixes) |
 | `is_unicast` | was this destination one host: not broadcast, multicast or the wildcard; `Datagram.is_unicast` asks it of `Datagram.destination` |
 | `is_link_scoped` | scope classification |
@@ -357,6 +358,7 @@ Tests live in `tests/` and run via `pytest -q` from a checkout;
 | `test_sweep_gaps.py` | the gaps the 2026-10-03 consumer sweep found; each test pins the *difference* from the hand-rolled version |
 | `test_async_udp.py` | `arecv`/`datagrams` on a **real loop**, both Windows loop types, and no leaked threads |
 | `test_server_helpers.py` | `reply_socket`, `is_broadcast`, `max_udp_payload` |
+| `test_resolution_cache.py` | `cache=` on `resolve`/`Host`/`FQDN`: hits, negative answers, outages, keys, counted by a fake `nslookup` |
 | `test_host_text.py` | `split_zone`, `split_host` pairs and brackets, `is_local_host`, the MAC pattern's privacy |
 | `test_udp_datagram.py` | `send(src=<address>)` without enumeration, truncation on both receive paths, `Datagram.destination` / `is_unicast`, `datagrams(on_error=)` |
 | `test_bind_defaults.py` | `bind()` family inference, the `connreset` default, the hint in the error message, the buffer warning |

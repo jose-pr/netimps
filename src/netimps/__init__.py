@@ -99,6 +99,8 @@ from ._ifaddrs import (
     iter_addresses,
 )
 from ._dns import (
+    RESOLUTION_CACHE_TTL,
+    clear_resolution_cache,
     resolve,
     resolve_dnspython,
     resolve_system,
@@ -209,6 +211,8 @@ __all__ = [
     "clear_interface_cache",
     "interface_enumerations",
     "INTERFACE_CACHE_TTL",
+    "RESOLUTION_CACHE_TTL",
+    "clear_resolution_cache",
     "is_broadcast",
     "is_unicast",
     "iter_addresses",

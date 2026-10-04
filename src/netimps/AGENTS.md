@@ -449,7 +449,7 @@ with an empty or over-long label, raised before anything is sent) and from
 and `resolve_doh` an unreadable *reply* is not raised as such: it becomes a
 `ResolutionError` whose `__cause__` is the `DNSDecodeError`.
 
-**`resolve(query, rdtype=None, *, ns=None, timeout=5.0, port=53, tcp=False, search=True, backends=None, strict=False, source=None)`**
+**`resolve(query, rdtype=None, *, ns=None, timeout=5.0, port=53, tcp=False, search=True, backends=None, strict=False, source=None, cache=False)`**
 
 **The element type follows `rdtype`, for `resolve` and for each backend below:**
 `"a"` gives `List[IPv4Address]`, `"aaaa"` `List[IPv6Address]`, `"ptr"`
@@ -516,6 +516,18 @@ calls instead of one, the last of which may spawn `nslookup`. Narrow
   transport, so running it would answer a different question from the one
   asked. With `backends=["system"]` plus one of those, the resulting
   `ValueError` names the reason.
+- **`cache=`** reuses a recent answer, with `get_interfaces`' three spellings:
+  `False` (the default) neither reads nor writes the cache, `True` keeps an
+  answer for `RESOLUTION_CACHE_TTL` (**30 seconds**), a number is that many
+  (`0` is always stale, i.e. refresh). Keyed on the name (without case) and
+  **every** option, so another `ns`, `rdtype` or `timeout` is another entry.
+  **An empty answer is cached like any other**, so a name that does not resolve
+  is asked once per TTL; an outage (every backend failed to ask, with
+  `strict=False`) and an exception are not cached. The cache is process-wide,
+  thread-safe and holds at most 1024 entries. `clear_resolution_cache()` drops it
+  when a record is known to have changed. `Host.ip/fqdn/resolve` and
+  `FQDN.ip/resolve` take the same `cache=`, and a call that passes it neither
+  reads nor writes a `Host`'s own memo.
 - **`source=`** (an address, or one per family as a list) is the local address
   the queries leave from. `wire` honours either form; `dnspython` one address
   only (skipped for a list); `system` and `nslookup` are skipped, since neither
@@ -1313,7 +1325,7 @@ ordered. Built from a dotted string or from separate labels, **leftmost first**:
   `default` for bad text only.
 - **Network methods are named as actions and can block.**
   **`.resolve(*, check=False, ipv6=None, ns=None, timeout=5.0, port=53,
-  tcp=False, search=True, backends=None, source=None) -> (FQDN, IPAddress | None)`**
+  tcp=False, search=True, backends=None, source=None, cache=False) -> (FQDN, IPAddress | None)`**
   answers `(self, ip)`, the same pair `Host.resolve()` gives, so the two types
   interchangeable as `HostLike` answer `.resolve()` alike; `.ip(...)` with the
   same options is the second element. `.ping(**kw)` → `ping()`. DNS records of
@@ -1899,7 +1911,7 @@ Which call looks anything up:
   the first and `NetimpsValueError` for the second. `ipv6` is accepted and
   unused, so one options dict serves all three methods. Not memoised.
 - **`.ip(*, check=False, ipv6=None, ns=None, timeout=5.0, port=53, tcp=False,
-  search=True, backends=None, source=None, refresh=False) -> IPAddress | None`**
+  search=True, backends=None, source=None, cache=False, refresh=False) -> IPAddress | None`**
   — a literal as parsed, a name looked up. `ipv6=True` asks for AAAA, `False`
   for A, `None` for either in one lookup, in the OS's own order. `check=True`
   raises `ResolutionError` instead of returning `None` — for an empty answer, a

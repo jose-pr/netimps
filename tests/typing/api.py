@@ -67,6 +67,7 @@ from netimps import (
     is_local_address,
     is_valid,
     is_wildcard,
+    clear_resolution_cache,
     is_local_host,
     is_unicast,
     bind,
@@ -454,3 +455,14 @@ async def _datagrams_on_error(endpoint: UDPEndpoint) -> None:
 assert_type(split_host(("h", None), default_port=69), Tuple[str, Optional[int]])
 assert_type(split_zone("fe80::1%eth0"), Tuple[str, Optional[str]])
 assert_type(is_local_host("localhost", resolve=False, cache=True), bool)
+
+
+# `cache=` is `bool | float` everywhere it appears; the element type still follows
+# `rdtype`.
+assert_type(resolve("h", "a", cache=True), List[IPv4Address])
+assert_type(resolve("h", "aaaa", cache=30.0), List[IPv6Address])
+assert_type(resolve("h", cache=False), List[Any])
+assert_type(Host("h").ip(cache=True), Optional[IPAddress])
+assert_type(Host("h").resolve(cache=5), Tuple[Optional[FQDN], Optional[IPAddress]])
+assert_type(FQDN("h.example").ip(cache=True), Optional[IPAddress])
+assert_type(clear_resolution_cache(), None)
