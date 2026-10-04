@@ -67,6 +67,7 @@ from netimps import (
     is_local_address,
     is_valid,
     is_wildcard,
+    is_local_host,
     is_unicast,
     bind,
     join_host,
@@ -85,6 +86,7 @@ from netimps import (
     resolve_system,
     resolve_wire,
     split_host,
+    split_zone,
     wait_for_port,
     PingResult,
 )
@@ -446,3 +448,9 @@ async def _datagrams_on_error(endpoint: UDPEndpoint) -> None:
         on_error=lambda exc: isinstance(exc, OSError)
     ):
         assert_type(packet, Any)
+
+
+# `split_host` takes a pair as well as text; `split_zone` returns an optional zone.
+assert_type(split_host(("h", None), default_port=69), Tuple[str, Optional[int]])
+assert_type(split_zone("fe80::1%eth0"), Tuple[str, Optional[str]])
+assert_type(is_local_host("localhost", resolve=False, cache=True), bool)

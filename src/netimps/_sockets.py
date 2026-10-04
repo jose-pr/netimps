@@ -44,6 +44,10 @@ from ._ip import (
     IPNetwork,
     Host,
     _dst_argument,
+    _host_text,
+    split_host,
+    split_zone,
+    unmap,
 )
 from ._mac import MACAddress
 from ._parse import parse, try_parse
@@ -81,6 +85,7 @@ __all__ = [
     "get_interface",
     "iter_interfaces",
     "is_local_address",
+    "is_local_host",
     "get_source_ip",
     "get_free_port",
     "tcp_check",
@@ -756,6 +761,76 @@ def is_local_address(
     if wanted.is_loopback:
         return True
     return next(iter_interfaces(wanted, cache=cache), None) is not None
+
+
+def is_local_host(
+    host: "HostLike",
+    *,
+    resolve: bool = False,
+    cache: "Union[bool, float]" = False,
+) -> bool:
+    """Whether *host* names this machine.
+
+    ::
+
+        is_local_host("localhost")      # True
+        is_local_host("127.0.0.1")      # True
+        is_local_host("[::1]:22")       # True   -- a port is ignored
+        is_local_host("10.0.0.5")       # True only if an interface holds it
+        is_local_host("example.com")    # False, without asking the resolver
+
+    True for a literal that :func:`is_local_address` accepts (loopback, or
+    assigned to an interface; a ``%zone`` is ignored, and a v4-mapped address is
+    judged as the v4 address inside), for ``localhost`` and any ``*.localhost``
+    (RFC 6761), and for this machine's own host name, compared without case and
+    without a trailing dot.
+
+    Any other name is **not resolved** unless ``resolve=True``: the answer then
+    comes from the OS resolver (the hosts file included) and is true when any
+    address it returns is local, and the fully qualified name of this machine
+    counts as well. That can block on the network, which is why it is opt-in.
+
+    *cache* is :func:`get_interfaces`'s, and matters only for the literals that
+    reach the adapter scan. Never raises: text that is not a host, an empty one,
+    or a name that does not resolve is simply not local.
+    """
+    try:
+        name, _port = split_host(_host_text(host))
+        name, _zone = split_zone(name)
+    except (TypeError, ValueError):
+        return False
+    name = name.rstrip(".").lower()
+    if not name:
+        return False
+
+    address = try_parse(name, IPAddress)
+    if address is not None:
+        return is_local_address(unmap(address), cache=cache)
+
+    if name == "localhost" or name.endswith(".localhost"):
+        return True
+    # `socket.gethostname()` rather than `platform.node()`: the latter is a WMI
+    # query on Windows, and this is asked of every name that is not a literal.
+    if name == _socket.gethostname().lower():
+        return True
+    if not resolve:
+        return False
+
+    from ._ip import get_hostname
+
+    if name == get_hostname(fqdn=True).lower():
+        return True
+    try:
+        found = _socket.getaddrinfo(name, None)
+    except OSError:
+        return False
+    return any(
+        is_local_address(unmap(parsed), cache=cache)
+        for parsed in (
+            try_parse(str(info[4][0]).split("%", 1)[0], IPAddress) for info in found
+        )
+        if parsed is not None
+    )
 
 
 def _resolve_targets(

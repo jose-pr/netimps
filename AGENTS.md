@@ -118,14 +118,14 @@ map:
 | `is_unicast` | was this destination one host: not broadcast, multicast or the wildcard; `Datagram.is_unicast` asks it of `Datagram.destination` |
 | `is_link_scoped` | scope classification |
 | `collapse`, `subtract` | CIDR set maths |
-| `split_host` | `host:port` splitting, IPv6-aware |
+| `split_host`, `split_zone` | `host:port` (or `(host, port)`) splitting, IPv6-aware; the `%zone` of a scoped address |
 | `join_host`, `unmap`, `is_wildcard` | build `host:port` (IPv6-bracketed), collapse a v4-mapped address, test for the bind-anything form |
 | `get_default_port`, `get_default_scheme`, `register_port` | scheme ↔ port registry |
 | `resolve`, `resolve_dnspython`, `resolve_system`, `resolve_nslookup` | DNS lookup → native records; `resolve` chains the three backends, each independently callable, and returns `[]` only when every applicable backend answered empty |
 | `resolve_wire`, `resolve_doh` | DNS by **explicit transport** — UDP/TCP to a named server, or DNS-over-HTTPS — bypassing the backend chain when the caller needs to choose the resolver rather than inherit the host's |
 | `ResolutionError` | raised by the three resolvers when a backend could not even ask (missing binary, unreachable server, deadline) — as opposed to an empty answer |
 | `ping`, `PingResult` | reachability with RTT and TTL |
-| `bind`, `bind_error_hint`, `get_interface`, `iter_interfaces`, `is_local_address` | socket creation and local membership |
+| `bind`, `bind_error_hint`, `get_interface`, `iter_interfaces`, `is_local_address`, `is_local_host` | socket creation and local membership |
 | `get_source_ip`, `get_free_port`, `tcp_check`, `wait_for_port` | socket helpers |
 | `SocketOption`, `disable_connreset`, `set_buffer_size` | named option triple; the Windows `SIO_UDP_CONNRESET` switch (no stdlib route); buffer growth reporting what was *granted* |
 | `AddressInUseError` | one stable `OSError` subclass for "the address is taken", never a `PermissionError` |
@@ -357,6 +357,7 @@ Tests live in `tests/` and run via `pytest -q` from a checkout;
 | `test_sweep_gaps.py` | the gaps the 2026-10-03 consumer sweep found; each test pins the *difference* from the hand-rolled version |
 | `test_async_udp.py` | `arecv`/`datagrams` on a **real loop**, both Windows loop types, and no leaked threads |
 | `test_server_helpers.py` | `reply_socket`, `is_broadcast`, `max_udp_payload` |
+| `test_host_text.py` | `split_zone`, `split_host` pairs and brackets, `is_local_host`, the MAC pattern's privacy |
 | `test_udp_datagram.py` | `send(src=<address>)` without enumeration, truncation on both receive paths, `Datagram.destination` / `is_unicast`, `datagrams(on_error=)` |
 | `test_bind_defaults.py` | `bind()` family inference, the `connreset` default, the hint in the error message, the buffer warning |
 | `test_msg.py` | `recvmsg`/`sendmsg` on every platform, and the `socket` patch (install, reverse, no-op on POSIX) |

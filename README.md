@@ -170,13 +170,13 @@ netimps.retry(lambda: netimps.tcp_check("example.com", 443), attempts=3)
 | `get_interfaces`, `Interface`, `iter_addresses` | native cross-platform NIC discovery |
 | `is_link_scoped` | scope classification |
 | `collapse`, `subtract` | CIDR set maths |
-| `split_host` | `host:port` splitting, IPv6-aware |
+| `split_host`, `split_zone` | `host:port` (or `(host, port)`) splitting, IPv6-aware; the `%zone` of a scoped address |
 | `join_host`, `unmap`, `is_wildcard` | build `host:port` (IPv6-bracketed), collapse a v4-mapped address, test for the bind-anything form |
 | `get_default_port`, `get_default_scheme`, `register_port` | scheme ↔ port registry |
 | `resolve` | DNS lookup → native records (`[]` on failure) |
 | `resolve_wire`, `resolve_doh` | DNS straight to a nameserver (UDP/TCP, chosen source) / over HTTPS |
 | `ping`, `PingResult` | reachability with RTT and TTL |
-| `bind`, `bind_error_hint`, `get_interface`, `iter_interfaces`, `is_local_address` | socket creation and local membership |
+| `bind`, `bind_error_hint`, `get_interface`, `iter_interfaces`, `is_local_address`, `is_local_host` | socket creation and local membership |
 | `get_source_ip`, `get_free_port`, `tcp_check`, `wait_for_port` | socket helpers |
 | `UDPEndpoint`, `Datagram` | UDP receive with arrival interface (`IP_PKTINFO`), every platform; `Datagram.destination` and `.is_unicast` say where it was sent |
 | `is_broadcast`, `is_unicast` | was a destination a broadcast / one host (not broadcast, multicast or the wildcard) |

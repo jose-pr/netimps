@@ -25,6 +25,18 @@ MACAddressLike = Union[str, int, bytes, bytearray, "MACAddress"]
 
 _D = TypeVar("_D")
 
+#: The accepted textual MAC forms. Each separated form is spelled out on its own
+#: rather than as a shared ``[:.-]`` class, so one address cannot mix separators.
+_MAC_TEXT = _re.compile(
+    r"^(?:"
+    r"[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}"  # colon separated
+    r"|[0-9A-Fa-f]{2}(?:-[0-9A-Fa-f]{2}){5}"  # hyphen separated
+    r"|[0-9A-Fa-f]{2}(?:\.[0-9A-Fa-f]{2}){5}"  # dot separated, per octet
+    r"|[0-9A-Fa-f]{4}(?:\.[0-9A-Fa-f]{4}){2}"  # dot / Cisco triplets
+    r"|[0-9A-Fa-f]{12}"  # bare, no separators
+    r")$"
+)
+
 
 class MACAddress:
     """An IEEE 802 MAC address.
@@ -51,21 +63,6 @@ class MACAddress:
     constructor accepts round-trips through it. ``f"{mac:-X}"`` is the same
     call spelled as a format spec, and ``bytes(mac)`` is the six raw octets.
     """
-
-    #: Compiled pattern matching the accepted textual MAC forms. Exposed as a
-    #: class attribute so callers can pre-screen text with
-    #: ``MACAddress._VALID_MAC.match(text)`` before attempting construction.
-    #: Each separated form is spelled out on its own rather than as a shared
-    #: ``[:.-]`` class, so one address cannot mix separators.
-    _VALID_MAC = _re.compile(
-        r"^(?:"
-        r"[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}"  # colon separated
-        r"|[0-9A-Fa-f]{2}(?:-[0-9A-Fa-f]{2}){5}"  # hyphen separated
-        r"|[0-9A-Fa-f]{2}(?:\.[0-9A-Fa-f]{2}){5}"  # dot separated, per octet
-        r"|[0-9A-Fa-f]{4}(?:\.[0-9A-Fa-f]{4}){2}"  # dot / Cisco triplets
-        r"|[0-9A-Fa-f]{12}"  # bare, no separators
-        r")$"
-    )
 
     __slots__ = ("_octets",)
 
@@ -96,7 +93,7 @@ class MACAddress:
             return
         if isinstance(value, str):
             text = value.strip()
-            if not self._VALID_MAC.match(text):
+            if not _MAC_TEXT.match(text):
                 raise NetimpsValueError("Invalid MAC address: %r" % (value,))
             hexdigits = _re.sub(r"[.:-]", "", text)
             object.__setattr__(self, "_octets", bytes.fromhex(hexdigits))

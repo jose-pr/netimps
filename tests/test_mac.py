@@ -1,5 +1,4 @@
 import operator
-import re
 import typing
 
 import pytest
@@ -23,14 +22,17 @@ def test_accepts_all_separator_forms(text):
     assert mac.format(":") == "aa:bb:cc:dd:ee:ff"
 
 
-def test_valid_mac_is_compiled_pattern():
-    assert isinstance(MACAddress._VALID_MAC, re.Pattern)
-    assert MACAddress._VALID_MAC.match("AA:BB:CC:DD:EE:FF")
-    assert MACAddress._VALID_MAC.match("aabb.ccdd.eeff")
-    assert MACAddress._VALID_MAC.match("aa.bb.cc.dd.ee.ff")
-    assert MACAddress._VALID_MAC.match("aabbccddeeff")
-    assert not MACAddress._VALID_MAC.match("not a mac")
-    assert not MACAddress._VALID_MAC.match("AA:BB:CC:DD:EE")  # too short
+def test_is_valid_screens_text_without_a_private_pattern():
+    """A caller pre-screened text with ``MACAddress._VALID_MAC``, which the class
+    docstring invited; ``is_valid`` is the public way and no pattern is on the
+    class."""
+    assert not hasattr(MACAddress, "_VALID_MAC")
+    assert MACAddress.is_valid("AA:BB:CC:DD:EE:FF")
+    assert MACAddress.is_valid("aabb.ccdd.eeff")
+    assert MACAddress.is_valid("aa.bb.cc.dd.ee.ff")
+    assert MACAddress.is_valid("aabbccddeeff")
+    assert not MACAddress.is_valid("not a mac")
+    assert not MACAddress.is_valid("AA:BB:CC:DD:EE")  # too short
 
 
 @pytest.mark.parametrize(
@@ -45,7 +47,7 @@ def test_valid_mac_is_compiled_pattern():
 )
 def test_mixed_separators_are_rejected(text):
     """One separator per address -- a mixed spelling is a typo, not a form."""
-    assert not MACAddress._VALID_MAC.match(text)
+    assert not MACAddress.is_valid(text)
     with pytest.raises(ValueError):
         MACAddress(text)
 

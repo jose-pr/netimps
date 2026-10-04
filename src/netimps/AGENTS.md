@@ -353,8 +353,18 @@ so nothing is lost. Pass an existing enumeration in a loop; it is a syscall.
   address form is unspecified. A `%zone` is stripped first. **Never raises** —
   anything unparseable is simply not a wildcard, so it stays usable in a branch
   without a guard. Agrees with what `bind("")` treats as the wildcard.
+- **`split_zone(text) -> (host, zone | None)`** — split an IPv6 `%zone` suffix
+  off a host: `"fe80::1%eth0"` → `("fe80::1", "eth0")`, `"10.0.0.5"` →
+  `("10.0.0.5", None)`. Use it before `try_parse` or a comparison, because
+  `ipaddress` keeps the zone as part of the address and `fe80::1%eth0` equals
+  nothing an interface reports. Takes the loose host union; a `%` with nothing
+  after it raises `NetimpsValueError`. Brackets are `split_host`'s.
 - **`split_host(text, *, default_port=None) -> (host, port)`** — split
-  `host:port`, handling IPv6 brackets. **`"::1"` stays an address**, never host
+  `host:port`, handling IPv6 brackets. `text` is also a **`(host, port)` pair**
+  with `port` an `int` or `None`, `default_port` filling the `None`:
+  `split_host(("h", None), default_port=69)` → `("h", 69)`; a port written both
+  in the host and beside it must agree. A bracketed literal with no port is the
+  host alone, `"[::1]"` → `("::1", None)`. **`"::1"` stays an address**, never host
   `"::"` port `1` — the mistake hand-rolled splitters make. Only a bracketed v6
   address may carry a port; brackets are stripped from the returned host and a
   scope id is preserved (`"[fe80::1%eth0]:80"` → `("fe80::1%eth0", 80)`).
@@ -934,6 +944,14 @@ failure. `tcp` and `udp` also report `rtt`; only ICMP reports `ttl`.
   address assigned to a local adapter. Private, link-local, on-link, routable
   or reachable alone do not count. Malformed input raises like `parse`;
   loopback answers before interface discovery.
+- **`is_local_host(host, *, resolve=False, cache=False) -> bool`** — whether a
+  host string names this machine. True for a literal `is_local_address` accepts
+  (zone ignored, v4-mapped judged as v4), for `localhost` and `*.localhost`, and
+  for this machine's own host name (case and trailing dot ignored); a `:port` or
+  brackets are accepted and ignored. **A name is not resolved unless
+  `resolve=True`**, which asks the OS resolver and is true when any address it
+  returns is local (and also accepts this machine's fully qualified name); that
+  can block on the network. Never raises: a value that is not a host is `False`.
 - **A `%zone` suffix is honoured by all three of the above**, not rejected.
   `ipaddress` keeps the zone as part of the address, so `fe80::1%15` matched
   nothing in enumeration and the library denied that an address it had just

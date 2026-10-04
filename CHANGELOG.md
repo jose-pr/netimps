@@ -49,6 +49,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - **`is_unicast(address, interface=None, *, cache=False)` and `Datagram.is_unicast`**: false for the wildcard, a multicast group and a broadcast (limited or subnet), true otherwise. `Datagram.is_unicast` is `None` when there was no pktinfo to say where the datagram went.
 
+- **`split_zone(text)`**, **`is_local_host(host, *, resolve=False, cache=False)`** and **`split_host` of a `(host, port)` pair**. `split_zone("fe80::1%eth0")` is `("fe80::1", "eth0")`; `is_local_host` is true for a loopback or locally assigned literal, `localhost`, and this machine's own name, and resolves any other name only when asked; `split_host(("h", None), default_port=69)` is `("h", 69)`.
+
 - **`UDPEndpoint.datagrams(*, on_error=None)`**: a callable given the exception from a failed receive; return true to carry on with the next datagram. Without it the loop still stops at the first error.
 
 - Four aliases that already appeared in public signatures are exported:
@@ -106,6 +108,7 @@ probe says so in its prefix.
   function recognises, keeping its `OSError` subclass and `errno`;
   `set_buffer_size` logs one `WARNING` per socket when the kernel grants less
   than was asked.
+- **`MACAddress._VALID_MAC` is gone.** It was a private class attribute the class docstring invited callers to read; screen text with `MACAddress.is_valid(text)`.
 - **`UDPEndpoint.send(src=<address>)` enumerates no interfaces.** An address `src` is used as given and the kernel picks the adapter (a `%zone` still names one); a MAC or an adapter name still resolves, and an `Interface` still pins the adapter as well.
 - **`Host`, `MACAddress`, `PingResult`, `Route` and `Interface` are read-only.**
   Assigning to or deleting any attribute raises `AttributeError`; build a new

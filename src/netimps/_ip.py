@@ -64,6 +64,7 @@ __all__ = [
     "collapse",
     "subtract",
     "split_host",
+    "split_zone",
     "join_host",
     "unmap",
     "is_wildcard",
@@ -273,8 +274,64 @@ def subtract(
     return collapse(remaining)
 
 
+def _host_text(text: object) -> str:
+    """The string a loose host value stands for; ``TypeError`` for a network,
+    :class:`NetimpsValueError` for a type that is not a host at all."""
+    if isinstance(text, str):
+        return text
+    # The same loose union the rest of the package takes. This used to insist
+    # on a `str` and reject an address object, a `Host` or an `FQDN` -- values
+    # a caller holding "the host" very often has, and which `join_host`, the
+    # inverse of `split_host`, already accepts. A network still raises, via
+    # `_dst_argument`, since it has no single address.
+    if isinstance(text, (IPv4Network, IPv6Network)):
+        _dst_argument(text)  # raises TypeError, with the reason
+    if isinstance(text, (IPv4Address, IPv6Address, IPv4Interface, IPv6Interface)):
+        return _dst_argument(text)
+    if isinstance(text, (Host, FQDN)):
+        # Both stringify to the text the caller means -- `Host` to its
+        # original spelling, `FQDN` to the name with its trailing dot if it
+        # has one.
+        return str(text)
+    # An **allowlist**, not a `str()` fallback. A fallback accepted `None` and
+    # turned it into the hostname "None", which is the worst kind of answer: a
+    # plausible one that is wrong, and one a caller cannot detect. An int or a
+    # list went the same way.
+    raise NetimpsValueError(
+        "host must be a string, an address, a Host or an FQDN, got %r" % (text,)
+    )
+
+
+def split_zone(text: "HostLike") -> "Tuple[str, Optional[str]]":
+    """Split an IPv6 ``%zone`` suffix off a host: ``(host, zone)``.
+
+    ::
+
+        split_zone("fe80::1%eth0")   # ('fe80::1', 'eth0')
+        split_zone("fe80::1%12")     # ('fe80::1', '12')
+        split_zone("10.0.0.5")       # ('10.0.0.5', None)
+        split_zone("example.com")    # ('example.com', None)
+
+    Use it before :func:`try_parse` or an address comparison: ``ipaddress`` keeps
+    the zone as part of the address, so ``fe80::1%eth0`` is not equal to
+    ``fe80::1`` and matches nothing in :func:`get_interfaces`. The zone names an
+    *interface*, which is why it is returned rather than thrown away. Brackets are
+    :func:`split_host`'s business, not this function's.
+
+    ``text`` takes the package's loose host union. Raises
+    :class:`NetimpsValueError` for a ``%`` with nothing after it.
+    """
+    value = _host_text(text)
+    host, sep, zone = value.partition("%")
+    if not sep:
+        return value, None
+    if not zone:
+        raise NetimpsValueError("empty zone after '%%' in %r" % (value,))
+    return host, zone
+
+
 def split_host(
-    text: "HostLike",
+    text: "Union[HostLike, Tuple[HostLike, Optional[int]]]",
     *,
     default_port: Optional[int] = None,
 ) -> "Tuple[str, Optional[int]]":
@@ -295,8 +352,18 @@ def split_host(
     almost always make.
 
     Brackets are stripped from the returned host, and a scope id is preserved
-    (``"[fe80::1%eth0]:80"`` -> ``("fe80::1%eth0", 80)``). ``default_port`` is
-    used when no port is present.
+    (``"[fe80::1%eth0]:80"`` -> ``("fe80::1%eth0", 80)``). A bracketed literal
+    with no port is the host alone: ``"[::1]"`` is ``("::1", None)``.
+    ``default_port`` is used when no port is present.
+
+    A ``(host, port)`` **pair** is taken too, with ``port`` an integer or
+    ``None`` and ``default_port`` filling a ``None``::
+
+        split_host(("example.com", None), default_port=69)   # ('example.com', 69)
+        split_host(("[::1]", 80))                            # ('::1', 80)
+
+    The host of a pair is split like any other, so a port written in both places
+    is an error unless they agree.
 
     ``text`` accepts the package's usual loose union, not only a ``str``: an
     address object, an :class:`IPv4Interface`/:class:`IPv6Interface` (its ``.ip``
@@ -312,29 +379,9 @@ def split_host(
     used to be handed back whole as the *host*, so the caller then looked up a
     name that cannot exist instead of being told what was wrong.
     """
-    if not isinstance(text, str):
-        # The same loose union the rest of the package takes. This used to insist
-        # on a `str` and reject an address object, a `Host` or an `FQDN` -- values
-        # a caller holding "the host" very often has, and which `join_host`, the
-        # inverse of this function, already accepts. A network still raises, via
-        # `_dst_argument`, since it has no single address.
-        if isinstance(text, (IPv4Network, IPv6Network)):
-            _dst_argument(text)  # raises TypeError, with the reason
-        if isinstance(text, (IPv4Address, IPv6Address, IPv4Interface, IPv6Interface)):
-            text = _dst_argument(text)
-        elif isinstance(text, (Host, FQDN)):
-            # Both stringify to the text the caller means -- `Host` to its
-            # original spelling, `FQDN` to the name with its trailing dot if it
-            # has one.
-            text = str(text)
-        else:
-            # An **allowlist**, not a `str()` fallback. A fallback accepted
-            # `None` and turned it into the hostname "None", which is the worst
-            # kind of answer: a plausible one that is wrong, and one a caller
-            # cannot detect. An int or a list went the same way.
-            raise NetimpsValueError(
-                "host must be a string, an address, a Host or an FQDN, got %r" % (text,)
-            )
+    if isinstance(text, tuple):
+        return _split_pair(text, default_port)
+    text = _host_text(text)
     if not text.strip():
         raise NetimpsValueError("host must be a non-empty string, got %r" % (text,))
     text = text.strip()
@@ -371,6 +418,26 @@ def split_host(
 
     if not host:
         raise NetimpsValueError("empty host in %r" % (text,))
+    return host, port
+
+
+def _split_pair(pair: "Tuple[Any, ...]", default_port: Optional[int]):
+    """``split_host`` for a ``(host, port)`` pair."""
+    if len(pair) != 2:
+        raise NetimpsValueError(
+            "a (host, port) pair has two items, got %d: %r" % (len(pair), pair)
+        )
+    raw_host, raw_port = pair
+    host, inner = split_host(raw_host)
+    if raw_port is None:
+        return host, inner if inner is not None else default_port
+    if isinstance(raw_port, bool) or not isinstance(raw_port, (int, str)):
+        raise NetimpsValueError("port must be an integer or None, got %r" % (raw_port,))
+    port = _parse_port(str(raw_port), repr(pair))
+    if inner is not None and inner != port:
+        raise NetimpsValueError(
+            "two ports for one host: %r in the host and %d beside it" % (inner, port)
+        )
     return host, port
 
 
