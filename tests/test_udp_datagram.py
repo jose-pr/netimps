@@ -9,8 +9,8 @@ survives an error.
 
 import asyncio
 import ipaddress
+import select
 import socket
-import time
 
 import pytest
 
@@ -205,20 +205,24 @@ def test_a_received_datagram_reports_its_destination_as_unicast():
 
 
 def _endpoint_with_a_pending_receive_error():
-    """A connected UDP socket that has an ICMP error queued, and the peer to follow.
+    """A connected UDP socket with an ICMP error pending and nothing else queued.
 
     Connected, because POSIX reports an asynchronous ICMP error only there;
     ``connreset=True`` because ``bind()`` turns the Windows report off.
-    Returns ``(endpoint, peer)``; the peer holds the port that refused, and a
-    datagram from it is the one that must arrive *after* the error.
+    Returns ``(endpoint, peer)``. The peer takes the port that refused only
+    once the error is pending, and has sent nothing: a datagram queued beside
+    the error would be delivered *before* it on BSD and macOS and after it on
+    Linux, and a test must not depend on which.
     """
     port = _closed_udp_port()
     sock = bind("127.0.0.1", 0, connreset=True)
     sock.connect(("127.0.0.1", port))
     sock.send(b"ping")
-    time.sleep(0.3)
+    readable, _, _ = select.select([sock], [], [], 5)
+    if not readable:
+        sock.close()
+        pytest.skip("this host reports no ICMP error for a refused UDP datagram")
     peer = bind("127.0.0.1", port)
-    peer.sendto(b"after", sock.getsockname())
     return UDPEndpoint(sock), peer
 
 
@@ -245,12 +249,16 @@ def test_datagrams_stops_at_the_first_error_by_default():
 
 
 def test_on_error_returning_true_yields_the_datagram_after_a_failed_receive():
-    """Servers each wrote an ``arecv`` loop with a try/except around it."""
+    """A receive loop has to outlive one refused datagram: without `on_error`
+    the first ICMP error ends it, which is why servers wrap `arecv` in their
+    own try/except."""
     endpoint, peer = _endpoint_with_a_pending_receive_error()
     seen = []
 
     def on_error(exc):
+        # Sent only now, so the failed receive comes first on every platform.
         seen.append(exc)
+        peer.sendto(b"after", endpoint.socket.getsockname())
         return True
 
     async def first():
