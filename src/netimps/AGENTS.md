@@ -1692,9 +1692,11 @@ wrapped socket expires, on every supported Python (before 3.10
   ignores* a v6 cmsg on a v4 socket, so there is no correct silent behaviour
   available. An `OSError` from the kernel, meaning a source this host cannot
   send from, propagates; only platform incapability degrades to `sendto`.
-- **`async arecv(bufsize=65535, resolve_interface=True)`** and
-  **`datagrams(bufsize=65535, resolve_interface=True, *, on_error=None)`** —
-  `recv()` awaited, and an `async for` over arrivals:
+- **`async arecv(bufsize=65535, resolve_interface=True)`**,
+  **`async asend(data, dst, port, *, src=None) -> int`** and
+  **`datagrams(bufsize=65535, resolve_interface=True, *, on_error=None) ->
+  AsyncIterator[Datagram]`** — `recv()` and `send()` awaited, and an `async for`
+  over arrivals:
 
   ```python
   async for packet in endpoint.datagrams():
@@ -1708,6 +1710,14 @@ wrapped socket expires, on every supported Python (before 3.10
   returns true to carry on with the next datagram, false to stop with that error.
   The caller decides, so log or count inside it. The error a `close()` causes
   ends the loop quietly and does not reach it.
+
+  **Closing ends a pending wait.** `close()` or `aclose()` from another task
+  wakes a task in `arecv` with `RuntimeError` and finishes a `datagrams()` loop,
+  with the reader unregistered, on every loop type. **The socket's timeout is
+  never changed**: `arecv` and `asend` make one call non-blocking and restore
+  the timeout afterwards, so `gettimeout()` is the same before and after and a
+  later `recv()` waits as it always did. `asend` waits for writability, with the
+  loop free, when the kernel's send buffer is full.
 
   **Pktinfo survives on every loop type**, which is not free. The Windows default
   `ProactorEventLoop` raises `NotImplementedError` from `add_reader`, and its own
@@ -1726,9 +1736,8 @@ wrapped socket expires, on every supported Python (before 3.10
   **Cancelling the awaiting task is a clean shutdown**, which is the ordinary
   server one: cancel the receive task, then close the endpoint. A cancelled
   `arecv` unregisters its reader, so the loop is not left watching a socket that
-  is about to close — it used to be, because the registration was removed only
-  when it actually fired, and the loop then raised from its selector on the next
-  poll.
+  is about to close. Closing first and cancelling after is just as clean: the
+  reader is removed by the descriptor it was registered under.
 
   **A second loop rebinds.** Serving one endpoint from a new loop —
   `asyncio.run(serve())` twice, or a server stopped and started again — retires

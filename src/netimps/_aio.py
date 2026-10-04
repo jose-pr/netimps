@@ -32,7 +32,7 @@ import threading as _threading
 import time as _time
 from typing import Any, Optional
 
-__all__ = ["ReadNotifier"]
+__all__ = ["ReadNotifier", "wait_writable"]
 
 #: Proactor is the Windows default, so the thread path is the common one there
 #: rather than an exotic fallback.
@@ -50,7 +50,9 @@ class ReadNotifier:
     awaiting one socket would race for the same datagram however the waiting
     were arranged. A cancelled :meth:`wait` unregisters itself, so the ordinary
     shutdown (cancel the receive task, then close the socket) leaves nothing
-    behind.
+    behind. :meth:`close` and :meth:`aclose` unregister the reader of a wait in
+    progress and fail it with :class:`RuntimeError`, whichever order the task is
+    cancelled and the endpoint closed in.
 
     **Rebinds when a different loop waits on it.** The thread path captures a
     loop for the life of its thread, so serving one endpoint from a second loop
@@ -69,6 +71,7 @@ class ReadNotifier:
         "_pending",
         "_loop",
         "_stop",
+        "_waiter",
     )
 
     def __init__(self, sock: "_socket.socket") -> None:
@@ -94,6 +97,10 @@ class ReadNotifier:
         #: The future the selector thread should resolve next. One waiter at a
         #: time, which is what a single receive loop does.
         self._pending: "Any" = None
+        #: ``(loop, future, descriptor, on_loop)`` of the wait in progress. The
+        #: descriptor is the one registered, kept because the socket's own
+        #: ``fileno()`` is -1 once it is closed.
+        self._waiter: "Any" = None
 
     async def wait(self) -> None:
         """Resolve once the socket is readable. Raises if the notifier is closed."""
@@ -104,7 +111,9 @@ class ReadNotifier:
         loop = asyncio.get_running_loop()
         future: "Any" = loop.create_future()
 
-        on_loop = self._try_add_reader(loop, future)
+        fileno = self._sock.fileno()
+        on_loop = self._try_add_reader(loop, future, fileno)
+        self._waiter = (loop, future, fileno, on_loop)
         if not on_loop:
             # Order matters: the future must be visible to the thread *before*
             # the thread is told to watch, or it can fire with nothing to resolve
@@ -116,39 +125,56 @@ class ReadNotifier:
         try:
             await future
         finally:
-            # **Cancellation must not leave the loop watching this socket.**
-            # `_ready` unregisters only when it actually fires, so a task
-            # cancelled while awaiting -- a server's `stop()`, the most ordinary
-            # shutdown there is -- used to leave the reader registered until the
-            # socket next became readable. Close the socket first, which is the
-            # usual teardown order, and the loop is left polling a closed fd and
-            # raises from the selector. Measured: `loop.remove_reader(fileno)`
-            # after a cancelled `arecv` returned True, meaning one was still
-            # there.
-            #
-            # Unconditional rather than only-on-cancel, because
-            # `remove_reader` on an unregistered fd is a no-op returning False,
-            # and that is cheaper than trying to reason about which of several
-            # resolution paths got there first.
+            # Cancellation must not leave the loop watching this socket, and the
+            # reader goes by the descriptor it was registered under: the socket
+            # may already be closed, and its own `fileno()` is then -1.
+            # `remove_reader` on an unregistered descriptor is a no-op.
+            if self._waiter is not None and self._waiter[1] is future:
+                self._waiter = None
             if on_loop:
-                try:
-                    loop.remove_reader(self._sock.fileno())
-                except (NotImplementedError, OSError, ValueError):
-                    pass
+                _remove_reader(loop, fileno)
             elif self._pending is future:
                 # The thread path's equivalent: drop the future so a later
                 # notification cannot resolve an abandoned one.
                 self._pending = None
 
-    def _try_add_reader(self, loop: "Any", future: "Any") -> bool:
+    def _abort_waiter(self) -> None:
+        """End the wait in progress, if any, with a ``RuntimeError``.
+
+        Called by :meth:`close` and :meth:`aclose` before the socket goes, so the
+        reader is gone while its descriptor is still valid and the task awaiting
+        it is woken instead of left pending.
+        """
+        waiter, self._waiter = self._waiter, None
+        if waiter is None:
+            return
+        loop, future, fileno, on_loop = waiter
+
+        def abort() -> None:
+            if on_loop:
+                _remove_reader(loop, fileno)
+            if not future.done():
+                future.set_exception(RuntimeError("endpoint is closed"))
+
+        try:
+            import asyncio
+
+            same_thread = asyncio._get_running_loop() is loop
+        except Exception:  # pragma: no cover - asyncio is imported by `wait`
+            same_thread = False
+        if same_thread:
+            abort()
+            return
+        try:
+            loop.call_soon_threadsafe(abort)
+        except RuntimeError:  # the loop is closed: nothing is waiting on it
+            pass
+
+    def _try_add_reader(self, loop: "Any", future: "Any", fileno: int) -> bool:
         """Register with the loop directly. ``False`` if it cannot do that."""
-        fileno = self._sock.fileno()
 
         def _ready() -> None:
-            try:
-                loop.remove_reader(fileno)
-            except (NotImplementedError, OSError):  # pragma: no cover
-                pass
+            _remove_reader(loop, fileno)
             if not future.done():
                 future.set_result(None)
 
@@ -268,6 +294,7 @@ class ReadNotifier:
         :meth:`aclose`.
         """
         self._closed = True
+        self._abort_waiter()
         self._retire_thread()
         self._pending = None
 
@@ -276,12 +303,52 @@ class ReadNotifier:
         import asyncio
 
         self._closed = True
+        self._abort_waiter()
         thread = self._signal_stop()
         deadline = _time.monotonic() + 5.0
         while thread is not None and thread.is_alive() and _time.monotonic() < deadline:
             await asyncio.sleep(0.001)
         self._release()
         self._pending = None
+
+
+async def wait_writable(sock: "_socket.socket") -> None:
+    """Resolve once *sock* can accept a datagram.
+
+    ``add_writer`` where the loop has it. The Proactor loop has none, and a
+    full send buffer is the rare case, so there the socket is polled every
+    5 ms with the loop free in between.
+    """
+    import asyncio
+
+    loop = asyncio.get_running_loop()
+    fileno = sock.fileno()
+    future: "Any" = loop.create_future()
+
+    def ready() -> None:
+        if not future.done():
+            future.set_result(None)
+
+    try:
+        loop.add_writer(fileno, ready)
+    except NotImplementedError:
+        while not _select.select([], [sock], [], 0)[1]:
+            await asyncio.sleep(0.005)
+        return
+    try:
+        await future
+    finally:
+        try:
+            loop.remove_writer(fileno)
+        except (NotImplementedError, OSError, ValueError):
+            pass
+
+
+def _remove_reader(loop: "Any", fileno: int) -> None:
+    try:
+        loop.remove_reader(fileno)
+    except (NotImplementedError, OSError, ValueError):
+        pass
 
 
 def _resolve(future: "Any") -> None:

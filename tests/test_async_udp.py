@@ -204,13 +204,14 @@ def test_a_closed_endpoint_refuses_to_start_a_notifier(factory):
 def test_arecv_does_not_disturb_the_synchronous_path():
     """The synchronous path is the one in use today; it must be untouched.
 
-    Asserted by using both on one endpoint in one process: the async path sets
-    the socket non-blocking, which a synchronous `recv` with a timeout has to
-    keep tolerating.
+    Asserted by using both on one endpoint in one process: a timeout set before
+    the first `arecv` is still the socket's timeout afterwards, and a
+    synchronous `recv` still honours it.
     """
 
     async def body():
         endpoint = UDPEndpoint(bind("127.0.0.1", 0))
+        endpoint.socket.settimeout(5.0)
         port = endpoint.socket.getsockname()[1]
         sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
@@ -218,8 +219,8 @@ def test_arecv_does_not_disturb_the_synchronous_path():
             await asyncio.sleep(0.05)
             sender.sendto(b"async", ("127.0.0.1", port))
             first = await asyncio.wait_for(task, 10)
+            assert endpoint.socket.gettimeout() == 5.0
             # Now synchronously, on the same endpoint.
-            endpoint.socket.settimeout(5.0)
             sender.sendto(b"sync", ("127.0.0.1", port))
             second = endpoint.recv(1500)
         finally:
@@ -577,3 +578,243 @@ def test_aclose_waits_for_the_thread_without_blocking_the_loop(factory):
     assert elapsed >= 0.05, "aclose() returned before the thread had left"
     assert ticks > 3, "the loop was blocked while aclose() waited"
     assert fileno == -1
+
+
+# --------------------------------------------------------------------------- #
+# Closing under a pending receive, and the socket's mode                      #
+# --------------------------------------------------------------------------- #
+
+
+def _registered_readers(loop, fileno):
+    """Whether *loop* still watches *fileno*, asked of the loop itself.
+
+    ``remove_reader`` answers True exactly when a reader was registered, and
+    removing it is the cleanup. Proactor loops have no readers to ask about.
+    """
+    try:
+        return bool(loop.remove_reader(fileno))
+    except NotImplementedError:
+        return False
+
+
+@pytest.mark.parametrize("factory", LOOP_FACTORIES, ids=LOOP_IDS)
+def test_close_then_cancel_leaves_the_loop_usable_and_no_reader(factory):
+    """Close under a pending `arecv`, then cancel the task: the loop survives.
+
+    The reader used to be removed by the socket's *current* descriptor, which is
+    -1 once the socket is closed, so the original stayed registered. A selector
+    loop then polled a closed socket and died with ``WinError 10038`` out of
+    ``run_until_complete``; elsewhere the next socket to reuse the descriptor
+    number received nothing.
+    """
+
+    async def body():
+        endpoint = UDPEndpoint(bind("127.0.0.1", 0))
+        fileno = endpoint.socket.fileno()
+        task = asyncio.ensure_future(endpoint.arecv())
+        await asyncio.sleep(0.1)
+        endpoint.close()
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, RuntimeError):
+            pass
+        for _ in range(3):
+            await asyncio.sleep(0.02)
+        return fileno, _registered_readers(asyncio.get_running_loop(), fileno)
+
+    loop = factory()
+    try:
+        asyncio.set_event_loop(loop)
+        fileno, leaked = loop.run_until_complete(asyncio.wait_for(body(), 10))
+    finally:
+        asyncio.set_event_loop(None)
+        loop.close()
+    assert leaked is False
+    assert _notifier_threads() == []
+
+
+@pytest.mark.parametrize("factory", LOOP_FACTORIES, ids=LOOP_IDS)
+def test_cancel_then_close_leaves_no_reader(factory):
+    async def body():
+        endpoint = UDPEndpoint(bind("127.0.0.1", 0))
+        fileno = endpoint.socket.fileno()
+        task = asyncio.ensure_future(endpoint.arecv())
+        await asyncio.sleep(0.1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await endpoint.aclose()
+        for _ in range(3):
+            await asyncio.sleep(0.02)
+        return _registered_readers(asyncio.get_running_loop(), fileno)
+
+    assert _run(lambda: asyncio.wait_for(body(), 10), factory) is False
+    assert _notifier_threads() == []
+
+
+@pytest.mark.parametrize("closer", ["close", "aclose"])
+@pytest.mark.parametrize("factory", LOOP_FACTORIES, ids=LOOP_IDS)
+def test_closing_from_another_task_ends_a_pending_arecv(factory, closer):
+    """A task awaiting `arecv` gets what a closed endpoint raises, promptly."""
+
+    async def body():
+        endpoint = UDPEndpoint(bind("127.0.0.1", 0))
+        task = asyncio.ensure_future(endpoint.arecv())
+        await asyncio.sleep(0.1)
+        started = asyncio.get_running_loop().time()
+        outcome = getattr(endpoint, closer)()
+        if asyncio.iscoroutine(outcome):
+            await outcome
+        with pytest.raises(RuntimeError):
+            await asyncio.wait_for(task, 0.5)
+        return asyncio.get_running_loop().time() - started
+
+    assert _run(body, factory) < 0.5
+    assert _notifier_threads() == []
+
+
+@pytest.mark.parametrize("closer", ["close", "aclose"])
+@pytest.mark.parametrize("factory", LOOP_FACTORIES, ids=LOOP_IDS)
+def test_closing_from_another_task_ends_datagrams(factory, closer):
+    """`async for` over `datagrams()` finishes within 0.5 s of the close."""
+
+    async def body():
+        endpoint = UDPEndpoint(bind("127.0.0.1", 0))
+        seen = []
+
+        async def drain():
+            async for packet in endpoint.datagrams():
+                seen.append(packet)
+
+        task = asyncio.ensure_future(drain())
+        await asyncio.sleep(0.1)
+        outcome = getattr(endpoint, closer)()
+        if asyncio.iscoroutine(outcome):
+            await outcome
+        await asyncio.wait_for(task, 0.5)
+        return seen
+
+    assert _run(body, factory) == []
+    assert _notifier_threads() == []
+
+
+@pytest.mark.parametrize("factory", LOOP_FACTORIES, ids=LOOP_IDS)
+def test_arecv_leaves_the_sockets_timeout_alone(factory):
+    """One `arecv` must not change the mode the synchronous half relies on.
+
+    The socket's timeout was 5.0 before and 0.0 after, so the next `recv` with
+    nothing queued raised `BlockingIOError` at once instead of waiting.
+    """
+
+    async def body():
+        sock = bind("127.0.0.1", 0)
+        sock.settimeout(0.4)
+        endpoint = UDPEndpoint(sock)
+        port = sock.getsockname()[1]
+        sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            task = asyncio.ensure_future(endpoint.arecv(1500))
+            await asyncio.sleep(0.05)
+            sender.sendto(b"async", ("127.0.0.1", port))
+            first = await asyncio.wait_for(task, 10)
+            after = sock.gettimeout()
+            started = asyncio.get_running_loop().time()
+            with pytest.raises(TimeoutError):
+                endpoint.recv(1500)
+            waited = asyncio.get_running_loop().time() - started
+        finally:
+            sender.close()
+            endpoint.close()
+        return first.data, after, waited
+
+    data, after, waited = _run(body, factory)
+    assert data == b"async"
+    assert after == 0.4
+    assert waited >= 0.3, "recv returned at once: the socket was left non-blocking"
+
+
+@pytest.mark.parametrize("factory", LOOP_FACTORIES, ids=LOOP_IDS)
+def test_a_blocking_socket_stays_blocking_after_arecv(factory):
+    async def body():
+        sock = bind("127.0.0.1", 0)
+        sock.settimeout(None)
+        endpoint = UDPEndpoint(sock)
+        port = sock.getsockname()[1]
+        sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            task = asyncio.ensure_future(endpoint.arecv(1500))
+            await asyncio.sleep(0.05)
+            sender.sendto(b"x", ("127.0.0.1", port))
+            await asyncio.wait_for(task, 10)
+            return sock.gettimeout()
+        finally:
+            sender.close()
+            endpoint.close()
+
+    assert _run(body, factory) is None
+
+
+@pytest.mark.parametrize("factory", LOOP_FACTORIES, ids=LOOP_IDS)
+def test_asend_delivers_and_leaves_the_timeout_alone(factory):
+    async def body():
+        receiver = bind("127.0.0.1", 0)
+        receiver.settimeout(5)
+        sock = bind("127.0.0.1", 0)
+        sock.settimeout(3.0)
+        endpoint = UDPEndpoint(sock)
+        try:
+            port = receiver.getsockname()[1]
+            sent = await endpoint.asend(b"hello", "127.0.0.1", port, src="127.0.0.1")
+            plain = await endpoint.asend(b"hi", "127.0.0.1", port)
+            got = [receiver.recvfrom(100)[0], receiver.recvfrom(100)[0]]
+            return sent, plain, got, sock.gettimeout()
+        finally:
+            endpoint.close()
+            receiver.close()
+
+    assert _run(body, factory) == (5, 2, [b"hello", b"hi"], 3.0)
+
+
+@pytest.mark.parametrize("factory", LOOP_FACTORIES, ids=LOOP_IDS)
+def test_asend_waits_for_writability_when_the_buffer_is_full(factory, monkeypatch):
+    """A send the kernel refuses with EWOULDBLOCK is retried once writable.
+
+    A full UDP send buffer cannot be produced on loopback on demand, so the
+    refusal is raised from the one call `asend` makes; the wait it then does is
+    the real one, on the real socket.
+    """
+    calls = []
+    real = UDPEndpoint.send
+
+    def refuse_once(self, *args, **kwargs):
+        calls.append(self.socket.gettimeout())
+        if len(calls) == 1:
+            raise BlockingIOError()
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(UDPEndpoint, "send", refuse_once)
+
+    async def body():
+        receiver = bind("127.0.0.1", 0)
+        receiver.settimeout(5)
+        endpoint = UDPEndpoint(bind("127.0.0.1", 0))
+        try:
+            sent = await endpoint.asend(b"x", "127.0.0.1", receiver.getsockname()[1])
+            return sent, receiver.recvfrom(10)[0], endpoint.socket.gettimeout()
+        finally:
+            endpoint.close()
+            receiver.close()
+
+    assert _run(body, factory) == (1, b"x", None)
+    assert calls == [0.0, 0.0]
+
+
+def test_asend_on_a_closed_endpoint_raises():
+    async def body():
+        endpoint = UDPEndpoint(bind("127.0.0.1", 0))
+        endpoint.close()
+        with pytest.raises(RuntimeError):
+            await endpoint.asend(b"x", "127.0.0.1", 9)
+
+    _run(body, asyncio.new_event_loop)

@@ -459,7 +459,11 @@ async def _datagrams_on_error(endpoint: UDPEndpoint) -> None:
     async for packet in endpoint.datagrams(
         on_error=lambda exc: isinstance(exc, OSError)
     ):
-        assert_type(packet, Any)
+        assert_type(packet, Datagram)
+
+
+async def _asend(endpoint: UDPEndpoint) -> None:
+    assert_type(await endpoint.asend(b"x", "127.0.0.1", 9, src="127.0.0.1"), int)
 
 
 # `split_host` takes a pair as well as text; `split_zone` returns an optional zone.

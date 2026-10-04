@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`UDPEndpoint.asend(data, dst, port, *, src=None)`**: `send` awaited, on
+  every loop type. It waits for writability, with the loop running, when the
+  kernel's send buffer is full.
+
 - **One exception base and four new exported classes.** `NetimpsError` is the
   base of everything netimps raises on its own account;
   `NetimpsValueError(NetimpsError, ValueError)` is for text that is not the
@@ -258,6 +262,16 @@ probe says so in its prefix.
   `addr` command use it; `Host(x).resolve()` gives `(fqdn, ip)`.
 
 ### Fixed
+
+- **Closing a `UDPEndpoint` ends a pending `arecv`, and `arecv` leaves the
+  socket's timeout alone.** `close()` and `aclose()` from another task now wake
+  a task in `arecv` with `RuntimeError` and finish a `datagrams()` loop
+  (both hung on the Windows Proactor loop and on Linux). The loop's reader is
+  removed by the descriptor it was registered under, so closing the socket and
+  then cancelling the task no longer leaves it registered: a Windows selector
+  loop died with `WinError 10038` out of `run_until_complete`. One `arecv` used
+  to leave a socket with `settimeout(5.0)` at `0.0`, so the next `recv()` raised
+  `BlockingIOError` at once.
 
 - **`ping` bounds its own name lookup by `timeout`** (2.5 s for `timeout=0.5`
   with a 2 s lookup before), and takes the family of `src` from the

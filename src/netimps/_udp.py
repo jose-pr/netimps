@@ -102,6 +102,7 @@ from typing import (
     Any,
     Callable,
     Dict,
+    AsyncIterator,
     Iterable,
     NamedTuple,
     Optional,
@@ -452,6 +453,7 @@ class UDPEndpoint:
         "_iface_cache",
         "_iface_cache_at",
         "_notifier",
+        "_closed",
     )
 
     def __init__(self, sock: "_socket.socket", *, pktinfo: bool = True) -> None:
@@ -464,6 +466,7 @@ class UDPEndpoint:
         #: Created on the first `arecv`, so a synchronous consumer never pays
         #: for it -- on Windows it owns a thread.
         self._notifier: "Any" = None
+        self._closed = False
 
         family = getattr(sock, "family", _socket.AF_INET)
         level, receive_option, send_type, _layout = _pktinfo_options(family)
@@ -1030,17 +1033,75 @@ class UDPEndpoint:
         awaiting the same endpoint would race for the same datagram regardless of
         how the waiting were arranged.
 
-        :raises RuntimeError: if the endpoint has been closed.
+        The socket's timeout is left as it was found: the read is made
+        non-blocking only for the duration of one call, so a synchronous
+        :meth:`recv` on the same endpoint behaves as before.
+
+        :raises RuntimeError: if the endpoint is closed, or is closed while this
+            is waiting.
         """
         notifier = self._ensure_notifier()
         while True:
             await notifier.wait()
             try:
-                return self.recv(bufsize, resolve_interface)
+                return self._recv_nowait(bufsize, resolve_interface)
             except BlockingIOError:
                 # A spurious wakeup, or another reader took it. Wait again rather
                 # than returning an empty datagram.
                 continue
+
+    def _recv_nowait(self, bufsize: int, resolve_interface: bool) -> "Datagram":
+        """:meth:`recv` that raises ``BlockingIOError`` instead of waiting.
+
+        The mode is changed for this call only and restored on the way out, so
+        the socket's timeout is the caller's again whatever the outcome.
+        """
+        sock = self.socket
+        previous = sock.gettimeout()
+        sock.settimeout(0.0)
+        try:
+            return self.recv(bufsize, resolve_interface)
+        finally:
+            try:
+                sock.settimeout(previous)
+            except OSError:  # closed while receiving: nothing left to restore
+                pass
+
+    async def asend(
+        self,
+        data: bytes,
+        dst: "HostLike",
+        port: int,
+        *,
+        src: "InterfaceLike" = None,
+    ) -> int:
+        """:meth:`send`, awaited. Same arguments, same return value.
+
+        The datagram is handed to the kernel without blocking; when the send
+        buffer is full this waits (without blocking the loop) until the socket
+        is writable and tries again. The socket's timeout is left as it was
+        found, as for :meth:`arecv`.
+
+        :raises RuntimeError: if the endpoint is closed.
+        """
+        sock = self.socket
+        while True:
+            if self._closed or sock.fileno() < 0:
+                raise RuntimeError("endpoint is closed")
+            previous = sock.gettimeout()
+            sock.settimeout(0.0)
+            try:
+                return self.send(data, dst, port, src=src)
+            except BlockingIOError:
+                pass
+            finally:
+                try:
+                    sock.settimeout(previous)
+                except OSError:  # closed while sending
+                    pass
+            from ._aio import wait_writable
+
+            await wait_writable(sock)
 
     async def datagrams(
         self,
@@ -1048,7 +1109,7 @@ class UDPEndpoint:
         resolve_interface: bool = True,
         *,
         on_error: "Optional[Callable[[BaseException], bool]]" = None,
-    ) -> "Any":
+    ) -> "AsyncIterator[Datagram]":
         """Yield datagrams until the endpoint is closed -- ``async for`` sugar.
 
         ::
@@ -1083,17 +1144,16 @@ class UDPEndpoint:
         should not pay for a thread it never uses.
         """
         if self._notifier is None:
-            if self.socket.fileno() < 0:
+            if self._closed or self.socket.fileno() < 0:
                 raise RuntimeError("endpoint is closed")
             from ._aio import ReadNotifier
 
-            # Non-blocking, so a spurious readability signal cannot wedge the
-            # loop inside `recv`.
-            self.socket.setblocking(False)
             self._notifier = ReadNotifier(self.socket)
         return self._notifier
 
     def _closed_for_async(self) -> bool:
+        if self._closed:
+            return True
         try:
             return self.socket.fileno() < 0
         except Exception:  # pragma: no cover - a socket in an odd state
@@ -1106,7 +1166,11 @@ class UDPEndpoint:
         the socket underneath it would turn an orderly shutdown into a caught
         ``OSError``. Complete on return, and harmless when called again. From a
         coroutine use :meth:`aclose`, which does not block the loop.
+
+        A task awaiting :meth:`arecv` is woken with :class:`RuntimeError`, and
+        :meth:`datagrams` finishes.
         """
+        self._closed = True
         notifier, self._notifier = self._notifier, None
         if notifier is not None:
             notifier.close()
@@ -1121,6 +1185,7 @@ class UDPEndpoint:
         coroutine; :meth:`close` would block the loop for as long as the thread
         takes to stop.
         """
+        self._closed = True
         notifier, self._notifier = self._notifier, None
         if notifier is not None:
             await notifier.aclose()
@@ -1129,13 +1194,13 @@ class UDPEndpoint:
     def __enter__(self) -> "UDPEndpoint":
         return self
 
-    def __exit__(self, *exc) -> None:
+    def __exit__(self, *exc: object) -> None:
         self.close()
 
     async def __aenter__(self) -> "UDPEndpoint":
         return self
 
-    async def __aexit__(self, *exc) -> None:
+    async def __aexit__(self, *exc: object) -> None:
         await self.aclose()
 
     def __repr__(self) -> str:
