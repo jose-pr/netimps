@@ -188,7 +188,7 @@ netimps.retry(lambda: netimps.tcp_check("example.com", 443), attempts=3)
 | `discover_mtu`, `get_pmtu`, `get_tcp_mss` | path MTU by ICMP/UDP/TCP, the kernel's cached guess, or the negotiated MSS |
 | `scan_ports`, `scan_hosts`, `PORT_RANGES` | concurrent scanning |
 | `multicast_socket`, `join_group`, `leave_group`, `is_multicast` | multicast |
-| `get_hostname()()` | `platform.node()`, captured at import time |
+| `get_hostname()` | this machine's name, asked for when called; `fqdn=True` for the qualified one |
 
 Full per-export reference, with contracts and gotchas, lives in
 [`src/netimps/AGENTS.md`](https://github.com/jose-pr/netimps/blob/main/src/netimps/AGENTS.md),

@@ -10,16 +10,16 @@ Re-exported from :mod:`netimps`.
 from __future__ import annotations
 
 import ipaddress as _ipaddress
+import platform as _platform
 import socket as _socket
-from typing import TYPE_CHECKING, Any, Iterable, List, Optional, Tuple, Union
+from typing import Any, Iterable, List, Optional, Tuple, Union
 
 from ._exceptions import NetimpsValueError
 
-if TYPE_CHECKING:
-    # Type-only, to keep `Host.fqdn` precisely annotated without a runtime
-    # cycle: `_fqdn` imports this module's `IPAddress` to reject an address
-    # literal, so a module-level import here would be circular.
-    from ._fqdn import FQDN
+# `_fqdn` imports nothing from this module at import time (it reaches for
+# `IPAddress` inside the one function that needs it), which is what lets
+# `HostLike` below name the class itself.
+from ._fqdn import FQDN
 
 from ipaddress import (
     IPv4Address,
@@ -50,6 +50,7 @@ __all__ = [
     "IPv6Interface",
     "IPv6Network",
     "get_ip",
+    "get_hostname",
     "collapse",
     "subtract",
     "split_host",
@@ -152,18 +153,6 @@ _CONCRETE = {
 _BUILDER_DEFAULTS = {
     _ipaddress.ip_network: {"strict": False},
 }
-
-
-#: Anything accepted where a single destination (hostname or address) is
-#: expected -- ``ping``, ``tcp_check``, ``resolve``'s ``query`` and the like.
-#: Not a ``parse()`` target: this is argument coercion, not type-building.
-HostLike = Union[
-    str,
-    IPv4Address,
-    IPv6Address,
-    IPv4Interface,
-    IPv6Interface,
-]
 
 
 def _dst_argument(value) -> str:
@@ -383,8 +372,6 @@ def split_host(
         # a caller holding "the host" very often has, and which `join_host`, the
         # inverse of this function, already accepts. A network still raises, via
         # `_dst_argument`, since it has no single address.
-        from ._fqdn import FQDN
-
         if isinstance(text, (IPv4Network, IPv6Network)):
             _dst_argument(text)  # raises TypeError, with the reason
         if isinstance(text, (IPv4Address, IPv6Address, IPv4Interface, IPv6Interface)):
@@ -563,8 +550,6 @@ class Host:
         """
         if self.is_address:
             return None
-        from ._fqdn import FQDN
-
         return FQDN.try_parse(self.value)
 
     def ip(self, refresh: bool = False) -> "Optional[IPAddress]":
@@ -610,6 +595,35 @@ class Host:
 
     def __hash__(self) -> int:
         return hash(self.value)
+
+
+#: Anything accepted where a single destination (hostname or address) is
+#: expected -- ``ping``, ``tcp_check``, ``resolve``'s ``query`` and the like.
+#: Not a ``parse()`` target: this is argument coercion, not type-building.
+HostLike = Union[
+    str,
+    IPv4Address,
+    IPv6Address,
+    IPv4Interface,
+    IPv6Interface,
+    Host,
+    FQDN,
+]
+
+
+def get_hostname(*, fqdn: bool = False) -> str:
+    """This machine's host name, asked for when called.
+
+    :func:`platform.node` by default. With ``fqdn=True``,
+    :func:`socket.getfqdn`, which **may consult the resolver** and so can
+    block; where no qualified name is known it returns the bare one.
+
+    Nothing is read at import: on Windows :func:`platform.node` is a WMI
+    query, which is too much to charge every ``import netimps``.
+    """
+    if fqdn:
+        return _socket.getfqdn()
+    return _platform.node()
 
 
 def join_host(host: "Union[str, IPAddress, Any]", port: "Optional[int]" = None) -> str:

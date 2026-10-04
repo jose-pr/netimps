@@ -37,8 +37,6 @@ membership all behave exactly as the stdlib does.
 
 from __future__ import annotations
 
-import platform as _platform
-
 # Re-export the concrete stdlib types so consumers can annotate with them.
 from ipaddress import (
     IPv4Address,
@@ -71,6 +69,7 @@ from ._ip import (
     IPNetwork,
     IPNetworkLike,
     collapse,
+    get_hostname,
     get_ip,
     is_link_scoped,
     split_host,
@@ -149,7 +148,7 @@ from ._sockets import (
     tcp_check,
     wait_for_port,
 )
-from ._sockets import _InterfaceQuery as InterfaceQuery
+from ._sockets import InterfaceQuery
 from ._scan import PortsLike
 from ._iface_spec import InterfaceLike
 
@@ -258,7 +257,6 @@ __all__ = [
     "max_udp_payload",
     "get_tcp_mss",
     "get_hostname",
-    # Phase 2: New exported aliases
     "InterfaceLike",
     "InterfaceQuery",
     "PortsLike",
@@ -289,21 +287,6 @@ def _installed_version() -> str:
 
 __version__ = _installed_version()
 
-
-def get_hostname(*, fqdn: bool = False) -> str:
-    """The hostname of the running process.
-
-    By default, returns the bare hostname (via :func:`platform.node`).
-    With ``fqdn=True``, returns the fully-qualified domain name via
-    :func:`socket.getfqdn`.
-    """
-    if fqdn:
-        import socket
-
-        return socket.getfqdn()
-    return _platform.node()
-
-
 # The patch is for *other people's* code: `_udp` calls `_msg` directly, so
 # netimps' own behaviour is identical whether or not this runs. That is
 # deliberate -- opting out below must not quietly cost `UDPEndpoint` its
@@ -313,7 +296,7 @@ def get_hostname(*, fqdn: bool = False) -> str:
 # `socket.CMSG_SPACE` into a constant at *its* import time (which is the normal
 # way to probe it) sees None if it is imported before `import netimps` has run.
 #
-# Opt out with NETIMPS_SOCKET_PATCH=1 before the first import, or call
+# Opt out with NETIMPS_SOCKET_PATCH=0 before the first import, or call
 # `patch_socket_module(False)` afterwards. See `_msg` for why this is default-on
 # and why it installs four names rather than one.
 if _msg_patch_requested():

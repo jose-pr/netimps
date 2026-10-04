@@ -61,10 +61,7 @@ from __future__ import annotations
 
 import sys as _sys
 from typing import Any, Iterable, Iterator, List, Optional, Tuple, Union
-from ._dns import resolve
 from ._exceptions import NetimpsValueError
-from ._parse import is_valid
-from ._ping import ping
 
 __all__ = ["FQDN", "FQDNLike"]
 
@@ -183,6 +180,7 @@ class FQDN:
         # produce a nonsense "name". Routed through the package's own parser
         # rather than a second address detector.
         from ._ip import IPAddress
+        from ._parse import is_valid
 
         candidate = ".".join(labels)
         if is_valid(candidate, IPAddress) or is_valid(candidate.strip("[]"), IPAddress):
@@ -447,11 +445,13 @@ class FQDN:
         fully-qualified form is passed on as such, so a name built with a
         trailing dot keeps bypassing the search list.
         """
+        from ._dns import resolve
 
         return resolve(str(self), **kwargs)
 
     def ping(self, **kwargs: "Any") -> "Any":
         """Ping this name. Straight through to :func:`netimps.ping`."""
+        from ._ping import ping
 
         return ping(str(self), **kwargs)
 

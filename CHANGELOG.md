@@ -18,14 +18,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `DNSDecodeError(NetimpsValueError)` is the DNS codec's error, formerly the
   private `WireError(ValueError)`.
 
+- Four aliases that already appeared in public signatures are exported:
+  `InterfaceLike` (what names a local interface), `InterfaceQuery` (what
+  `get_interface` looks up), `PortsLike` and `SocketAddress`.
+
+### Renamed
+
+**Breaking.** No alias is kept: the old name is gone. Acronyms are spelled in
+capitals, an input alias is named for the type it becomes, and a predicate or
+probe says so in its prefix.
+
+| Before | Now |
+| --- | --- |
+| `UdpEndpoint` | `UDPEndpoint` |
+| `Fqdn` | `FQDN` |
+| `FqdnLike` | `FQDNLike` |
+| `MACLike` | `MACAddressLike` |
+| `AddressLike` | `HostLike` |
+| `normalize_host` | `split_host` |
+| `interface_for` | `get_interface` |
+| `interfaces_for` | `iter_interfaces` |
+| `hop_count` | `count_hops` |
+| `supports_pktinfo` | `has_pktinfo` |
+| `supports_recvmsg` | `has_recvmsg` |
+| `socket_patched` | `is_socket_patched` |
+| `APIPA` | `LINK_LOCAL_V4` |
+| `UdpEndpoint.supports_pktinfo` | `UDPEndpoint.has_pktinfo` |
+| `UdpEndpoint.supports_src_pinning` | `UDPEndpoint.has_src_pinning` |
+
 ### Changed
 
+- **`HOST_DN` is replaced by `get_hostname(*, fqdn=False)`.** A constant
+  computed from `platform.node()` made every `import netimps` ask for the host
+  name, a WMI query on Windows; the function asks when called. `fqdn=True`
+  returns `socket.getfqdn()`.
+- **`NETIMPS_NO_SOCKET_PATCH` is replaced by `NETIMPS_SOCKET_PATCH`**, with
+  the sense turned round: `0`, `false`, `no` or `off` opts out of the
+  import-time `socket` patch, and unset still means patched. A value that is
+  none of the documented spellings, or the old variable set to anything,
+  raises `ValueError` at import naming the variable, so that a stale setting
+  cannot silently re-enable the patch.
+- `HostLike` (formerly `AddressLike`) now includes `Host` and `FQDN`, which
+  every destination parameter already accepted at run time.
 - **Malformed text raises `NetimpsValueError`** from `parse`, `MACAddress`,
-  `Fqdn`, `normalize_host`, `join_host` and the query check of
+  `FQDN`, `split_host`, `join_host` and the query check of
   `resolve_nslookup`; message unchanged. It is a `ValueError`, so
   `except ValueError` still catches it. `parse` now also converts the
   `ipaddress` builders' own errors, chained as `__cause__`.
-- `UdpEndpoint.recv` and `send` raise the builtin `TimeoutError` when the
+- `UDPEndpoint.recv` and `send` raise the builtin `TimeoutError` when the
   socket's timeout expires. From Python 3.10 that is what `socket.timeout`
   already is; on 3.9 it was only an `OSError`.
 - `ResolutionError` and `AddressInUseError` now also derive from
@@ -37,7 +77,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - **`recvmsg` and `sendmsg` honour a socket timeout on Windows.** A socket
   with a timeout is non-blocking underneath, and the Winsock calls returned
-  at once: `UdpEndpoint.recv()` on a socket with `settimeout(0.3)` raised
+  at once: `UDPEndpoint.recv()` on a socket with `settimeout(0.3)` raised
   `BlockingIOError` after 0.000 s instead of waiting. Both now wait for
   readiness and raise `socket.timeout` when the time runs out, as the
   stdlib methods do on POSIX. A blocking socket and a non-blocking one

@@ -34,8 +34,8 @@ The package is consistent about what the first argument means:
 A `dst` accepts a hostname; an `address` does not.
 
 **Every `dst`-typed parameter accepts `HostLike`** — a hostname string, an
-address string, an existing `IPv4Address`/`IPv6Address`, or an
-`IPv4Interface`/`IPv6Interface` (its `.ip` is used, dropping the `/prefix`,
+address string, an existing `IPv4Address`/`IPv6Address`, a `Host`, an `FQDN`,
+or an `IPv4Interface`/`IPv6Interface` (its `.ip` is used, dropping the `/prefix`,
 which every consumer of a destination -- a subprocess argument, a socket
 call, a DNS query -- would otherwise read as garbage). A network
 (`IPv4Network`/`IPv6Network`) raises `TypeError`, since it has no single
@@ -82,7 +82,11 @@ The union aliases are **not callable** — `IPAddress("10.0.0.5")` is a
 | `IPAddressLike` | `str \| int \| bytes \| IPv4Address \| IPv6Address` -- accepted *as input* for an address |
 | `IPInterfaceLike` | anything accepted *as input* for an address + prefix |
 | `IPNetworkLike` | anything accepted *as input* for a network |
-| `HostLike` | `str \| IPv4Address \| IPv6Address \| IPv4Interface \| IPv6Interface` -- any `dst`-typed parameter |
+| `HostLike` | `str \| IPv4Address \| IPv6Address \| IPv4Interface \| IPv6Interface \| Host \| FQDN` -- any `dst`-typed parameter |
+| `InterfaceLike` | `Interface \| MACAddress \| IPv4Address \| IPv6Address \| str \| None` -- names a local interface: `src=` and `interface=` parameters |
+| `InterfaceQuery` | `Interface \| IPAddressLike \| IPInterface \| IPNetwork \| MACAddress` -- what `get_interface` and `iter_interfaces` look up |
+| `PortsLike` | `str \| int \| Iterable[str \| int]` -- a port, a range name, a scheme name, or several: `scan_ports`, `scan_hosts` |
+| `SocketAddress` | `(host, port)` or `(host, port, flowinfo, scope_id)` -- a socket address tuple, as in `Datagram.sender` |
 | `MACAddressLike` | `str \| int \| bytes \| bytearray \| MACAddress` |
 
 Plus the stdlib concretes re-exported so callers need not import `ipaddress`:
@@ -1304,12 +1308,12 @@ patch below is installed.
 > said "degrade to `0.0.0.0` rather than crashing", which was inferred from the
 > field's value rather than measured against it.) `UDPEndpoint` is the
 > supported way to get that address correctly on every platform. Set
-> `NETIMPS_SOCKET_PATCH=1` to opt out entirely.
+> `NETIMPS_SOCKET_PATCH=0` to opt out entirely.
 
 - **The patch is installed by default, at `import netimps`.** It adds
   `recvmsg`/`sendmsg` to `socket.socket` and `CMSG_LEN`/`CMSG_SPACE` to the
   `socket` module, so POSIX-shaped code runs unchanged on Windows. Opt out with
-  **`NETIMPS_SOCKET_PATCH=1`** before the first import, or
+  **`NETIMPS_SOCKET_PATCH=0`** before the first import, or
   `patch_socket_module(False)` after it. The env var exists because the choice
   has to be expressible *before* import.
 - **It also installs `os.sysconf` where the platform has none**, because
@@ -1428,14 +1432,14 @@ wrapped socket expires, on every supported Python (before 3.10
 - **Two honest flags, decided once at construction from the socket's own
   family.** `has_pktinfo` — `recv` will report the arrival interface;
   `False`, never an optimistic `True`, whenever the option for *this* family is
-  missing or refused. `supports_src_pinning` — `send(src=)` can be honoured;
+  missing or refused. `has_src_pinning` — `send(src=)` can be honoured;
   `False` where there is no pktinfo cmsg for the family (macOS has no
   `IP_PKTINFO`).
 - **Windows is supported, as of the Winsock backend.** Both flags are `True`
   there for v4, v6 **and** dual-stack `::`, on 3.9 through 3.14, via
   `WSARecvMsg`/`WSASendMsg` — see **Ancillary data** above. `UDPEndpoint` calls
   that backend *directly* rather than the patched stdlib method, so
-  `NETIMPS_SOCKET_PATCH=1` does not cost it pktinfo. The per-platform
+  `NETIMPS_SOCKET_PATCH=0` does not cost it pktinfo. The per-platform
   `in_pktinfo` layout difference is handled internally; this is the wrapper that
   exists so callers need not know it.
 - **A v4 arrival on an `AF_INET6` endpoint always reports the v4-mapped form**
@@ -1794,8 +1798,10 @@ Aliases: `resolve|dns`, `check|tcp`, `addr|parse`, `source|src`.
 
 ## Constants
 
-- **`get_hostname()()`** — `platform.node()`, captured **at import time** (a later
-  hostname change is not reflected).
+- **`get_hostname(*, fqdn=False)`** — a function, not a constant: this
+  machine's name from `platform.node()`, asked for when called and never at
+  import. `fqdn=True` returns `socket.getfqdn()`, which may consult the
+  resolver.
 - **`PORT_RANGES`** — `{"well-known", "common", "all"}` port tuples;
   `"common"` holds 36 ports.
 - **`LINK_LOCAL_V4`** (`169.254.0.0/16`), **`LOOPBACK_V4`** (`127.0.0.0/8`),

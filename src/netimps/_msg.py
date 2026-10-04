@@ -38,7 +38,7 @@ outcome. Socket constants are not portable on any other platform pair either.
 :mod:`netimps._udp` owns the per-platform layout table; consult it rather than
 assuming.
 
-**Opting out.** Set ``NETIMPS_SOCKET_PATCH=1`` in the environment before the
+**Opting out.** Set ``NETIMPS_SOCKET_PATCH=0`` in the environment before the
 first ``import netimps``, or call ``patch_socket_module(False)`` afterwards to
 undo it. The environment variable exists because the decision has to be
 expressible *before* import, which a function call cannot be. The patch only
@@ -529,38 +529,26 @@ def _patched_sendmsg(
 def _patch_requested() -> bool:
     """Whether the import-time patch is wanted.
 
-    Read once, at import. ``NETIMPS_SOCKET_PATCH`` accepts explicit spellings:
-    "1", "true", "yes", "on" (patch), or "0", "false", "no", "off" (no patch),
-    case-insensitive. Unset or empty strings default to patch.
+    Read once, at import. ``NETIMPS_SOCKET_PATCH`` unset or empty means yes;
+    ``1``, ``true``, ``yes``, ``on`` mean yes and ``0``, ``false``, ``no``,
+    ``off`` mean no, in any case. Anything else raises :class:`ValueError`
+    naming the variable: a typo must not read as a choice.
 
-    Raises ``ValueError`` if set to an unrecognized value or if the deprecated
-    ``NETIMPS_NO_SOCKET_PATCH`` variable is set.
+    ``NETIMPS_NO_SOCKET_PATCH`` set to anything raises as well. That name has
+    the opposite sense, so honouring it is impossible and ignoring it would
+    install the patch for someone who had asked for it to be left out.
     """
-    # Check for deprecated variable
     if "NETIMPS_NO_SOCKET_PATCH" in _os.environ:
         raise ValueError(
             "NETIMPS_NO_SOCKET_PATCH is no longer supported. "
             "Use NETIMPS_SOCKET_PATCH=0 to disable the patch."
         )
-
     value = _os.environ.get("NETIMPS_SOCKET_PATCH", "").strip().lower()
-
-    # Unset or empty: patch (True)
-    if not value:
+    if value in ("", "1", "true", "yes", "on"):
         return True
-
-    # Recognized true spellings: patch
-    if value in ("1", "true", "yes", "on"):
-        return True
-
-    # Recognized false spellings: don't patch
     if value in ("0", "false", "no", "off"):
         return False
-
-    # Anything else is an error
     raise ValueError(
-        f"NETIMPS_SOCKET_PATCH must be one of "
-        f"'1'/'true'/'yes'/'on' (to patch) or "
-        f"'0'/'false'/'no'/'off' (to not patch), "
-        f"got {value!r}"
+        "NETIMPS_SOCKET_PATCH must be one of 1/true/yes/on or 0/false/no/off, "
+        "got %r" % (_os.environ["NETIMPS_SOCKET_PATCH"],)
     )

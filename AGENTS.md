@@ -144,7 +144,7 @@ map:
 | `max_udp_payload` | the largest UDP payload that fits an MTU unfragmented |
 | `scan_ports`, `scan_hosts`, `PORT_RANGES` | concurrent scanning |
 | `multicast_socket`, `join_group`, `leave_group`, `is_multicast` | multicast |
-| `get_hostname()()` | `platform.node()` of the running host, captured at import time |
+| `get_hostname` | this machine's name (`platform.node()`), asked for when called; `fqdn=True` for `socket.getfqdn()` |
 
 ## Working here
 

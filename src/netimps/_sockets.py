@@ -49,7 +49,7 @@ from ._ping import ping
 from ._scheme import coerce_port as _coerce_port
 from typing import Any, Iterable, Iterator, List, NamedTuple, Optional, Tuple, Union
 
-_InterfaceQuery = Union[
+InterfaceQuery = Union[
     Interface,
     IPAddressLike,
     IPInterface,
@@ -482,7 +482,7 @@ def bind_error_hint(
     return None
 
 
-def _classify_interface_query(query: _InterfaceQuery) -> "Tuple[str, Any]":
+def _classify_interface_query(query: InterfaceQuery) -> "Tuple[str, Any]":
     """Return the lookup kind and normalised value, or ``("invalid", None)``."""
     import ipaddress as _ipaddress
 
@@ -575,7 +575,7 @@ def _interfaces_for_query(
 
 
 def iter_interfaces(
-    query: _InterfaceQuery,
+    query: InterfaceQuery,
     *,
     cache: "Union[bool, float]" = False,
 ) -> "Iterator[Interface]":
@@ -606,7 +606,7 @@ def iter_interfaces(
 
 
 def get_interface(
-    query: _InterfaceQuery,
+    query: InterfaceQuery,
     strict: bool = True,
     *,
     cache: "Union[bool, float]" = False,

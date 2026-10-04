@@ -1,151 +1,154 @@
-"""Surface contract: the public API export list.
+"""The public surface: exactly what ``netimps.__all__`` exports.
 
-This test pins what names the package exports after each phase of the
-standard-alignment plan. It starts failing when Phase 2 renames take effect
-(names shift but get_hostname is not yet callable), and passes again after
-Phase 3 (where get_hostname() is implemented).
-
-The list includes:
-- Today's __all__ with phase-2 names entries applied
-- Plus the four new exported aliases: InterfaceLike, InterfaceQuery, PortsLike,
-  SocketAddress
-- Plus get_hostname (new function, replaces get_hostname()())
-- The four exception names from sub-plan 01 (already in __all__)
+A name added, removed or renamed has to change this list in the same commit,
+so the surface never moves by accident. The list is sorted the way ``sorted``
+sorts it.
 """
 
 import netimps
 
+EXPECTED = [
+    "AddressInUseError",
+    "Backoff",
+    "CMSG_LEN",
+    "CMSG_SPACE",
+    "DNSDecodeError",
+    "Datagram",
+    "FQDN",
+    "FQDNLike",
+    "Host",
+    "HostLike",
+    "INTERFACE_CACHE_TTL",
+    "IPAddress",
+    "IPAddressLike",
+    "IPInterface",
+    "IPInterfaceLike",
+    "IPNetwork",
+    "IPNetworkLike",
+    "IPv4Address",
+    "IPv4Interface",
+    "IPv4Network",
+    "IPv6Address",
+    "IPv6Interface",
+    "IPv6Network",
+    "Interface",
+    "InterfaceLike",
+    "InterfaceQuery",
+    "LINK_LOCAL_V4",
+    "LINK_LOCAL_V6",
+    "LOOPBACK_V4",
+    "LOOPBACK_V6",
+    "MACAddress",
+    "MACAddressLike",
+    "NetimpsError",
+    "NetimpsValueError",
+    "PORT_RANGES",
+    "PingResult",
+    "PortsLike",
+    "ResolutionError",
+    "ResolutionTimeoutError",
+    "Route",
+    "SocketAddress",
+    "SocketOption",
+    "UDPEndpoint",
+    "backoff_delays",
+    "bind",
+    "bind_error_hint",
+    "clear_interface_cache",
+    "collapse",
+    "count_hops",
+    "disable_connreset",
+    "discover_mtu",
+    "get_default_port",
+    "get_default_scheme",
+    "get_free_port",
+    "get_hostname",
+    "get_interface",
+    "get_interfaces",
+    "get_ip",
+    "get_pmtu",
+    "get_route",
+    "get_source_ip",
+    "get_tcp_mss",
+    "has_pktinfo",
+    "has_recvmsg",
+    "interface_enumerations",
+    "is_broadcast",
+    "is_link_scoped",
+    "is_local_address",
+    "is_multicast",
+    "is_socket_patched",
+    "is_valid",
+    "is_wildcard",
+    "iter_addresses",
+    "iter_interfaces",
+    "join_group",
+    "join_host",
+    "leave_group",
+    "max_udp_payload",
+    "multicast_socket",
+    "parse",
+    "patch_socket_module",
+    "ping",
+    "recvmsg",
+    "register_port",
+    "resolve",
+    "resolve_dnspython",
+    "resolve_doh",
+    "resolve_nslookup",
+    "resolve_system",
+    "resolve_wire",
+    "retry",
+    "scan_hosts",
+    "scan_ports",
+    "sendmsg",
+    "set_buffer_size",
+    "split_host",
+    "subtract",
+    "tcp_check",
+    "try_parse",
+    "unmap",
+    "wait_for_port",
+]
 
-def test_public_surface():
-    """The exported names match the post-phase-2 target surface."""
-    expected = sorted(
-        [
-            # Types: the v4/v6 unions you annotate with, plus the stdlib concretes.
-            "IPAddress",
-            "IPInterface",
-            "IPNetwork",
-            "IPv4Address",
-            "IPv4Interface",
-            "IPv4Network",
-            "IPv6Address",
-            "IPv6Interface",
-            "IPv6Network",
-            "MACAddress",
-            "IPAddressLike",
-            "IPInterfaceLike",
-            "IPNetworkLike",
-            # Phase 2: HostLike -> HostLike
-            "HostLike",
-            # Phase 2: MACAddressLike -> MACAddressLike
-            "MACAddressLike",
-            # Parsing.
-            "parse",
-            "try_parse",
-            "is_valid",
-            "get_ip",
-            "Host",
-            "is_link_scoped",
-            # Phase 2: LINK_LOCAL_V4 -> LINK_LOCAL_V4
-            "LINK_LOCAL_V4",
-            "LOOPBACK_V4",
-            "LOOPBACK_V6",
-            "LINK_LOCAL_V6",
-            "collapse",
-            "subtract",
-            # Phase 2: split_host -> split_host
-            "split_host",
-            "join_host",
-            "unmap",
-            "is_wildcard",
-            "get_default_port",
-            "get_default_scheme",
-            "register_port",
-            "resolve",
-            "resolve_dnspython",
-            "resolve_system",
-            "resolve_nslookup",
-            "resolve_wire",
-            "resolve_doh",
-            "ResolutionError",
-            "ResolutionTimeoutError",
-            "DNSDecodeError",
-            "NetimpsError",
-            "NetimpsValueError",
-            "ping",
-            "PingResult",
-            "Interface",
-            "get_interfaces",
-            "clear_interface_cache",
-            "interface_enumerations",
-            "INTERFACE_CACHE_TTL",
-            "is_broadcast",
-            "iter_addresses",
-            # Socket / route helpers.
-            "get_source_ip",
-            "get_free_port",
-            "tcp_check",
-            "wait_for_port",
-            "get_route",
-            "bind",
-            "AddressInUseError",
-            "SocketOption",
-            "disable_connreset",
-            "set_buffer_size",
-            "bind_error_hint",
-            # Phase 2: get_interface -> get_interface
-            "get_interface",
-            # Phase 2: iter_interfaces -> iter_interfaces
-            "iter_interfaces",
-            "is_local_address",
-            # Phase 2: UDPEndpoint -> UDPEndpoint
-            "UDPEndpoint",
-            # Phase 2: has_pktinfo -> has_pktinfo
-            "has_pktinfo",
-            "Datagram",
-            # Phase 2: FQDN -> FQDN, FQDNLike -> FQDNLike
-            "FQDN",
-            "FQDNLike",
-            # Ancillary-data messaging, available on every platform (Windows included).
-            "recvmsg",
-            "sendmsg",
-            "CMSG_LEN",
-            "CMSG_SPACE",
-            # Phase 2: has_recvmsg -> has_recvmsg
-            "has_recvmsg",
-            "patch_socket_module",
-            # Phase 2: is_socket_patched -> is_socket_patched
-            "is_socket_patched",
-            "retry",
-            "Backoff",
-            "backoff_delays",
-            # Scanning.
-            "scan_ports",
-            "scan_hosts",
-            "PORT_RANGES",
-            # Multicast.
-            "multicast_socket",
-            "join_group",
-            "leave_group",
-            "is_multicast",
-            "Route",
-            # Phase 2: count_hops -> count_hops
-            "count_hops",
-            "get_pmtu",
-            "discover_mtu",
-            "max_udp_payload",
-            "get_tcp_mss",
-            # Phase 2: get_hostname()() -> get_hostname; phase 3 adds it
-            "get_hostname",
-            # Phase 1: New exported aliases
-            "InterfaceLike",
-            "InterfaceQuery",
-            "PortsLike",
-            "SocketAddress",
-        ]
+
+def test_all_is_exactly_the_pinned_list():
+    """An export that appeared or vanished without this list changing."""
+    assert sorted(netimps.__all__) == EXPECTED
+
+
+def test_every_export_exists_and_is_listed_once():
+    """A name in ``__all__`` that the package does not define, or a duplicate."""
+    assert len(set(netimps.__all__)) == len(netimps.__all__)
+    missing = [name for name in netimps.__all__ if not hasattr(netimps, name)]
+    assert missing == []
+
+
+def test_importing_netimps_does_not_ask_for_the_host_name():
+    """``platform.node()`` is a WMI query on Windows; a constant computed from
+    it made every ``import netimps`` pay for it. Run in a fresh interpreter
+    with the call booby-trapped, because this process imported netimps long
+    ago."""
+    import os
+    import subprocess
+    import sys
+
+    code = (
+        "import platform\n"
+        "def trap():\n"
+        "    raise RuntimeError('platform.node called at import')\n"
+        "platform.node = trap\n"
+        "import netimps\n"
+        "print('imported')\n"
     )
-    actual = sorted(netimps.__all__)
-    assert actual == expected, (
-        f"Surface mismatch.\nExpected:\n{expected}\n\nActual:\n{actual}\n\n"
-        f"Missing: {set(expected) - set(actual)}\n"
-        f"Extra: {set(actual) - set(expected)}"
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(path for path in sys.path if path)
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=120,
     )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "imported"

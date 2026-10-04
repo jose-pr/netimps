@@ -628,3 +628,25 @@ def test_the_root_reexports_the_generic_parse_functions_themselves():
     assert netimps.parse is _parse.parse
     assert netimps.try_parse is _parse.try_parse
     assert netimps.is_valid is _parse.is_valid
+
+
+def test_get_hostname_is_the_platform_node_by_default():
+    """The bare name, asked for at call time."""
+    import platform
+
+    assert netimps.get_hostname() == platform.node()
+
+
+def test_get_hostname_fqdn_asks_the_socket_module(monkeypatch):
+    """``fqdn=True`` is ``socket.getfqdn()``. That call belongs to the stdlib
+    and may reach a resolver, so it is the one thing faked here."""
+    import socket
+
+    monkeypatch.setattr(socket, "getfqdn", lambda: "host.example.test")
+    assert netimps.get_hostname(fqdn=True) == "host.example.test"
+
+
+def test_get_hostname_takes_its_option_by_keyword_only():
+    """A positional ``True`` would read as a name, not as a switch."""
+    with pytest.raises(TypeError):
+        netimps.get_hostname(True)  # type: ignore[misc]

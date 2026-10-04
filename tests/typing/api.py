@@ -72,6 +72,8 @@ from netimps import (
     parse,
     try_parse,
     unmap,
+    tcp_check,
+    get_hostname,
 )
 
 
@@ -337,3 +339,11 @@ def _exceptions_subclass_what_they_promise() -> None:
     _timeout(ResolutionTimeoutError("x"))
     _os(AddressInUseError(98, "x"))
     _package(ResolutionTimeoutError("x"))
+
+
+# A `Host` and an `FQDN` are accepted wherever a destination is: `HostLike`
+# names both, so neither needs a `str()` at the call site.
+assert_type(tcp_check(Host("www.example.com"), 443), bool)
+assert_type(tcp_check(FQDN("www.example.com"), 443), bool)
+assert_type(get_hostname(), str)
+assert_type(get_hostname(fqdn=True), str)

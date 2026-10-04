@@ -661,6 +661,7 @@ def _fresh(code, env=None):
 
     full_env = dict(os.environ)
     full_env.pop("NETIMPS_SOCKET_PATCH", None)
+    full_env.pop("NETIMPS_NO_SOCKET_PATCH", None)
     # The child does not inherit sys.path, and netimps may be reachable only
     # through it (a bare checkout with PYTHONPATH=src rather than an install).
     # Without this the subprocess fails with ModuleNotFoundError and the test
@@ -993,3 +994,39 @@ def test_a_round_trip_through_the_patched_methods():
     finally:
         sender.close()
         peer.close()
+
+
+@pytest.mark.parametrize(
+    "env, patched",
+    [
+        ({}, True),
+        ({"NETIMPS_SOCKET_PATCH": "1"}, True),
+        ({"NETIMPS_SOCKET_PATCH": "TRUE"}, True),
+        ({"NETIMPS_SOCKET_PATCH": "0"}, False),
+        ({"NETIMPS_SOCKET_PATCH": "Off"}, False),
+    ],
+)
+def test_the_variable_decides_the_patch_at_a_real_import(env, patched):
+    """The predicate is tested above; this is the import itself, in a fresh
+    interpreter, because the decision is made once per process. Off Windows the
+    patch has nothing to install, so the answer there is always no."""
+    code = "import netimps; print(netimps.is_socket_patched())"
+    returncode, out, err = _fresh(code, env)
+    assert returncode == 0, err
+    assert out == str(patched and IS_WINDOWS)
+
+
+@pytest.mark.parametrize(
+    "env, named",
+    [
+        ({"NETIMPS_SOCKET_PATCH": "flase"}, "NETIMPS_SOCKET_PATCH"),
+        ({"NETIMPS_NO_SOCKET_PATCH": "1"}, "NETIMPS_NO_SOCKET_PATCH"),
+    ],
+)
+def test_a_value_that_cannot_be_read_stops_the_import(env, named):
+    """A typo, or the variable with the opposite sense, must not pass for a
+    choice: either would install the patch for someone who asked for it to be
+    left out. The error names the variable."""
+    returncode, out, err = _fresh("import netimps", env)
+    assert returncode != 0
+    assert "ValueError" in err and named in err

@@ -76,7 +76,7 @@ Platform reality
 through :mod:`netimps._msg`, which supplies them from Winsock there and
 delegates to CPython elsewhere. It calls that module **directly** rather than
 the ``socket.socket`` methods ``_msg`` can patch in, so declining the patch
-(``NETIMPS_SOCKET_PATCH=1``) does not cost this module anything.
+(``NETIMPS_SOCKET_PATCH=0``) does not cost this module anything.
 
 Where a platform still cannot serve a request, this degrades to plain
 ``recvfrom``/``sendto`` and reports ``interface=None`` rather than failing --
@@ -567,7 +567,7 @@ class UDPEndpoint:
 
         # Routed through `_msg`, not `self.socket.recvmsg`, so this works on
         # Windows whether or not the stdlib patch is installed -- a caller who
-        # sets NETIMPS_SOCKET_PATCH must not thereby lose pktinfo here.
+        # sets NETIMPS_SOCKET_PATCH=0 must not thereby lose pktinfo here.
         data, ancdata, flags, raw_sender = _recvmsg(
             self.socket, bufsize, self._cmsg_size
         )

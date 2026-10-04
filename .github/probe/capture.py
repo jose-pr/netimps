@@ -587,7 +587,7 @@ def pin_capture(label, family, host, src):
         peer.settimeout(5.0)
         endpoint = netimps.UDPEndpoint(netimps.bind(wildcard, 0, family=family))
         info["bound"] = wildcard
-        info["supports_src_pinning"] = endpoint.has_src_pinning
+        info["has_src_pinning"] = endpoint.has_src_pinning
         info["has_pktinfo"] = endpoint.has_pktinfo
         sent = endpoint.send(b"pinned", host, peer.getsockname()[1], src=src)
         info["sent"] = sent
@@ -595,7 +595,7 @@ def pin_capture(label, family, host, src):
         info["observed_source"] = repr(observed)
         print(
             "   pinning=%s sent=%s observed_source=%s"
-            % (info["supports_src_pinning"], sent, info["observed_source"])
+            % (info["has_src_pinning"], sent, info["observed_source"])
         )
     except BaseException as exc:  # noqa: BLE001
         info["error"] = repr(exc)
