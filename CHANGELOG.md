@@ -273,6 +273,21 @@ probe says so in its prefix.
 
 ### Fixed
 
+- **`discover_mtu` reports what it measured.** It resolved the name a second
+  time for the header overhead and ignored `ipv6=`, so a 1480-byte IPv4 path
+  was reported as 1500 when the name's first record was IPv6; the target, the
+  family and the overhead now come from one resolution. `method="tcp"` ignored
+  `ipv6=` (an IPv4-only listener gave 65555 for `ipv6=True`) and added the IPv6
+  header to an IPv4 segment size; it now uses the family that connected, and
+  `get_tcp_mss` gains `ipv6=`. A probe that was answered at `high` returned
+  `high` (9000 on a loopback whose MTU is 65535); the search now continues to
+  the outgoing interface's MTU, and `high` is only the ceiling when that MTU
+  cannot be read, where the result means "at least". On macOS the answer
+  stopped at 8192, `net.inet.raw.maxdgram`, and took 8.7 s; the limit is read,
+  a local destination is reported at the loopback MTU, and another path that
+  reaches it is retried with `method="udp"`. `discover_mtu("127.0.0.1")` is the
+  loopback MTU (65535 on Windows).
+
 - **The `socket` patch survives a second import of the package, a bad call and
   a stream socket.** A second copy of the package in one process captured the
   first copy's installed `recvmsg` as the native one, so on Windows

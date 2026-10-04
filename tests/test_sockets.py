@@ -662,20 +662,6 @@ def test_discover_mtu_result_includes_headers(monkeypatch):
 # --------------------------------------------------------------------------- #
 
 
-def test_ip_header_bytes_by_family():
-    """Every wire-size sum depends on this; v6 headers are 20 bytes bigger."""
-    assert _sockets._ip_header_bytes("8.8.8.8") == 20
-    assert _sockets._ip_header_bytes("2001:db8::1") == 40
-    # TCP adds 20 on top of whichever.
-    assert _sockets._tcp_header_overhead("8.8.8.8") == 40
-    assert _sockets._tcp_header_overhead("2001:db8::1") == 60
-
-
-def test_ip_header_bytes_falls_back_to_v4(no_such_host):
-    """An unresolvable name assumes IPv4: under-reporting an MTU is safer."""
-    assert _sockets._ip_header_bytes("no-such-host-xyz.invalid") == 20
-
-
 def test_discover_mtu_rejects_unknown_method():
     with pytest.raises(ValueError, match="must be 'icmp', 'udp' or 'tcp'"):
         netimps.discover_mtu("10.0.0.1", method="sctp")
@@ -683,14 +669,15 @@ def test_discover_mtu_rejects_unknown_method():
 
 def test_discover_mtu_tcp_uses_mss_plus_headers(monkeypatch):
     """TCP cannot probe, so it derives the MTU from the negotiated MSS."""
-    monkeypatch.setattr(_sockets, "get_tcp_mss", lambda *a, **k: 1400)
+    monkeypatch.setattr(_sockets, "_tcp_mss", lambda *a, **k: (1400, socket.AF_INET))
     assert netimps.discover_mtu("8.8.8.8", port=443, method="tcp") == 1440
     # IPv6 adds 20 more header bytes.
+    monkeypatch.setattr(_sockets, "_tcp_mss", lambda *a, **k: (1400, socket.AF_INET6))
     assert netimps.discover_mtu("2001:db8::1", port=443, method="tcp") == 1460
 
 
 def test_discover_mtu_tcp_none_when_mss_unavailable(monkeypatch):
-    monkeypatch.setattr(_sockets, "get_tcp_mss", lambda *a, **k: None)
+    monkeypatch.setattr(_sockets, "_tcp_mss", lambda *a, **k: None)
     assert netimps.discover_mtu("8.8.8.8", port=443, method="tcp") is None
 
 
@@ -1534,3 +1521,215 @@ def test_bind_error_hint_explains_wsaeinval():
     assert hint is not None
     assert "allow_address_takeover" in hint
     assert "SO_EXCLUSIVEADDRUSE" in hint
+
+
+# --------------------------------------------------------------------------- #
+# discover_mtu: one resolution, the probed family, the interface ceiling       #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture(autouse=True)
+def no_path_cap(monkeypatch):
+    """Make the outgoing-interface ceiling unknown, so a fake ping decides."""
+    monkeypatch.setattr(_sockets, "_outgoing_path", lambda *a, **k: (None, False))
+
+
+def _dual_stack_name(monkeypatch, v4="127.0.0.1", v6="::1"):
+    """``dual.test`` resolves to both families, IPv6 first, honouring the family."""
+    real = socket.getaddrinfo
+
+    def getaddrinfo(host, port, family=0, *args, **kwargs):
+        if host != "dual.test":
+            return real(host, port, family, *args, **kwargs)
+        kind = args[0] if args else socket.SOCK_STREAM
+        found = []
+        if family in (0, socket.AF_INET6):
+            found.append((socket.AF_INET6, kind, 0, "", (v6, port or 0, 0, 0)))
+        if family in (0, socket.AF_INET):
+            found.append((socket.AF_INET, kind, 0, "", (v4, port or 0)))
+        return found
+
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+
+
+def test_discover_mtu_overhead_follows_the_family_that_was_probed(
+    monkeypatch, no_path_cap
+):
+    """A name resolving to IPv6 first, probed as IPv4, takes IPv4's 28 bytes.
+
+    The overhead came from a second resolution that ignored ``ipv6=``: the
+    wire packet was 1480 bytes and the answer was 1500.
+    """
+    _dual_stack_name(monkeypatch)
+    seen = []
+
+    def ping(dst, size=None, dont_fragment=False, timeout=None, src=None, **kw):
+        seen.append((dst, size))
+        return netimps.PingResult((size or 0) + 28 <= 1480, dst)
+
+    monkeypatch.setattr(_sockets, "ping", ping)
+    assert netimps.discover_mtu("dual.test", ipv6=False, high=1500) == 1480
+    assert {dst for dst, _ in seen} == {"127.0.0.1"}
+
+
+def test_discover_mtu_resolves_the_name_once(monkeypatch, no_path_cap):
+    _dual_stack_name(monkeypatch)
+    lookups = []
+    inner = socket.getaddrinfo
+
+    def counting(host, *args, **kwargs):
+        lookups.append(host)
+        return inner(host, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", counting)
+    monkeypatch.setattr(
+        _sockets,
+        "ping",
+        lambda dst, size=None, **kw: netimps.PingResult((size or 0) + 28 <= 1500, dst),
+    )
+    assert netimps.discover_mtu("dual.test", ipv6=False) == 1500
+    assert lookups.count("dual.test") == 1
+
+
+def test_get_tcp_mss_takes_ipv6_and_refuses_the_other_family(monkeypatch):
+    """With an IPv4-only listener, ``ipv6=True`` is an unreachable destination."""
+    _dual_stack_name(monkeypatch)
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(5)
+    try:
+        port = server.getsockname()[1]
+        assert netimps.get_tcp_mss("dual.test", port, timeout=2.0, ipv6=True) is None
+        assert (
+            netimps.discover_mtu(
+                "dual.test", method="tcp", port=port, timeout=2.0, ipv6=True
+            )
+            is None
+        )
+        mss = netimps.get_tcp_mss("dual.test", port, timeout=2.0, ipv6=False)
+        assert mss is None or mss > 0
+        if mss is not None:
+            assert (
+                netimps.discover_mtu(
+                    "dual.test", method="tcp", port=port, timeout=2.0, ipv6=False
+                )
+                == mss + 40
+            )
+    finally:
+        server.close()
+
+
+def test_discover_mtu_tcp_overhead_is_the_connected_familys(monkeypatch):
+    monkeypatch.setattr(_sockets, "_tcp_mss", lambda *a, **k: (1400, socket.AF_INET6))
+    assert netimps.discover_mtu("dual.test", method="tcp", port=443) == 1460
+    monkeypatch.setattr(_sockets, "_tcp_mss", lambda *a, **k: (1400, socket.AF_INET))
+    assert netimps.discover_mtu("dual.test", method="tcp", port=443) == 1440
+
+
+def _wire_ping(limit, seen):
+    def ping(dst, size=None, dont_fragment=False, timeout=None, src=None, **kw):
+        seen.append((size or 0) + 28)
+        return netimps.PingResult((size or 0) + 28 <= limit, dst)
+
+    return ping
+
+
+def test_discover_mtu_continues_past_high_up_to_the_interface_mtu(monkeypatch):
+    """A path that carries ``high`` is searched on, up to the first hop's MTU.
+
+    Returning ``high`` after one probe reported 9000 for a 65535 loopback.
+    """
+    seen = []
+    monkeypatch.setattr(_sockets, "_outgoing_path", lambda *a, **k: (20000, False))
+    monkeypatch.setattr(_sockets, "ping", _wire_ping(12345, seen))
+    assert netimps.discover_mtu("10.0.0.1", high=9000) == 12345
+    assert max(seen) <= 20000
+
+
+def test_discover_mtu_probes_nothing_above_the_interface_mtu(monkeypatch):
+    seen = []
+    monkeypatch.setattr(_sockets, "_outgoing_path", lambda *a, **k: (1500, False))
+    monkeypatch.setattr(_sockets, "ping", _wire_ping(10**6, seen))
+    assert netimps.discover_mtu("10.0.0.1", high=9000) == 1500
+    assert max(seen) == 1500
+
+
+def test_discover_mtu_answers_the_interface_mtu_when_the_path_carries_it(monkeypatch):
+    seen = []
+    monkeypatch.setattr(_sockets, "_outgoing_path", lambda *a, **k: (65535, False))
+    monkeypatch.setattr(_sockets, "_icmp_packet_limit", lambda overhead: 10**6)
+    monkeypatch.setattr(_sockets, "ping", _wire_ping(10**6, seen))
+    assert netimps.discover_mtu("10.0.0.1", high=20000) == 65535
+
+
+def test_discover_mtu_with_an_unknown_first_hop_is_at_least_high(
+    monkeypatch, no_path_cap
+):
+    """No interface MTU to cap at: ``high`` is the documented floor of the answer."""
+    seen = []
+    monkeypatch.setattr(_sockets, "ping", _wire_ping(10**6, seen))
+    assert netimps.discover_mtu("10.0.0.1", high=1500) == 1500
+    assert max(seen) == 1500
+
+
+def test_a_local_destination_bounded_by_the_probe_tool_is_the_interface_mtu(
+    monkeypatch,
+):
+    """The platform ping cannot send past its limit, and a local path has no
+    other hop to narrow it: the loopback MTU is the answer."""
+    seen = []
+    monkeypatch.setattr(_sockets, "_outgoing_path", lambda *a, **k: (65536, True))
+    monkeypatch.setattr(_sockets, "_icmp_packet_limit", lambda overhead: 65535)
+    monkeypatch.setattr(_sockets, "ping", _wire_ping(65535, seen))
+    assert netimps.discover_mtu("127.0.0.1") == 65536
+    assert max(seen) == 65535
+
+
+def test_a_remote_path_bounded_by_the_probe_tool_falls_back_to_udp(monkeypatch):
+    """macOS ping stops at ``net.inet.raw.maxdgram``; UDP has no such limit."""
+    seen = []
+    monkeypatch.setattr(_sockets, "_outgoing_path", lambda *a, **k: (16384, False))
+    monkeypatch.setattr(_sockets, "_icmp_packet_limit", lambda overhead: 8192)
+    monkeypatch.setattr(_sockets, "ping", _wire_ping(10**6, seen))
+    asked = []
+
+    def udp(*args, **kwargs):
+        asked.append(args)
+        return 9000
+
+    monkeypatch.setattr(_sockets, "_discover_mtu_udp", udp)
+    assert netimps.discover_mtu("10.0.0.1") == 9000
+    assert max(seen) == 8192 and asked
+    monkeypatch.setattr(_sockets, "_discover_mtu_udp", lambda *a, **k: None)
+    assert netimps.discover_mtu("10.0.0.1") == 8192
+
+
+def test_the_bsd_probe_limit_text_is_parsed():
+    assert _sockets._parse_sysctl_int("8192\n") == 8192
+    assert _sockets._parse_sysctl_int("net.inet.raw.maxdgram: 9216\n") == 9216
+    assert _sockets._parse_sysctl_int("") is None
+    assert _sockets._parse_sysctl_int("nope") is None
+
+
+def test_the_bsd_icmp_limit_is_the_sysctl_value(fake_program, monkeypatch):
+    fake = fake_program("sysctl", stdout="8192\n")
+    monkeypatch.setattr(_sockets, "_IS_WINDOWS", False)
+    monkeypatch.setattr(_sockets, "_IS_LINUX", False)
+    assert _sockets._icmp_packet_limit(28) == 8192
+    assert fake.argv[-2:] == ["-n", "net.inet.raw.maxdgram"]
+
+
+def test_the_bsd_icmp_limit_without_sysctl_is_the_ip_maximum(monkeypatch):
+    def missing(*args, **kwargs):
+        raise FileNotFoundError("sysctl")
+
+    monkeypatch.setattr(_sockets, "_IS_WINDOWS", False)
+    monkeypatch.setattr(_sockets, "_IS_LINUX", False)
+    monkeypatch.setattr(_sockets._proc, "run", missing)
+    assert _sockets._icmp_packet_limit(28) == 65535
+
+
+def test_the_windows_ping_limit_is_65500_payload_bytes(monkeypatch):
+    monkeypatch.setattr(_sockets, "_IS_WINDOWS", True)
+    assert _sockets._icmp_packet_limit(28) == 65528
+    assert _sockets._icmp_packet_limit(48) == 65535

@@ -1179,7 +1179,22 @@ at least 3 there.
 - **`discover_mtu(dst, *, low=576, high=9000, timeout=1.0, src=None, port=80, probe=True, method="icmp", tries=1, ipv6=None, ttl=None)`**
   — **measures** the path MTU by binary-searching probes, so packets really
   traverse the path. Returns the MTU **including headers**, comparable with
-  `Interface.mtu`.
+  `Interface.mtu`. The name is **resolved once**: the target, the family and the
+  header overhead (28 bytes for IPv4, 48 for IPv6) come from that one answer,
+  and `ipv6=` picks it.
+
+  **The answer is a measurement, not `high`.** A path cannot be wider than the
+  link it leaves by, so a probe at `high` that is answered does not end the
+  search: it goes on up to that link's MTU (`Interface.mtu` of the outgoing
+  interface; the loopback interface for a destination on this host). A `high`
+  above that MTU is lowered to it. Only when the MTU cannot be read is `high`
+  the ceiling, and a result equal to it means **at least `high`**. The platform
+  `ping` has a largest probe of its own: a 65500-byte payload on Windows, and
+  `net.inet.raw.maxdgram` on macOS and the BSDs (8192 on macOS 15.7). A local
+  destination the search takes that far is reported at the loopback MTU (65535
+  on Windows, 65536 on Linux, 16384 on macOS); any other path that reaches the
+  limit is retried with `"udp"` and otherwise reported at the limit, meaning
+  "at least".
 
   | `method` | How |
   | --- | --- |
@@ -1200,8 +1215,9 @@ at least 3 there.
   are not parameters and passing either raises `TypeError`. `probe=False` skips
   probing entirely and returns `get_pmtu` instead. `method` is
   `"icmp" | "tcp" | "udp"`.
-- **`get_tcp_mss(dst, port, *, timeout=3.0) -> int | None`** — the negotiated TCP
-  maximum segment size. **Opens a real connection** to read it, then closes.
+- **`get_tcp_mss(dst, port, *, timeout=3.0, ipv6=None) -> int | None`** — the negotiated TCP
+  maximum segment size. `ipv6=` picks the family a host name connects over, and a
+  destination of the other family gives `None`. **Opens a real connection** to read it, then closes.
   MSS is normally the path MTU minus 40, so a reduced value signals a tunnel
   shrinking the path (measured: 1412 over a VPN on a 1500-MTU link, 32741 on
   loopback). `None` where `TCP_MAXSEG` is unavailable or the connection fails.

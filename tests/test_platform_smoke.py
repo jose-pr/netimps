@@ -178,3 +178,90 @@ def test_a_tcp_refusal_counts_as_up_given_the_platforms_own_time():
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
     assert netimps.ping("127.0.0.1", method="tcp", port=port, timeout=3.0)
+
+
+# --------------------------------------------------------------------------- #
+# Path MTU on loopback: the answer is the loopback interface's MTU             #
+# --------------------------------------------------------------------------- #
+
+
+def _loopback_mtu(version: int) -> int:
+    for iface in netimps.get_interfaces():
+        if (
+            iface.is_loopback
+            and iface.mtu
+            and any(entry.version == version for entry in iface.ips)
+        ):
+            return iface.mtu
+    pytest.skip("no loopback interface with a known MTU")
+
+
+def test_discover_mtu_icmp_on_loopback_is_the_loopback_mtu():
+    """The probe is the platform's own ping, with the don't-fragment bit set.
+
+    ``high`` used to come back after two probes (9000) for a loopback whose
+    MTU is 16384 on macOS and 65535 on Windows.
+    """
+    mtu = _loopback_mtu(4)
+    found = netimps.discover_mtu("127.0.0.1", timeout=2.0)
+    if found is None:  # pragma: no cover - env dependent
+        pytest.skip("this host answers no don't-fragment ping on loopback")
+    assert found == mtu
+
+
+def test_discover_mtu_udp_on_loopback_is_the_loopback_mtu():
+    """A real echo service on loopback; datagrams of growing size with DF."""
+    import threading
+
+    mtu = _loopback_mtu(4)
+    server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    server.bind(("127.0.0.1", 0))
+    server.settimeout(0.2)
+    port = server.getsockname()[1]
+    stop = threading.Event()
+
+    def echo():
+        while not stop.is_set():
+            try:
+                data, peer = server.recvfrom(65535)
+                server.sendto(data, peer)
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+
+    worker = threading.Thread(target=echo, daemon=True)
+    worker.start()
+    try:
+        found = netimps.discover_mtu("127.0.0.1", method="udp", port=port, timeout=2.0)
+    finally:
+        stop.set()
+        worker.join(2)
+        server.close()
+    if found is None:  # pragma: no cover - env dependent
+        pytest.skip("this host cannot set don't-fragment on a UDP socket")
+    assert found == mtu
+
+
+def test_discover_mtu_tcp_follows_the_requested_family():
+    """An IPv4-only listener has no IPv6 answer: ``None``, not an IPv4 MSS with
+    an IPv6 header added."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
+        server.bind(("127.0.0.1", 0))
+        server.listen(5)
+        port = server.getsockname()[1]
+        assert (
+            netimps.discover_mtu(
+                "127.0.0.1", method="tcp", port=port, timeout=3.0, ipv6=True
+            )
+            is None
+        )
+        mss = netimps.get_tcp_mss("127.0.0.1", port, timeout=3.0)
+        if mss is None:  # pragma: no cover - env dependent
+            pytest.skip("this host exposes no TCP_MAXSEG")
+        assert (
+            netimps.discover_mtu(
+                "127.0.0.1", method="tcp", port=port, timeout=3.0, ipv6=False
+            )
+            == mss + 40
+        )
