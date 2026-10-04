@@ -23,7 +23,9 @@ from typing import (
 from typing import get_origin as _typing_get_origin
 
 from ._exceptions import NetimpsValueError
-from ._ip import _BUILDER_DEFAULTS, _BUILDERS, _CONCRETE, IPAddress
+from ._fqdn import FQDN
+from ._ip import _BUILDER_DEFAULTS, _BUILDERS, _CONCRETE, Host, IPAddress
+from ._mac import MACAddress
 
 if TYPE_CHECKING:
     # PEP 747's TypeForm preserves the result represented by runtime union
@@ -32,6 +34,11 @@ if TYPE_CHECKING:
     from typing_extensions import TypeForm
 
 __all__ = ["parse", "try_parse", "is_valid"]
+
+_ClassType = type  # ``parse`` and ``try_parse`` take a parameter named ``type``
+
+#: The package's own value types, which have a ``parse`` classmethod.
+_TEXT_TYPES = (MACAddress, FQDN, Host)
 
 _T = TypeVar("_T")
 _D = TypeVar("_D")
@@ -192,6 +199,16 @@ def parse(  # type: ignore[no-redef]  # the overloads above are the signature
 
     if builder is None:
         _check_parser(type)  # raises for anything unusable
+        # Text goes through the type's own ``parse``, so the spellings a type
+        # accepts are defined in one place. Anything else (an ``int`` or
+        # ``bytes`` MAC, a ``Host`` or ``FQDN`` already built) is the
+        # constructor's, which ``parse`` deliberately does not take.
+        if (
+            isinstance(value, str)
+            and isinstance(type, _ClassType)
+            and issubclass(type, _TEXT_TYPES)
+        ):
+            return type.parse(value, **kwargs)
         return type(value, **kwargs)
 
     options = dict(_BUILDER_DEFAULT_TABLE.get(builder, {}))

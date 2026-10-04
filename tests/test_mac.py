@@ -244,7 +244,8 @@ def test_bool_is_not_an_integer_mac():
     with pytest.raises(TypeError):
         MACAddress(False)
     assert MACAddress.is_valid(True) is False
-    assert MACAddress.try_parse(False) is None
+    with pytest.raises(TypeError):
+        MACAddress.try_parse(False)  # type: ignore[call-overload]
 
 
 def test_classification_bits():
@@ -353,9 +354,14 @@ def test_classmethod_validators():
         object(),
     ]:
         assert MACAddress.is_valid(value) == is_valid(value, MACAddress)
-        assert (MACAddress.try_parse(value) is None) == (
-            try_parse(value, MACAddress) is None
-        )
+        if isinstance(value, str):
+            assert (MACAddress.try_parse(value) is None) == (
+                try_parse(value, MACAddress) is None
+            )
+        else:
+            # The classmethod takes text only; the generic answers for any object.
+            with pytest.raises(TypeError):
+                MACAddress.try_parse(value)  # type: ignore[call-overload]
 
 
 def test_classmethod_validators_bind_to_subclass():

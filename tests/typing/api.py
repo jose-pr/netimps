@@ -177,6 +177,12 @@ assert_type(is_valid("02:00:00:00:00:01", MACAddress), bool)
 assert_type(is_valid("value", Built, enabled=True), bool)
 assert_type(MACAddress.is_valid("02:00:00:00:00:01"), bool)
 assert_type(MACAddress.try_parse("02:00:00:00:00:01"), Optional[MACAddress])
+assert_type(MACAddress.parse("02:00:00:00:00:01"), MACAddress)
+assert_type(MACAddress.try_parse("nope", fallback), Union[MACAddress, Fallback])
+assert_type(FQDN.parse("example.com"), FQDN)
+assert_type(FQDN.try_parse("nope..", default=fallback), Union[FQDN, Fallback])
+assert_type(Host.parse("db.internal"), Host)
+assert_type(Host.try_parse(""), Optional[Host])
 
 # Regression guard, and the reason the two lines below are not dead weight: a
 # ``TypeGuard`` on either ``is_valid`` would be *unsound*. Validity proves the

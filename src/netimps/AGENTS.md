@@ -113,6 +113,12 @@ they describe what goes in, not what to build.
 All three spell the second argument `type`, so it works positionally or by
 keyword. Key behaviours:
 
+- **For `MACAddress`, `FQDN` and `Host` (and their subclasses) a `str` goes
+  through the type's own `Type.parse`**; anything else (an `int` or packed
+  `bytes` MAC, a `Host` or `FQDN` already built) goes to the constructor.
+  `try_parse(None, MACAddress)` is `None` — the generic form answers `default`
+  for any object — whereas `MACAddress.try_parse(None)` raises `TypeError`.
+
 - **Every type accepts the full stdlib input range** — `str`, `int`, packed
   `bytes`, or an existing object — because the builders are `ipaddress.ip_*`,
   not the concrete constructors.
@@ -166,7 +172,9 @@ only in the case or separator they were parsed from are equal.
 | `.is_local` / `.is_universal` | the U/L bit |
 | `int(mac)`, `str(mac)` | integer / colon form |
 | `<`, `<=`, `>`, `>=` | ordering against another `MACAddress`, so MACs sort |
-| `MACAddress.is_valid(v)` / `.try_parse(v)` | classmethods; the type-local spelling |
+| `MACAddress.parse(text)` | classmethod: text in any accepted spelling → `MACAddress`; `NetimpsValueError` for bad text, `TypeError` for a non-`str` |
+| `MACAddress.try_parse(text, default=None)` | classmethod: `default` for bad text; still `TypeError` for a non-`str` |
+| `MACAddress.is_valid(v)` | classmethod predicate over anything the constructor takes; never raises |
 
 - **Equality holds only against another `MACAddress`.**
   `mac == "aa:bb:cc:dd:ee:ff"` is `False`, in both directions, and
@@ -182,7 +190,7 @@ only in the case or separator they were parsed from are equal.
   `ValueError`; each accepted form must be used consistently.
 - **A `bool` is rejected** with `TypeError`, despite being an `int` subclass —
   `MACAddress(True)` would otherwise be `00:00:00:00:00:01`. `is_valid(True)`
-  is `False` and `try_parse(True)` is `None`.
+  is `False`, and `try_parse(True)` raises `TypeError` like any non-text.
 - **`.oui` keeps the flag bits.** The I/G (group) and U/L (locally
   administered) flags live in the low two bits of octet 0 and are *not* masked
   out, so for a multicast or locally administered address this is **not** a
@@ -1206,7 +1214,10 @@ ordered. Built from a dotted string or from separate labels, **leftmost first**:
   ignored), `.relative_to()` (raises `ValueError` if not under, and the result is
   never qualified), `.reverse()` (flips label order — **not** a reverse DNS
   pointer, which is built from an address; `netimps._dnswire.reverse_name()` is
-  that), and `is_valid`/`try_parse` classmethods matching `MACAddress`'s shape.
+  that), and `parse`/`try_parse`/`is_valid` classmethods matching
+  `MACAddress`'s: `FQDN.parse(text)` raises `NetimpsValueError` for bad text and
+  `TypeError` for a non-`str`; `FQDN.try_parse(text, default=None)` answers
+  `default` for bad text only.
 - **Network helpers are pass-throughs, not new behaviour**: `.resolve(**kw)` →
   `resolve()`, `.ping(**kw)` → `ping()`, `.ip(**kw)` → the first address or
   `None`. A trailing dot survives the delegation, so a fully-qualified name
@@ -1732,6 +1743,10 @@ returns to the base the moment the peer moves the transfer forward.
 resolution fails — the case a bare `get_ip()` handles badly, since it returns
 `None` and loses the name.
 
+- `Host.parse(text)` / `Host.try_parse(text, default=None)` — text only
+  (`TypeError` otherwise); the one text refused is empty or blank, with
+  `NetimpsValueError`. The constructor is the lenient entry: it takes `None`,
+  `""` and any object, and keeps its text.
 - `.is_address` — already a literal, no DNS needed.
 - `.fqdn` — this host as an **`FQDN`**, or `None` when it is an address (or not
   a syntactically possible name). The bridge between the two types: `Host` is

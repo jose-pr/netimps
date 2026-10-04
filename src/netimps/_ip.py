@@ -12,7 +12,16 @@ from __future__ import annotations
 import ipaddress as _ipaddress
 import platform as _platform
 import socket as _socket
-from typing import Any, Iterable, List, Optional, Tuple, Union
+from typing import (
+    Any,
+    Iterable,
+    List,
+    Optional,
+    Tuple,
+    TypeVar,
+    Union,
+    overload,
+)
 
 from ._exceptions import NetimpsValueError
 
@@ -29,6 +38,8 @@ from ipaddress import (
     IPv6Interface,
     IPv6Network,
 )
+
+_D = TypeVar("_D")
 
 __all__ = [
     "Host",
@@ -539,6 +550,48 @@ class Host:
 
     def __delattr__(self, name: str) -> None:
         raise AttributeError("Host is immutable")
+
+    @classmethod
+    def parse(cls, text: str) -> "Host":
+        """Build a ``Host`` from text naming an address or a hostname.
+
+        A ``Host`` keeps what it was given, so no spelling is rejected for its
+        form; text with nothing in it is, since there is no host to name.
+        The constructor is the lenient entry that takes ``None`` and ``""``.
+
+        :raises NetimpsValueError: for empty or blank text. It is a
+            ``ValueError``.
+        :raises TypeError: for anything that is not ``str``.
+        """
+        if not isinstance(text, str):
+            raise TypeError("Host.parse takes text, not %r" % (type(text).__name__,))
+        if not text.strip():
+            raise NetimpsValueError("a host cannot be empty")
+        return cls(text)
+
+    @overload
+    @classmethod
+    def try_parse(cls, text: str) -> "Optional[Host]": ...
+
+    @overload
+    @classmethod
+    def try_parse(cls, text: str, default: _D) -> "Union[Host, _D]": ...
+
+    @classmethod
+    def try_parse(cls, text: str, default: Any = None) -> Any:
+        """Return ``parse(text)``, or ``default`` for empty or blank text.
+
+        :raises TypeError: for anything that is not ``str``; only bad *text*
+            is answered with ``default``. :func:`netimps.try_parse` is the
+            entry that answers ``default`` for any object.
+        """
+        if not isinstance(text, str):
+            raise TypeError(
+                "Host.try_parse takes text, not %r" % (type(text).__name__,)
+            )
+        if not text.strip():
+            return default
+        return cls(text)
 
     @property
     def is_address(self) -> bool:

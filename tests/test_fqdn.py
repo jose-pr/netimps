@@ -453,11 +453,22 @@ def test_idna_encodes_a_non_ascii_name():
     assert FQDN("MÜNCHEN.de") == FQDN("xn--mnchen-3ya.de")
 
 
-def test_is_valid_and_try_parse_never_raise():
+def test_is_valid_never_raises_and_try_parse_raises_only_for_non_text():
+    """`is_valid` answers for any object; `try_parse` answers for any *text*.
+
+    A `None` or an `int` is a caller's bug, not unparseable text, so
+    `try_parse` raises `TypeError` for it instead of returning the default.
+    """
     for value in ("example.com", "10.0.0.1", "", None, 42, "a..b", object()):
         assert isinstance(FQDN.is_valid(value), bool)
-        result = FQDN.try_parse(value)
+    for text in ("example.com", "10.0.0.1", "", "a..b"):
+        result = FQDN.try_parse(text)
         assert result is None or isinstance(result, FQDN)
+    for value in (None, 42, object(), ["a", "b"]):
+        with pytest.raises(TypeError):
+            FQDN.try_parse(value)  # type: ignore[call-overload]
+        with pytest.raises(TypeError):
+            FQDN.parse(value)  # type: ignore[arg-type]
 
 
 def test_exported_from_the_package():

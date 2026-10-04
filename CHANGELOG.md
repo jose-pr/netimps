@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `DNSDecodeError(NetimpsValueError)` is the DNS codec's error, formerly the
   private `WireError(ValueError)`.
 
+- **`MACAddress.parse`, `FQDN.parse` and `Host.parse`** build the type from
+  text, raising `NetimpsValueError` for bad text and `TypeError` for a
+  non-`str`; `Host.try_parse(text, default=None)` joins the other two, whose
+  `try_parse` gains `default=`. `Host.parse` refuses only empty or blank text.
+
 - Four aliases that already appeared in public signatures are exported:
   `InterfaceLike` (what names a local interface), `InterfaceQuery` (what
   `get_interface` looks up), `PortsLike` and `SocketAddress`.
@@ -57,6 +62,14 @@ probe says so in its prefix.
   `Interface.loopback` is gone: read `is_loopback`. A cached
   `get_interfaces(cache=...)` call now hands back the stored `Interface`
   objects in a fresh list, copying only `raw`.
+- **`MACAddress.try_parse` and `FQDN.try_parse` take text only.** They answer
+  `None` (or the new `default=`) for text that does not parse, and raise
+  `TypeError` for anything that is not a `str` -- `MACAddress.try_parse(None)`,
+  `FQDN.try_parse(3.5)` -- where they returned `None`. The generic
+  `netimps.try_parse(value, type)` is unchanged and still answers `default`
+  for any object. For `MACAddress`, `FQDN`, `Host` and subclasses it now
+  builds a `str` through `Type.parse`; an `int`, `bytes` or built value still
+  goes to the constructor.
 - **`HOST_DN` is replaced by `get_hostname(*, fqdn=False)`.** A constant
   computed from `platform.node()` made every `import netimps` ask for the host
   name, a WMI query on Windows; the function asks when called. `fqdn=True`

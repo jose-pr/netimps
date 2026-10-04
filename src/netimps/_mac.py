@@ -12,7 +12,7 @@ Re-exported from :mod:`netimps`.
 from __future__ import annotations
 
 import re as _re
-from typing import Any, Optional, Tuple, Union
+from typing import Any, Optional, Tuple, TypeVar, Union, overload
 
 from ._exceptions import NetimpsValueError
 
@@ -22,6 +22,8 @@ __all__ = ["MACAddress", "MACAddressLike"]
 #: constructor takes one; ``bool`` is not, because it is rejected despite
 #: being an ``int`` subclass.
 MACAddressLike = Union[str, int, bytes, bytearray, "MACAddress"]
+
+_D = TypeVar("_D")
 
 
 class MACAddress:
@@ -126,20 +128,50 @@ class MACAddress:
             return False
 
     @classmethod
-    def try_parse(cls, value: object) -> "Optional[MACAddress]":
-        """Return a ``MACAddress``, or ``None`` if ``value`` is not one.
+    def parse(cls, text: str) -> "MACAddress":
+        """Build a ``MACAddress`` from text, in any spelling the class accepts.
 
-        The type-local spelling of ``netimps.try_parse(value, MACAddress)``.
+        :raises NetimpsValueError: for text that is not a MAC address. It is a
+            ``ValueError``.
+        :raises TypeError: for anything that is not ``str``. The constructor
+            is the entry for ``int`` and ``bytes``.
+        """
+        if not isinstance(text, str):
+            raise TypeError(
+                "MACAddress.parse takes text, not %r" % (type(text).__name__,)
+            )
+        return cls(text)
+
+    @overload
+    @classmethod
+    def try_parse(cls, text: str) -> "Optional[MACAddress]": ...
+
+    @overload
+    @classmethod
+    def try_parse(cls, text: str, default: _D) -> "Union[MACAddress, _D]": ...
+
+    @classmethod
+    def try_parse(cls, text: str, default: Any = None) -> Any:
+        """Return ``parse(text)``, or ``default`` for text that is not a MAC.
+
         Prefer it to :meth:`is_valid` followed by construction -- one call, and
         no window in which the two disagree. It is also how text is compared
         against a MAC, since :meth:`__eq__` does not coerce a ``str``::
 
             MACAddress.try_parse(user_input) == known_mac
+
+        :raises TypeError: for anything that is not ``str``; only bad *text*
+            is answered with ``default``. :func:`netimps.try_parse` is the
+            entry that answers ``default`` for any object.
         """
+        if not isinstance(text, str):
+            raise TypeError(
+                "MACAddress.try_parse takes text, not %r" % (type(text).__name__,)
+            )
         try:
-            return cls(value)  # type: ignore[arg-type]
-        except (ValueError, TypeError):
-            return None
+            return cls(text)
+        except ValueError:
+            return default
 
     def hex(
         self, sep: "Optional[Union[str, bytes]]" = None, bytes_per_sep: int = 1

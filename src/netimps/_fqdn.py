@@ -60,7 +60,17 @@ operation with a similar name.
 from __future__ import annotations
 
 import sys as _sys
-from typing import Any, Iterable, Iterator, List, Optional, Tuple, Union
+from typing import (
+    Any,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+    TypeVar,
+    Union,
+    overload,
+)
 from ._exceptions import NetimpsValueError
 
 __all__ = ["FQDN", "FQDNLike"]
@@ -76,6 +86,8 @@ MAX_NAME_LENGTH = 253
 
 #: RFC 1035 2.3.4, per label.
 MAX_LABEL_LENGTH = 63
+
+_D = TypeVar("_D")
 
 
 def _idna_encode(label: str) -> str:
@@ -231,16 +243,46 @@ class FQDN:
             return False
 
     @classmethod
-    def try_parse(cls, value: object) -> "Optional[FQDN]":
-        """Return an :class:`FQDN`, or ``None`` if ``value`` is not one.
+    def parse(cls, text: str) -> "FQDN":
+        """Build an :class:`FQDN` from dotted text.
+
+        :raises NetimpsValueError: for text that is not a domain name: an
+            address literal, an empty or over-long name or label, an empty
+            inner label. It is a ``ValueError``.
+        :raises TypeError: for anything that is not ``str``. The constructor
+            also takes labels and another ``FQDN``.
+        """
+        if not isinstance(text, str):
+            raise TypeError("FQDN.parse takes text, not %r" % (type(text).__name__,))
+        return cls(text)
+
+    @overload
+    @classmethod
+    def try_parse(cls, text: str) -> "Optional[FQDN]": ...
+
+    @overload
+    @classmethod
+    def try_parse(cls, text: str, default: _D) -> "Union[FQDN, _D]": ...
+
+    @classmethod
+    def try_parse(cls, text: str, default: Any = None) -> Any:
+        """Return ``parse(text)``, or ``default`` for text that is not a name.
 
         Prefer it to :meth:`is_valid` followed by construction -- one call, and
         no window in which the two disagree.
+
+        :raises TypeError: for anything that is not ``str``; only bad *text*
+            is answered with ``default``. :func:`netimps.try_parse` is the
+            entry that answers ``default`` for any object.
         """
+        if not isinstance(text, str):
+            raise TypeError(
+                "FQDN.try_parse takes text, not %r" % (type(text).__name__,)
+            )
         try:
-            return cls(value)  # type: ignore[arg-type]
-        except (ValueError, TypeError):
-            return None
+            return cls(text)
+        except ValueError:
+            return default
 
     # -- the labels --------------------------------------------------------
 
