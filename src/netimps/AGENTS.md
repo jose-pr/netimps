@@ -407,11 +407,18 @@ Where several schemes share a port the **canonical** one is returned (1080 →
 
 ## DNS
 
-Three independently callable backends, plus `resolve()`, which chains them.
-All four share one contract: a `list`, **empty on any genuine lookup
-failure** (NXDOMAIN, NODATA, timeout) — never `None` — with **native
-types**: `A`/`AAAA` records are `ipaddress` objects, everything else is
-`str` (trailing root dot stripped, TXT strings unquoted).
+Four independently callable backends (`resolve_dnspython`, `resolve_wire`,
+`resolve_system`, `resolve_nslookup`), `resolve_doh` for one DNS-over-HTTPS
+endpoint, and `resolve()`, which chains the four. They share one contract. The
+answer is a `list` with **native types**: `A`/`AAAA` records are `ipaddress`
+objects, everything else is `str` (trailing root dot stripped, TXT strings
+unquoted). It is **empty when the resolver answered that there is no such name
+or no such record** (NXDOMAIN, NODATA), never `None`. **A resolver that could
+not be asked is not an empty answer**: every backend raises
+`ResolutionTimeoutError` for a deadline and `ResolutionError` for a server that
+does not answer, a SERVFAIL, a temporary `getaddrinfo` failure or a missing
+program. Only `resolve()` without `strict=True` turns that into `[]`, so that
+`if not resolve(h):` keeps working; `strict=True` re-raises it.
 
 **Exceptions.** Every exception netimps raises on its own account descends
 from **`NetimpsError(Exception)`**, and each one also inherits the builtin a
@@ -437,7 +444,8 @@ check. A bad option elsewhere (`ping`'s `ttl`, `tcp_check`'s port, a
 
 **`ResolutionError`** — a backend could not even *attempt* the
 query: a missing `nslookup` binary, `dnspython` not installed, an `rdtype` the
-backend structurally cannot serve, a transport failure. It is
+backend structurally cannot serve, a transport failure, a server that failed or
+did not answer. It is
 deliberately **not** how "no such record" is reported — that is `[]`. It is
 the documented raised type of `resolve`, `resolve_system`, `resolve_nslookup`,
 `resolve_wire` and `resolve_doh`. When the reason is an expired deadline
@@ -497,7 +505,7 @@ resort. `backends` also accepts a single name as a plain string
   macOS while `resolve_system` answers it from the hosts file; the same holds
   for `.local`/mDNS names and anything else only an NSS source knows.
 - A backend that could not even attempt the query (a `ResolutionError`:
-  missing binary, `dnspython` absent, timeout, transport failure) falls
+  missing binary, server silent or failing, timeout, transport failure) falls
   through the same way; one that structurally cannot serve the request is
   skipped without being called at all.
 - The result is `[]` when **every applicable backend answered empty**, and
@@ -508,6 +516,12 @@ resort. `backends` also accepts a single name as a plain string
   does not turn an empty answer into an error.
   If the chain holds no backend that could even be tried, `ValueError` names
   what excluded them.
+- **Without the `dns` extra** `dnspython` is skipped, and the OS resolver,
+  `nslookup` and (for an explicit `ns=`) `wire` still answer address and
+  reverse records. A request only `dnspython` could serve (a record type the
+  others do not read, with no `ns=` for `wire`) raises `ResolutionError`
+  saying `pip install "netimps[dns]"`, strict or not: `[]` would claim there is
+  no such record. `has_dns() -> bool` asks whether the extra is installed.
 
 **The cost is latency on a genuinely non-existent name:** two or three backend
 calls instead of one, the last of which may spawn `nslookup`. Narrow
@@ -566,10 +580,15 @@ address itself -- the caller never constructs that name by hand.
   already-qualified (trailing-dot) `query`.
 - `timeout` bounds the **whole resolution including retries**, so a list of
   dead nameservers cannot run past it.
-- `dnspython` is an **optional** dependency (`pip install netimps[dns]`).
-  Raises `ResolutionError` (not `ValueError`) if it isn't installed, so
-  `resolve()`'s chain falls through to the next backend instead of erroring
-  outright.
+- `dnspython` is an **optional** dependency (`pip install "netimps[dns]"`;
+  `has_dns()` says whether it is there). Without it this raises
+  `ResolutionError` naming the extra, so `resolve()`'s chain skips it.
+- **NXDOMAIN and "no answer" are `[]`.** A timeout is `ResolutionTimeoutError`;
+  every server failing (a SERVFAIL, a refused or unreachable port) or no
+  resolver configuration to read is `ResolutionError`; an `OSError` from the
+  socket is `ResolutionError`. A malformed name or unknown record type is
+  `ValueError`. Any other exception is the caller's or the library's bug and
+  propagates unchanged.
 
 **`resolve_system(query, rdtype=None, *, timeout=5.0, search=True)`**
 
@@ -583,6 +602,9 @@ cannot see (its own DNS query bypasses all of that). Same `HostLike`
   `"ptr"`; anything else raises `ResolutionError` immediately, no query
   attempted. `"ptr"` goes through `gethostbyaddr()` rather than
   `getaddrinfo()` and returns `[hostname]`.
+- **`[]` for `EAI_NONAME`, no data for the family (`EAI_NODATA`,
+  `EAI_ADDRFAMILY`, Windows 11004) and, for `"ptr"`, `herror` 1 or 4;**
+  every other code (`EAI_AGAIN`, `EAI_FAIL`, ...) is a `ResolutionError`.
 - **No `ns=` override** — the OS resolver functions always ask whatever
   nameserver the OS is configured with; there's no per-call parameter at that
   layer (not even via `ctypes` — reaching a specific nameserver without
@@ -635,11 +657,13 @@ path is usable. Address records only: `rdtype` must be `"a"`, `"aaaa"` or
 - **`nslookup` is run as described under "Programs the library runs"**:
   standard input closed, `LC_ALL=C`, output decoded `errors="replace"`.
 - Raises `ResolutionError` (not `ValueError`) for a missing binary (found on
-  `PATH` before anything runs, and named in the message), an unparseable output shape, or **a non-zero exit carrying none of
-  the "no such name" markers** (no reachable server, a refused connection).
-  That last case used to return `[]`, which made a transport failure look like
-  NXDOMAIN and stopped `resolve()`'s chain. A genuine "no such name" — exit 1
-  *with* the marker text — is still `[]`.
+  `PATH` before anything runs, and named in the message), an unparseable output
+  shape, a non-zero exit carrying no "can't find" line (no reachable server, a
+  refused connection), or a "can't find <name>: <reason>" line whose reason is
+  not a "no such name" answer: `SERVFAIL`, `REFUSED` and Windows' `No response
+  from server` (exit 0). The reason after the colon decides, never the prefix.
+  "Non-existent domain", `NXDOMAIN` and `No answer` are `[]`, whatever the
+  exit status (BIND exits 1, Windows 0).
 
 **`resolve_wire(query, rdtype=None, *, ns=None, timeout=5.0, port=53, tcp=False, search=True, source=None)`**
 

@@ -1,11 +1,15 @@
 """DNS resolution (internal).
 
-Three independently callable backends, each with the same
-list-of-native-values-or-[]-on-failure contract, plus :func:`resolve` which
-tries them in order and returns the first **non-empty** answer:
+Four independently callable backends, each returning a list of native values,
+plus :func:`resolve` which tries them in order and returns the first
+**non-empty** answer. A backend returns ``[]`` only when the resolver answered
+that there is no such name or record; a resolver that could not be asked
+raises :class:`ResolutionError` (:class:`ResolutionTimeoutError` for a
+deadline), and only :func:`resolve` without ``strict`` turns that into ``[]``.
 
 - :func:`resolve_dnspython` -- ``dnspython``, structured records, every
-  ``rdtype``, explicit ``ns=``/``port=``/``search=`` control.
+  ``rdtype``, explicit ``ns=``/``port=``/``search=`` control. Needs the ``dns``
+  extra; :func:`has_dns` asks whether it is installed.
 - :func:`resolve_system` -- :func:`socket.getaddrinfo`/
   :func:`socket.gethostbyaddr`, the OS resolver (hosts file, NSS, DNS).
   Address and reverse records (``a``/``aaaa``/``ptr``) only, no ``ns=``
@@ -45,6 +49,7 @@ from typing import (
     Literal,
     Optional,
     Tuple,
+    Type,
     Union,
     overload,
 )
@@ -60,6 +65,7 @@ from ._parse import try_parse
 
 __all__ = [
     "RESOLUTION_CACHE_TTL",
+    "has_dns",
     "clear_resolution_cache",
     "resolve",
     "resolve_dnspython",
@@ -109,6 +115,23 @@ def _auto_rdtype(query: str) -> str:
     """
 
     return "ptr" if try_parse(query) is not None else "a"
+
+
+_NEEDS_DNS = 'the dnspython backend needs the "dns" extra: pip install "netimps[dns]"'
+
+
+def has_dns() -> bool:
+    """Whether ``dnspython`` is installed, so :func:`resolve_dnspython` can run.
+
+    Without it :func:`resolve` still answers address and reverse records from
+    the other backends, and raises :class:`ResolutionError` naming the extra for
+    a record type only ``dnspython`` serves.
+    """
+    try:
+        import dns.resolver  # noqa: F401
+    except ImportError:
+        return False
+    return True
 
 
 @overload
@@ -190,9 +213,10 @@ def resolve_dnspython(
         resolve_dnspython("host", search=False)             # look up "host" literally
         resolve_dnspython("8.8.8.8")                        # rdtype=None -> ptr -> ['dns.google']
 
-    Contract: always a ``list``, **empty** when the name does not resolve --
-    never ``None``. Callers can therefore write ``if result:`` and index
-    ``result[0]`` safely.
+    Contract: always a ``list``, **empty** when the resolver answered that the
+    name or the record does not exist -- never ``None``. Callers can therefore
+    write ``if result:`` and index ``result[0]`` safely. A resolver that could
+    not be asked is not an empty answer: see below.
 
     Records come back as **native types**: address records (``A``/``AAAA``) are
     :class:`ipaddress` objects, everything else is a ``str``::
@@ -234,11 +258,14 @@ def resolve_dnspython(
     :param source: the local address the queries are sent from (``None``:
         whatever the OS picks).
 
-    A genuine lookup failure (NXDOMAIN, no answer, timeout, all servers failed)
-    yields ``[]``; a malformed query or unknown record type raises
-    :class:`ValueError`, since that is a caller bug rather than a DNS result.
+    NXDOMAIN and "no answer" yield ``[]``. A timeout raises
+    :class:`ResolutionTimeoutError`; every server failing, or no resolver
+    configuration to read, raises :class:`ResolutionError`. A malformed query
+    or unknown record type raises :class:`ValueError`, since that is a caller
+    bug rather than a DNS result.
 
-    Requires the ``dnspython`` package (installed with ``netimps``).
+    Needs the ``dns`` extra (``pip install "netimps[dns]"``); without it this
+    raises :class:`ResolutionError` saying so. :func:`has_dns` tells which.
     """
     query = _dst_argument(query)
     if not rdtype:
@@ -246,57 +273,46 @@ def resolve_dnspython(
     rdtype = rdtype.lower()
 
     try:
+        from dns import exception as _dnsexc
         from dns import name as _name
         from dns import resolver as _resolver
     except ImportError as exc:
-        raise ResolutionError("dnspython is not installed") from exc
-
-    r = _resolver.Resolver(configure=not ns)
-    if isinstance(ns, str):
-        ns = [ns]
-    if ns:
-        r.nameservers = list(ns)
-    if port != 53:
-        r.port = port
-
-    search_domains = None
-    if isinstance(search, (list, tuple)):
-        search_domains = list(search)
-        search = True
-    if search_domains is not None:
-        # An explicit domain list replaces the system search list outright,
-        # regardless of where the nameservers came from.
-        r.search = [_name.from_text(d) for d in search_domains]
-    if timeout is not None:
-        # `timeout` bounds a single query; `lifetime` bounds the whole
-        # resolution including retries against every nameserver. Without the
-        # lifetime, a list of dead servers blocks for far longer than asked.
-        r.timeout = timeout
-        r.lifetime = timeout
+        raise ResolutionError(_NEEDS_DNS) from exc
 
     # Looked up by name rather than referenced directly: LifetimeTimeout only
     # exists in dnspython >= 2.0, and the set has shifted between releases, so
     # a hard reference would break on older versions. Anything missing simply
     # drops out of the tuple.
-    _lookup_failures = tuple(
-        exc
-        for exc in (
-            getattr(_resolver, name, None)
-            for name in (
-                "NXDOMAIN",  # name definitively does not exist
-                "NoAnswer",  # name exists, no record of this type
-                "NoNameservers",  # every nameserver refused or failed
-                "LifetimeTimeout",  # ran out of time
-                "Timeout",
-                "NoResolverConfiguration",  # no system resolver to use
-            )
+    def _classes(*names: str) -> "Tuple[Type[Exception], ...]":
+        found = (getattr(_resolver, name, None) for name in names)
+        return tuple(
+            cls for cls in found if isinstance(cls, type) and issubclass(cls, Exception)
         )
-        if isinstance(exc, type) and issubclass(exc, Exception)
-    )
 
     # Only when asked: the keyword is not in every dnspython release.
     extra: "Dict[str, Any]" = {"source": source} if source else {}
     try:
+        r = _resolver.Resolver(configure=not ns)
+        if isinstance(ns, str):
+            ns = [ns]
+        if ns:
+            r.nameservers = list(ns)
+        if port != 53:
+            r.port = port
+        search_domains = None
+        if isinstance(search, (list, tuple)):
+            search_domains = list(search)
+            search = True
+        if search_domains is not None:
+            # An explicit domain list replaces the system search list
+            # outright, regardless of where the nameservers came from.
+            r.search = [_name.from_text(d) for d in search_domains]
+        if timeout is not None:
+            # `timeout` bounds a single query; `lifetime` bounds the whole
+            # resolution including retries against every nameserver. Without
+            # the lifetime, a list of dead servers blocks far longer than asked.
+            r.timeout = timeout
+            r.lifetime = timeout
         if rdtype == "ptr":
             # resolve_address builds the reverse (in-addr.arpa/ip6.arpa) name
             # from a plain address itself -- r.resolve(query, "ptr") would
@@ -305,14 +321,26 @@ def resolve_dnspython(
             answer = r.resolve_address(query, tcp=tcp, search=search, **extra)
         else:
             answer = r.resolve(query, rdtype, tcp=tcp, search=search, **extra)
-    except _lookup_failures:
-        # A genuine "no result" -- the documented [] contract.
-        return []
-    except Exception as exc:
-        # Everything else (malformed name, unknown rdtype) is a caller bug
-        # rather than a lookup outcome. The old code swallowed these into [],
-        # which turned a typo'd record type into a silent empty result.
-        raise ValueError("invalid DNS query %r (%s): %s" % (query, rdtype, exc))
+    except _classes("NXDOMAIN", "NoAnswer"):
+        return []  # the resolver answered: there is no such record
+    except _classes("LifetimeTimeout", "Timeout") as exc:
+        raise ResolutionTimeoutError(
+            "dnspython timed out asking about %r: %s" % (query, exc)
+        ) from exc
+    except _classes("NoNameservers", "NoResolverConfiguration") as exc:
+        raise ResolutionError(
+            "dnspython could not ask about %r: %s" % (query, exc)
+        ) from exc
+    except _dnsexc.DNSException as exc:
+        # A malformed name or an unknown record type is the caller's mistake,
+        # not a lookup outcome.
+        raise ValueError(
+            "invalid DNS query %r (%s): %s" % (query, rdtype, exc)
+        ) from exc
+    except OSError as exc:
+        raise ResolutionError(
+            "dnspython could not ask about %r: %s" % (query, exc)
+        ) from exc
     return [_native_record(record) for record in answer]
 
 
@@ -367,6 +395,38 @@ def _bounded_lookup(lookup: "Callable[[], Any]", timeout: Optional[float]) -> "A
     return payload
 
 
+#: ``getaddrinfo`` codes that say the resolver answered and there is no such
+#: name or no address of the family. 11004 is Windows' ``WSANO_DATA``. Any other
+#: code (``EAI_AGAIN``, ``EAI_FAIL``, ...) is a resolver that could not be asked.
+_NO_ANSWER_GAI = frozenset(
+    code
+    for code in (
+        _socket.EAI_NONAME,
+        getattr(_socket, "EAI_NODATA", None),
+        getattr(_socket, "EAI_ADDRFAMILY", None),
+        11004,
+    )
+    if code is not None
+)
+
+#: ``gethostbyaddr`` codes for the same two answers: ``HOST_NOT_FOUND`` and
+#: ``NO_DATA`` (1 and 4), and their Winsock spellings.
+_NO_ANSWER_HERROR = frozenset((1, 4, 11001, 11004))
+
+
+def _system_outage(exc: "OSError", query: str) -> "ResolutionError":
+    """The error for a failed OS lookup that was not an answer of "no such record"."""
+    return ResolutionError("the OS resolver could not look up %r: %s" % (query, exc))
+
+
+def _is_no_answer(exc: "OSError") -> bool:
+    if isinstance(exc, _socket.gaierror):
+        return exc.errno in _NO_ANSWER_GAI
+    if isinstance(exc, _socket.herror):
+        return exc.errno in _NO_ANSWER_HERROR
+    return False
+
+
 def _resolve_system_once(
     query: str, family: int, timeout: Optional[float]
 ) -> "List[Any]":
@@ -376,8 +436,10 @@ def _resolve_system_once(
 
     try:
         infos = _bounded_lookup(_lookup, timeout)
-    except _socket.gaierror:
-        return []
+    except _socket.gaierror as exc:
+        if _is_no_answer(exc):
+            return []
+        raise _system_outage(exc, query) from exc
 
     seen = []
     for info in infos:
@@ -493,10 +555,12 @@ def resolve_system(
         independent of (and untouched by) the OS resolver's. Already-
         qualified (trailing-dot) names are unaffected by any of this.
 
-    A genuine lookup failure (every candidate tried, none resolve) yields
-    ``[]``, never ``None``. An unsupported ``rdtype`` raises
-    :class:`ResolutionError`, since that is this backend's fixed limitation,
-    not a DNS outcome to report as "no records".
+    Every candidate tried and none resolving (``EAI_NONAME``, no data) yields
+    ``[]``, never ``None``. A temporary failure (``EAI_AGAIN``, ``EAI_FAIL``)
+    raises :class:`ResolutionError`, and a deadline
+    :class:`ResolutionTimeoutError`: the resolver could not be asked. An
+    unsupported ``rdtype`` raises :class:`ResolutionError` too, since that is
+    this backend's fixed limitation, not a DNS outcome to report as "no records".
     """
     query = _dst_argument(query)
     if isinstance(rdtype, (tuple, list)):
@@ -516,12 +580,14 @@ def resolve_system(
             hostname, _aliases, _addrs = _bounded_lookup(
                 _partial(_socket.gethostbyaddr, query), timeout
             )
-        except (_socket.herror, _socket.gaierror):
+        except (_socket.herror, _socket.gaierror) as exc:
             # herror: no PTR data for a literal address. gaierror: `query`
             # was treated as a hostname (gethostbyaddr's own behaviour for a
-            # non-literal argument) and that hostname itself did not
-            # resolve. Both are genuine "no answer", not a transport failure.
-            return []
+            # non-literal argument) and that hostname itself did not resolve.
+            # Both are answers when the code says so; a temporary failure is not.
+            if _is_no_answer(exc):
+                return []
+            raise _system_outage(exc, query) from exc
         return [hostname]
 
     if rdtype not in _ADDRESS_RDTYPES:
@@ -578,11 +644,12 @@ def _search_system(
     return []
 
 
-#: `nslookup` prints one of these on a genuine "no such name" -- distinct
-#: from "nslookup could not even ask" (missing binary, refused connection to
-#: a stated server), which stays a ResolutionError so the chain moves on.
-_NSLOOKUP_NO_RECORD_MARKERS = (
-    "can't find",
+#: What `nslookup` gives as the reason after the colon of a "can't find <name>:
+#: <reason>" line when the server answered that there is no such name or no
+#: record of the type. Every other reason (SERVFAIL, REFUSED, "No response from
+#: server") is a server that could not be asked, which stays a ResolutionError
+#: so the chain moves on.
+_NSLOOKUP_NO_RECORD_REASONS = (
     "non-existent domain",
     "no answer",
     "no records",
@@ -688,7 +755,10 @@ def _system_search_domains() -> "List[str]":
         from dns import resolver as _resolver
     except ImportError:
         return []
-    r = _resolver.Resolver()
+    try:
+        r = _resolver.Resolver()
+    except getattr(_resolver, "NoResolverConfiguration", ()):
+        return []  # nothing configured to expand with; nslookup asks anyway
     if r.search:
         return [str(d).rstrip(".") for d in r.search]
     if r.domain and str(r.domain) not in (".", ""):
@@ -761,13 +831,24 @@ def _resolve_nslookup_once(
     text = response.stdout
     stderr_text = response.stderr
     # Windows nslookup prints "*** <server> can't find <name>: Non-existent
-    # domain" on stderr, not stdout -- the NXDOMAIN marker check has to see
-    # both, or a genuine "no such name" looks like an unparseable answer.
-    lowered = (text + "\n" + stderr_text).lower()
-
-    if any(marker in lowered for marker in _NSLOOKUP_NO_RECORD_MARKERS):
-        # A stated "no such name"/"no records", whatever the exit status --
-        # BIND's nslookup exits 1 on NXDOMAIN, Windows' exits 0.
+    # domain" on stderr, not stdout -- the check has to see both, or a genuine
+    # "no such name" looks like an unparseable answer. The reason after the
+    # colon decides: "No response from server" shares the "can't find" prefix
+    # and exits 0 as well.
+    combined = text + "\n" + stderr_text
+    for line in combined.splitlines():
+        if "can't find" not in line.lower():
+            continue
+        reason = line.rpartition(":")[2].strip() if ":" in line else ""
+        if not reason or any(
+            marker in reason.lower() for marker in _NSLOOKUP_NO_RECORD_REASONS
+        ):
+            # A stated "no such name"/"no records", whatever the exit status --
+            # BIND's nslookup exits 1 on NXDOMAIN, Windows' exits 0.
+            return []
+        raise ResolutionError("nslookup could not ask about %r: %s" % (query, reason))
+    lowered = combined.lower()
+    if any(marker in lowered for marker in _NSLOOKUP_NO_RECORD_REASONS):
         return []
     if response.returncode != 0:
         # Non-zero with none of those markers: the binary could not complete
@@ -882,12 +963,15 @@ def resolve_nslookup(
         already-qualified (trailing-dot) ``query`` or a ``"ptr"`` lookup,
         neither of which a search list applies to.
 
-    A genuine lookup failure (NXDOMAIN or equivalent, for every candidate
-    tried) yields ``[]``. A missing ``nslookup`` binary, a timeout, a
-    **non-zero exit with no "no such name" message** (no reachable server, a
-    refused connection), or an unsupported ``rdtype`` raises
-    :class:`ResolutionError` -- there was no definitive DNS answer to report,
-    so :func:`resolve`'s chain moves on rather than treating it as NXDOMAIN.
+    A server answering "no such name" or "no such record" (NXDOMAIN or
+    equivalent, for every candidate tried) yields ``[]``. A missing
+    ``nslookup`` binary, a timeout, a **non-zero exit with no "can't find"
+    line** (no reachable server, a refused connection), a "can't find" line
+    whose reason after the colon is not a "no such name" answer (``SERVFAIL``,
+    ``REFUSED``, Windows' ``No response from server``), or an unsupported
+    ``rdtype`` raises :class:`ResolutionError` -- there was no definitive DNS
+    answer to report, so :func:`resolve`'s chain moves on rather than treating
+    it as NXDOMAIN.
 
     A ``query`` that ``nslookup`` would read as an option (one starting with
     ``-``) or that cannot be a name at all (empty, whitespace, control
@@ -1198,9 +1282,12 @@ def resolve(
         its message. It does **not** turn an empty *answer* into an error --
         a name that genuinely does not resolve still returns ``[]``.
 
-    Contract: always a ``list``, **empty** on a genuine lookup failure, never
-    ``None`` -- unless ``strict=True``, which is the only way this raises for
-    a resolution outcome. A malformed query or unknown record type raises
+    Contract: always a ``list``, **empty** when the backends answered that there
+    is no such name or record or, without ``strict``, when none could be asked;
+    never ``None``. ``strict=True`` is the only way this raises for a resolver
+    outage. A request only ``dnspython`` could serve raises
+    :class:`ResolutionError` naming the ``dns`` extra when it is missing, strict
+    or not. A malformed query or unknown record type raises
     :class:`ValueError` immediately, without trying every backend, since that
     is a caller bug rather than a resolution outcome.
     """
@@ -1260,6 +1347,7 @@ def _resolve_chain(
 
     last_error: Optional[Exception] = None
     attempted = False
+    dns_missing = False  # dnspython was skipped because the extra is absent
     answered = False  # at least one backend gave a definitive (empty) answer
     for name in chain:
         attempt: "Callable[[], List[Any]]"
@@ -1280,6 +1368,9 @@ def _resolve_chain(
             sources = [source] if isinstance(source, str) else list(source or [])
             if len(sources) > 1:
                 continue  # one source address only; `wire` picks per family
+            if not has_dns():
+                dns_missing = True
+                continue
             attempt = _partial(
                 resolve_dnspython,
                 query,
@@ -1340,6 +1431,10 @@ def _resolve_chain(
         # [] rather than a raise.
         answered = True
 
+    if not attempted and dns_missing:
+        # Only dnspython could have served this request: say what to install
+        # rather than answering "no records" for a backend that never ran.
+        raise ResolutionError(_NEEDS_DNS)
     if not attempted:
         # Name what excluded them: with `port=`/`tcp=` now excluding `system`
         # too, "cannot serve rdtype='a'" on its own would be a puzzle.

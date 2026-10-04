@@ -6,146 +6,15 @@ against a fake nameserver on 127.0.0.1 (UDP and TCP on one port),
 import ipaddress
 import socket
 import struct
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
 import netimps
+from fakedns import reply_for
 from netimps import DNSDecodeError, _dns, _dnswire
-
-# --------------------------------------------------------------------------- #
-# A fake nameserver: answers from ZONE by the question's name and type.
-# --------------------------------------------------------------------------- #
-ZONE = {
-    ("host.test", 1): [("host.test", 1, bytes([10, 0, 0, 5]))],
-    ("host.test", 28): [("host.test", 28, ipaddress.IPv6Address("fd00::5").packed)],
-    ("alias.test", 1): [
-        ("alias.test", 5, _dnswire.encode_name("host.test")),
-        ("host.test", 1, bytes([10, 0, 0, 5])),
-    ],
-    ("mail.test", 15): [
-        ("mail.test", 15, struct.pack("!H", 10) + _dnswire.encode_name("mx.mail.test"))
-    ],
-    ("note.test", 16): [("note.test", 16, b"\x05hello\x06 world")],
-    ("5.0.0.10.in-addr.arpa", 12): [
-        ("5.0.0.10.in-addr.arpa", 12, _dnswire.encode_name("host.test"))
-    ],
-    ("big.test", 1): [
-        ("big.test", 1, bytes([10, 1, i // 256, i % 256])) for i in range(200)
-    ],
-}
-NXDOMAIN_NAMES = {"missing.test"}
-
-
-def reply_for(query, tcp=False):
-    ident, _flags, qdcount = struct.unpack("!HHH", query[:6])
-    name, end = _dnswire._read_name(query, 12)
-    qtype = struct.unpack("!H", query[end : end + 2])[0]
-    question = query[12 : end + 4]
-    if name in NXDOMAIN_NAMES:
-        return struct.pack("!HHHHHH", ident, 0x8183, 1, 0, 0, 0) + question
-    records = ZONE.get((name, qtype), [])
-    answers = b"".join(
-        _dnswire.encode_name(owner)
-        + struct.pack("!HHIH", rtype, 1, 60, len(data))
-        + data
-        for owner, rtype, data in records
-    )
-    truncated = not tcp and len(answers) > 512
-    if truncated:
-        return struct.pack("!HHHHHH", ident, 0x8380, 1, 0, 0, 0) + question
-    return (
-        struct.pack("!HHHHHH", ident, 0x8180, 1, len(records), 0, 0)
-        + question
-        + answers
-    )
-
-
-class FakeNameserver(object):
-    def __init__(self, host="127.0.0.1"):
-        # A port free for **both** UDP and TCP, because `resolve_wire` is given
-        # one `ns=` address and reaches the same number by either transport.
-        #
-        # TCP is bound FIRST: it is the one more likely to collide, since a
-        # recently closed connection leaves the number in `TIME_WAIT` while a UDP
-        # port is free the moment it is closed. Asking TCP for an ephemeral port
-        # and then matching UDP to it therefore succeeds far more often than the
-        # other way round -- which is what the fixture used to do, and why four
-        # tests skipped silently under full-suite port pressure.
-        self.tcp = socket.socket()
-        try:
-            self.tcp.bind((host, 0))
-            self.port = self.tcp.getsockname()[1]
-            self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            try:
-                self.udp.bind((host, self.port))
-            except OSError:
-                self.udp.close()
-                raise
-            self.tcp.listen(5)
-        except OSError:
-            self.tcp.close()
-            raise
-        self.peers = []
-        self.tcp_queries = 0
-        threading.Thread(target=self._serve_udp, daemon=True).start()
-        threading.Thread(target=self._serve_tcp, daemon=True).start()
-
-    def _serve_udp(self):
-        while True:
-            try:
-                data, peer = self.udp.recvfrom(4096)
-            except OSError:
-                return
-            self.peers.append(peer)
-            if b"silent" in data:
-                continue
-            self.udp.sendto(reply_for(data), peer)
-
-    def _serve_tcp(self):
-        while True:
-            try:
-                conn, peer = self.tcp.accept()
-            except OSError:
-                return
-            with conn:
-                size = struct.unpack("!H", conn.recv(2))[0]
-                data = b""
-                while len(data) < size:
-                    data += conn.recv(size - len(data))
-                self.tcp_queries += 1
-                out = reply_for(data, tcp=True)
-                conn.sendall(struct.pack("!H", len(out)) + out)
-
-    def close(self):
-        self.udp.close()
-        self.tcp.close()
-
-
-#: Attempts at finding a port free on both transports. 5 was not enough: under a
-#: full-suite run on Windows -- hundreds of sockets opened and closed, TCP numbers
-#: sitting in TIME_WAIT -- it gave up and **four tests skipped silently**, while
-#: the file passed 26/26 in isolation. A skip is not a pass, and these cover
-#: `resolve_wire`'s TCP fallback, so losing them quietly is the worst case. 50
-#: attempts cost milliseconds.
-_PORT_ATTEMPTS = 50
-
-
-@pytest.fixture()
-def server():
-    for _ in range(_PORT_ATTEMPTS):
-        try:
-            fake = FakeNameserver()
-            break
-        except OSError:
-            continue
-    else:  # pragma: no cover - a host with essentially no free ports
-        pytest.skip(
-            "no port free on both UDP and TCP after %d attempts" % (_PORT_ATTEMPTS,)
-        )
-    yield fake
-    fake.close()
 
 
 def ns(server):
@@ -299,11 +168,8 @@ def test_a_nameserver_must_be_an_address():
 # resolve(): where the wire backend sits.
 # --------------------------------------------------------------------------- #
 def test_resolve_uses_the_wire_backend_for_ns_without_dnspython(server, monkeypatch):
-    monkeypatch.setattr(
-        _dns,
-        "resolve_dnspython",
-        lambda *a, **k: (_ for _ in ()).throw(netimps.ResolutionError("no")),
-    )
+    for name in ("dns", "dns.resolver", "dns.name", "dns.exception"):
+        monkeypatch.setitem(sys.modules, name, None)
     got = netimps.resolve("host.test", ns=ns(server), backends=["dnspython", "wire"])
     assert got == [ipaddress.IPv4Address("10.0.0.5")]
 
@@ -316,11 +182,18 @@ def test_source_excludes_the_backends_that_cannot_choose_it():
 
 
 def test_wire_is_skipped_without_ns_or_source(monkeypatch):
-    called = []
-    monkeypatch.setattr(_dns, "resolve_wire", lambda *a, **k: called.append(1) or [])
-    monkeypatch.setattr(_dns, "resolve_system", lambda *a, **k: ["1.2.3.4"])
-    assert netimps.resolve("host.test", backends=["wire", "system"]) == ["1.2.3.4"]
-    assert called == []
+    """No nameserver was named, so nothing is sent: the OS resolver answers."""
+    sent = []
+    monkeypatch.setattr(_dns, "_exchange", lambda *a, **k: sent.append(a) or b"")
+    monkeypatch.setattr(
+        _dns._socket,
+        "getaddrinfo",
+        lambda *a, **k: [(socket.AF_INET, 0, 0, "", ("1.2.3.4", 0))],
+    )
+    assert netimps.resolve("host.test", backends=["wire", "system"]) == [
+        ipaddress.IPv4Address("1.2.3.4")
+    ]
+    assert sent == []
 
 
 # --------------------------------------------------------------------------- #

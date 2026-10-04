@@ -71,6 +71,7 @@ EXPECTED = [
     "get_route",
     "get_source_ip",
     "get_tcp_mss",
+    "has_dns",
     "has_pktinfo",
     "has_recvmsg",
     "interface_enumerations",

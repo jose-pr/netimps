@@ -101,6 +101,7 @@ from ._ifaddrs import (
 from ._dns import (
     RESOLUTION_CACHE_TTL,
     clear_resolution_cache,
+    has_dns,
     resolve,
     resolve_dnspython,
     resolve_system,
@@ -199,6 +200,7 @@ __all__ = [
     "resolve_nslookup",
     "resolve_wire",
     "resolve_doh",
+    "has_dns",
     "ResolutionError",
     "ResolutionTimeoutError",
     "DNSDecodeError",

@@ -30,6 +30,7 @@ import urllib.request
 
 import pytest
 
+from fakedns import _PORT_ATTEMPTS, FakeNameserver
 from netimps import _proc
 
 #: Directories holding a fake program from :func:`fake_program`. A fake called
@@ -501,3 +502,24 @@ def fake_program(tmp_path, monkeypatch):
     yield make
     _FAKE_DIRECTORIES.discard(os.path.normcase(str(directory)))
     _proc.clear_cache()
+
+
+# --------------------------------------------------------------------------- #
+# A fake nameserver                                                            #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture()
+def server():
+    for _ in range(_PORT_ATTEMPTS):
+        try:
+            fake = FakeNameserver()
+            break
+        except OSError:
+            continue
+    else:  # pragma: no cover - a host with essentially no free ports
+        pytest.skip(
+            "no port free on both UDP and TCP after %d attempts" % (_PORT_ATTEMPTS,)
+        )
+    yield fake
+    fake.close()

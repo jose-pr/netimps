@@ -173,7 +173,7 @@ netimps.retry(lambda: netimps.tcp_check("example.com", 443), attempts=3)
 | `split_host`, `split_zone` | `host:port` (or `(host, port)`) splitting, IPv6-aware; the `%zone` of a scoped address |
 | `join_host`, `unmap`, `is_wildcard` | build `host:port` (IPv6-bracketed), collapse a v4-mapped address, test for the bind-anything form |
 | `get_default_port`, `get_default_scheme`, `register_port` | scheme ↔ port registry |
-| `resolve` | DNS lookup → native records (`[]` on failure); `cache=` keeps answers, misses included |
+| `resolve`, `has_dns` | DNS lookup → native records (`[]` for no such record; with `strict=True` a resolver that could not be asked raises); `cache=` keeps answers, misses included; `has_dns()` asks for the `dns` extra |
 | `clear_resolution_cache`, `RESOLUTION_CACHE_TTL` | drop the `cache=` answers; their default 30 s lifetime |
 | `resolve_wire`, `resolve_doh` | DNS straight to a nameserver (UDP/TCP, chosen source) / over HTTPS |
 | `ping`, `PingResult` | reachability with RTT and TTL |

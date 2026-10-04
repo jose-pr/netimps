@@ -138,9 +138,9 @@ def test_check_re_raises_an_outage_that_the_default_hides(monkeypatch):
     """Without `check` an unreachable resolver looks like a missing name."""
 
     def down(*args, **kwargs):
-        raise ResolutionError("resolver unreachable")
+        raise socket.gaierror(socket.EAI_AGAIN, "resolver unreachable")
 
-    monkeypatch.setattr(netimps._dns, "resolve_system", down)
+    monkeypatch.setattr(socket, "getaddrinfo", down)
     assert Host("db.internal").ip() is None
     with pytest.raises(ResolutionError, match="unreachable"):
         Host("db.internal").ip(check=True)
@@ -194,16 +194,20 @@ def test_an_explicit_backends_is_passed_as_it_is(monkeypatch):
     assert seen[1][2]["backends"] == "nslookup"
 
 
-def test_the_default_does_not_touch_the_other_backends(monkeypatch):
+def test_the_default_does_not_touch_the_other_backends(monkeypatch, fake_program):
     """The full chain costs seconds on a miss; the default must not enter it."""
+
+    import dns.resolver
 
     def explode(*args, **kwargs):
         raise AssertionError("a backend outside the OS resolver was asked")
 
-    for name in ("resolve_dnspython", "resolve_wire", "resolve_nslookup"):
-        monkeypatch.setattr(netimps._dns, name, explode)
+    nslookup = fake_program("nslookup")
+    monkeypatch.setattr(dns.resolver.Resolver, "resolve", explode)
+    monkeypatch.setattr(netimps._dns, "_exchange", explode)
     monkeypatch.setattr(socket, "getaddrinfo", _answer(DB))
     assert Host("db.internal").ip() == DB
+    assert nslookup.calls == []
 
 
 @pytest.mark.parametrize(
@@ -256,41 +260,31 @@ def test_the_os_resolver_is_asked_for_both_families_in_one_call(monkeypatch):
     assert lookup.calls == [("db.internal", socket.AF_UNSPEC)]
 
 
-def test_other_backends_are_asked_once_per_family_and_joined(monkeypatch):
-    asked = []
-
-    def wire(query, rdtype=None, **kwargs):
-        asked.append(rdtype)
-        return [DB] if rdtype == "a" else [DB6]
-
-    monkeypatch.setattr(netimps._dns, "resolve_wire", wire)
+def test_other_backends_are_asked_once_per_family_and_joined(server):
     found = netimps.resolve(
-        "db.internal", ("a", "aaaa"), ns="192.0.2.53", backends="wire"
+        "host.test", ("a", "aaaa"), ns="127.0.0.1:%d" % server.port, backends="wire"
     )
-    assert found == [DB, DB6]
-    assert asked == ["a", "aaaa"]
+    assert found == [netimps.parse("10.0.0.5"), netimps.parse("fd00::5")]
+    assert len(server.peers) == 2, "one UDP query per family"
 
 
-def test_one_family_failing_to_ask_is_not_an_empty_answer(monkeypatch):
+def test_one_family_failing_to_ask_is_not_an_empty_answer(server):
     """A resolver that timed out on AAAA says nothing about AAAA records."""
-
-    def wire(query, rdtype=None, **kwargs):
-        if rdtype == "aaaa":
-            raise ResolutionError("timed out")
-        return [DB]
-
-    monkeypatch.setattr(netimps._dns, "resolve_wire", wire)
+    where = "127.0.0.1:%d" % server.port
+    server.drop_types = {28}
     assert netimps.resolve(
-        "x.example", ("a", "aaaa"), ns="192.0.2.53", backends="wire"
-    ) == [DB]
+        "host.test", ("a", "aaaa"), ns=where, backends="wire", timeout=0.5
+    ) == [netimps.parse("10.0.0.5")]
 
-    def none(query, rdtype=None, **kwargs):
-        raise ResolutionError("timed out")
-
-    monkeypatch.setattr(netimps._dns, "resolve_wire", none)
+    server.drop_types = {1, 28}
     with pytest.raises(ResolutionError):
         netimps.resolve(
-            "x.example", ("a", "aaaa"), ns="192.0.2.53", backends="wire", strict=True
+            "host.test",
+            ("a", "aaaa"),
+            ns=where,
+            backends="wire",
+            strict=True,
+            timeout=0.5,
         )
 
 

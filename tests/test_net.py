@@ -4,6 +4,7 @@ import socket
 import types
 
 import pytest
+from dns.rdatatype import UnknownRdatatype as _UnknownRdatatype
 
 import netimps
 from netimps import _dns, _ip, _ping, _proc
@@ -57,6 +58,7 @@ class _FakeResolver:
         self.configure = configure
         self._nameservers = []
         self.search = []
+        self.domain = None
         self.timeout = None
         self.lifetime = None
         self.port = 53
@@ -96,7 +98,8 @@ class _FakeResolver:
 
 
 @pytest.fixture
-def fake_dns(monkeypatch):
+def fake_dns(monkeypatch, fake_program):
+    import dns.exception as _real_dns_exception
     import dns.name as _real_dns_name
 
     fake_module = types.ModuleType("dns.resolver")
@@ -111,16 +114,27 @@ def fake_dns(monkeypatch):
     # dns.name is pure name-parsing, no network dependency -- reuse the real
     # module rather than reimplementing dns.name.from_text for the fake.
     dns_pkg.name = _real_dns_name
+    dns_pkg.exception = _real_dns_exception
     monkeypatch.setitem(__import__("sys").modules, "dns", dns_pkg)
     monkeypatch.setitem(__import__("sys").modules, "dns.resolver", fake_module)
     monkeypatch.setitem(__import__("sys").modules, "dns.name", _real_dns_name)
+    monkeypatch.setitem(__import__("sys").modules, "dns.exception", _real_dns_exception)
+
     # The chain no longer stops on an empty answer, so a dnspython-focused
     # test whose fake returns [] would fall through to the *real* OS resolver
-    # and a *real* nslookup process. These stubs keep this section offline
-    # and about dnspython alone -- the fall-through itself is what the
-    # "backend chain orchestration" section below exercises.
-    monkeypatch.setattr(_dns, "resolve_system", lambda *a, **k: [])
-    monkeypatch.setattr(_dns, "resolve_nslookup", lambda *a, **k: [])
+    # and a *real* nslookup process. These stand-ins sit where those two meet
+    # the process and say "no such name", which keeps this section offline and
+    # about dnspython alone -- the fall-through itself is what the "backend
+    # chain orchestration" section below exercises.
+    def _no_such_name(*args, **kwargs):
+        raise _dns._socket.gaierror(_dns._socket.EAI_NONAME, "no such name")
+
+    def _no_such_address(*args, **kwargs):
+        raise _dns._socket.herror(1, "unknown host")
+
+    monkeypatch.setattr(_dns._socket, "getaddrinfo", _no_such_name)
+    monkeypatch.setattr(_dns._socket, "gethostbyaddr", _no_such_address)
+    fake_program("nslookup", stderr=b"** server can't find x: NXDOMAIN\n", returncode=1)
     _FakeResolver.result = None
     _FakeResolver.error = None
     _FakeResolver.last = None
@@ -162,19 +176,40 @@ def test_resolve_multiple_records(fake_dns):
     ]
 
 
+@pytest.mark.parametrize("exc", [_NXDOMAIN, _NoAnswer])
+def test_resolve_dnspython_returns_empty_list_for_an_answer_of_no_record(fake_dns, exc):
+    """Only an answer of "no such name" or "no such record" is ``[]``."""
+    fake_dns.error = exc("boom")
+    assert resolve_dnspython("does-not-exist.invalid") == []
+
+
 @pytest.mark.parametrize(
-    "exc",
-    [_NXDOMAIN, _NoAnswer, _NoNameservers, _LifetimeTimeout],
+    "exc,expected",
+    [
+        (_NoNameservers, _dns.ResolutionError),
+        (_LifetimeTimeout, _dns.ResolutionTimeoutError),
+    ],
 )
-def test_resolve_returns_empty_list_on_lookup_failure(fake_dns, exc):
-    """Every genuine 'no result' outcome honours the [] contract."""
+def test_resolve_dnspython_raises_when_the_resolver_could_not_be_asked(
+    fake_dns, exc, expected
+):
+    fake_dns.error = exc("boom")
+    with pytest.raises(expected, match="boom"):
+        resolve_dnspython("does-not-exist.invalid")
+
+
+@pytest.mark.parametrize(
+    "exc", [_NXDOMAIN, _NoAnswer, _NoNameservers, _LifetimeTimeout]
+)
+def test_resolve_without_strict_stays_empty_whatever_dnspython_says(fake_dns, exc):
+    """The chain moves on, and every other backend answers "no such name"."""
     fake_dns.error = exc("boom")
     assert resolve("does-not-exist.invalid") == []
 
 
 def test_resolve_raises_on_caller_error(fake_dns):
     """A malformed query is a bug, not a lookup result -- it must not become []."""
-    fake_dns.error = ValueError("unknown rdtype 'nope'")
+    fake_dns.error = _UnknownRdatatype()
     with pytest.raises(ValueError, match="invalid DNS query"):
         resolve("example.com", "nope")
 
@@ -309,7 +344,9 @@ def test_resolve_system_dedupes_addresses(monkeypatch):
 
 def test_resolve_system_empty_on_lookup_failure(monkeypatch):
     def _raise(*a, **k):
-        raise _dns._socket.gaierror("nodename nor servname provided")
+        raise _dns._socket.gaierror(
+            _dns._socket.EAI_NONAME, "nodename nor servname provided"
+        )
 
     monkeypatch.setattr(_dns._socket, "getaddrinfo", _raise)
     assert resolve_system("does-not-exist.invalid") == []
@@ -460,7 +497,9 @@ def test_resolve_system_search_list_tries_candidates_in_order(monkeypatch):
         calls.append(host)
         if host == "host.eng.example.com":
             return [(_dns._socket.AF_INET, type, 0, "", ("1.2.3.4", 0))]
-        raise _dns._socket.gaierror("nodename nor servname provided")
+        raise _dns._socket.gaierror(
+            _dns._socket.EAI_NONAME, "nodename nor servname provided"
+        )
 
     monkeypatch.setattr(_dns._socket, "getaddrinfo", _impl)
     result = resolve_system("host", search=["eng.example.com", "example.com"])
@@ -473,7 +512,9 @@ def test_resolve_system_search_list_ignores_empty_entries(monkeypatch):
 
     def _impl(host, port, family=0, type=0, proto=0, flags=0):
         calls.append(host)
-        raise _dns._socket.gaierror("nodename nor servname provided")
+        raise _dns._socket.gaierror(
+            _dns._socket.EAI_NONAME, "nodename nor servname provided"
+        )
 
     monkeypatch.setattr(_dns._socket, "getaddrinfo", _impl)
     resolve_system("host", search=["", ".", "example.com"])
@@ -768,23 +809,66 @@ def test_system_search_domains_falls_back_to_empty_without_dnspython(monkeypatch
 
 # --------------------------------------------------------------------------- #
 # resolve -- backend chain orchestration                                     #
+#                                                                             #
+# dnspython and the wire backend run for real against the fake nameserver on  #
+# loopback, nslookup is a fake program on PATH, and the OS resolver is        #
+# replaced where it meets the process (getaddrinfo).                          #
 # --------------------------------------------------------------------------- #
 
 
-def test_resolve_chain_falls_through_on_resolution_error(monkeypatch):
-    """dnspython unavailable -> system is tried next."""
+def _os_resolver(monkeypatch, records=(), error=None):
+    """Replace ``getaddrinfo`` and return the list of names it was asked."""
+    asked = []
+    answer = _fake_getaddrinfo(list(records))
 
-    def _dnspython_fails(*a, **k):
-        raise _dns.ResolutionError("dnspython is not installed")
+    def getaddrinfo(host, *args, **kwargs):
+        asked.append(host)
+        if error is not None:
+            raise error
+        return answer(host, *args, **kwargs)
 
-    monkeypatch.setattr(_dns, "resolve_dnspython", _dnspython_fails)
-    monkeypatch.setattr(
-        _dns, "resolve_system", lambda *a, **k: [IPv4Address("9.9.9.9")]
+    monkeypatch.setattr(_dns._socket, "getaddrinfo", getaddrinfo)
+    return asked
+
+
+def _nxdomain_nslookup(fake_program):
+    return fake_program(
+        "nslookup", stderr=b"** server can't find x: NXDOMAIN\n", returncode=1
     )
+
+
+def _at(server, **kwargs):
+    """The options that point dnspython, the wire backend and nslookup at ``server``."""
+    return dict(ns="127.0.0.1", port=server.port, search=False, **kwargs)
+
+
+def _without_dnspython(monkeypatch):
+    for name in ("dns", "dns.resolver", "dns.name", "dns.exception"):
+        monkeypatch.setitem(__import__("sys").modules, name, None)
+
+
+def test_resolve_chain_falls_through_when_a_backend_is_unavailable(monkeypatch):
+    """dnspython absent -> the OS resolver is tried next."""
+    _without_dnspython(monkeypatch)
+    _os_resolver(monkeypatch, [(_dns._socket.AF_INET, "9.9.9.9")])
     assert resolve("example.com") == [IPv4Address("9.9.9.9")]
 
 
-def test_resolve_chain_falls_through_on_an_empty_answer(monkeypatch):
+def test_resolve_chain_falls_through_on_a_backend_that_could_not_ask(
+    server, fake_program
+):
+    """A silent server raises in dnspython, so nslookup answers instead."""
+    fake_program("nslookup", stdout=_NSLOOKUP_A_BIND)
+    got = resolve(
+        "silent.test",
+        backends=["dnspython", "nslookup"],
+        timeout=0.4,
+        **_at(server),
+    )
+    assert got == [IPv4Address("104.20.23.154"), IPv4Address("172.66.147.243")]
+
+
+def test_resolve_chain_falls_through_on_an_empty_answer(server, fake_program):
     """An empty answer is definitive for one mechanism, never for the chain.
 
     This test pinned the opposite until 0.2.3, and the opposite was wrong:
@@ -793,62 +877,52 @@ def test_resolve_chain_falls_through_on_an_empty_answer(monkeypatch):
     had the answer in the hosts file all along. Same for .local/mDNS names and
     every other NSS-only source.
     """
-    calls = []
-
-    def _dnspython_nxdomain(*a, **k):
-        calls.append("dnspython")
-        return []
-
-    def _system_has_it(*a, **k):
-        calls.append("system")
-        return [IPv4Address("127.0.0.1")]
-
-    def _nslookup_should_not_run(*a, **k):
-        calls.append("nslookup")
-        return [IPv4Address("9.9.9.9")]
-
-    monkeypatch.setattr(_dns, "resolve_dnspython", _dnspython_nxdomain)
-    monkeypatch.setattr(_dns, "resolve_system", _system_has_it)
-    monkeypatch.setattr(_dns, "resolve_nslookup", _nslookup_should_not_run)
-    assert resolve("localhost") == [IPv4Address("127.0.0.1")]
-    # Only a *non-empty* answer stops it, so nslookup is never spawned.
-    assert calls == ["dnspython", "system"]
+    fake = fake_program("nslookup", stdout=_NSLOOKUP_A_BIND)
+    got = resolve("missing.test", backends=["dnspython", "nslookup"], **_at(server))
+    assert got == [IPv4Address("104.20.23.154"), IPv4Address("172.66.147.243")]
+    assert len(server.peers) == 1 and len(fake.calls) == 1
 
 
-def test_resolve_chain_is_empty_only_when_every_backend_is(monkeypatch):
+def test_only_a_non_empty_answer_stops_the_chain(server, fake_program):
+    """dnspython has it, so nslookup is never spawned."""
+    fake = fake_program("nslookup", stdout=_NSLOOKUP_A_BIND)
+    got = resolve("host.test", backends=["dnspython", "nslookup"], **_at(server))
+    assert got == [IPv4Address("10.0.0.5")]
+    assert fake.calls == []
+
+
+def test_resolve_chain_is_empty_only_when_every_backend_is(server, fake_program):
     """Nobody has it -> [], the genuine "no such name", after asking each one."""
-    calls = []
-
-    def _empty(name):
-        def _impl(*a, **k):
-            calls.append(name)
-            return []
-
-        return _impl
-
-    monkeypatch.setattr(_dns, "resolve_dnspython", _empty("dnspython"))
-    monkeypatch.setattr(_dns, "resolve_system", _empty("system"))
-    monkeypatch.setattr(_dns, "resolve_nslookup", _empty("nslookup"))
-    assert resolve("does-not-exist.invalid") == []
-    assert calls == ["dnspython", "system", "nslookup"]
+    fake = _nxdomain_nslookup(fake_program)
+    got = resolve(
+        "missing.test",
+        backends=["dnspython", "wire", "nslookup"],
+        **_at(server),
+    )
+    assert got == []
+    assert len(server.peers) >= 2, "dnspython and the wire backend both ask"
+    assert len(fake.calls) == 1
 
 
-def test_resolve_empty_answer_outweighs_a_later_backend_failure(monkeypatch):
+def test_resolve_empty_answer_outweighs_a_later_backend_failure(
+    server, tmp_path, monkeypatch
+):
     """One backend answered (emptily) and the rest could not ask -> [] wins.
 
     Raising the transport error instead would report "nslookup is missing" for
     a name dnspython definitively said does not exist.
     """
-
-    def _cannot_ask(*a, **k):
-        raise _dns.ResolutionError("nslookup binary not found")
-
-    monkeypatch.setattr(_dns, "resolve_dnspython", lambda *a, **k: [])
-    monkeypatch.setattr(_dns, "resolve_system", _cannot_ask)
-    monkeypatch.setattr(_dns, "resolve_nslookup", _cannot_ask)
-    assert resolve("does-not-exist.invalid") == []
+    monkeypatch.setenv("PATH", str(tmp_path))
+    _proc.clear_cache()
+    options = _at(server)
+    assert resolve("missing.test", backends=["dnspython", "nslookup"], **options) == []
     # ...and strict= does not change that: one backend *did* ask and answered.
-    assert resolve("does-not-exist.invalid", strict=True) == []
+    assert (
+        resolve(
+            "missing.test", backends=["dnspython", "nslookup"], strict=True, **options
+        )
+        == []
+    )
 
 
 def test_resolve_chain_falls_through_when_nslookup_cannot_reach_a_server(
@@ -860,75 +934,37 @@ def test_resolve_chain_falls_through_when_nslookup_cannot_reach_a_server(
         stderr=b";; connection timed out; no servers could be reached\n",
         returncode=1,
     )
-    monkeypatch.setattr(
-        _dns, "resolve_system", lambda *a, **k: [IPv4Address("1.2.3.4")]
-    )
+    _os_resolver(monkeypatch, [(_dns._socket.AF_INET, "1.2.3.4")])
     assert resolve("example.com", backends=["nslookup", "system"]) == [
         IPv4Address("1.2.3.4")
     ]
 
 
-def test_resolve_chain_skips_system_for_non_address_rdtype(monkeypatch):
-    calls = []
-
-    def _dnspython(query, rdtype, **kwargs):
-        calls.append("dnspython")
-        return ["10 mail.example.com"]
-
-    def _system_should_not_run(*a, **k):
-        calls.append("system")
-        return []
-
-    monkeypatch.setattr(_dns, "resolve_dnspython", _dnspython)
-    monkeypatch.setattr(_dns, "resolve_system", _system_should_not_run)
-    assert resolve("example.com", "mx") == ["10 mail.example.com"]
-    assert calls == ["dnspython"]
+def test_resolve_chain_skips_system_for_non_address_rdtype(server, monkeypatch):
+    asked = _os_resolver(monkeypatch, [(_dns._socket.AF_INET, "1.2.3.4")])
+    got = resolve("mail.test", "mx", backends=["system", "dnspython"], **_at(server))
+    assert got == ["10 mx.mail.test"]
+    assert asked == []
 
 
-def test_resolve_chain_skips_system_when_ns_given(monkeypatch):
-    calls = []
-
-    def _dnspython(query, rdtype, **kwargs):
-        calls.append("dnspython")
-        return [IPv4Address("1.2.3.4")]
-
-    def _system_should_not_run(*a, **k):
-        calls.append("system")
-        return []
-
-    monkeypatch.setattr(_dns, "resolve_dnspython", _dnspython)
-    monkeypatch.setattr(_dns, "resolve_system", _system_should_not_run)
-    resolve("example.com", ns="1.1.1.1")
-    assert calls == ["dnspython"]
+def test_resolve_chain_skips_system_when_ns_given(server, monkeypatch):
+    asked = _os_resolver(monkeypatch, [(_dns._socket.AF_INET, "1.2.3.4")])
+    got = resolve("host.test", backends=["system", "dnspython"], **_at(server))
+    assert got == [IPv4Address("10.0.0.5")]
+    assert asked == []
 
 
-def test_resolve_chain_skips_system_for_an_explicit_port_or_tcp(monkeypatch):
+@pytest.mark.parametrize("option", [{"port": 5353}, {"tcp": True}])
+def test_resolve_chain_skips_system_for_an_explicit_port_or_tcp(monkeypatch, option):
     """The OS resolver takes no per-call port or transport either.
 
     The docstring already said `ns=`/`port=` excluded it; the code checked
     `ns` alone, so `port=5353` was quietly answered by whatever port 53 said.
     """
-    calls = []
-
-    def _dnspython_empty(*a, **k):
-        calls.append("dnspython")
-        return []
-
-    def _system_should_not_run(*a, **k):
-        calls.append("system")
-        return [IPv4Address("1.2.3.4")]
-
-    def _nslookup_empty(*a, **k):
-        calls.append("nslookup")
-        return []
-
-    monkeypatch.setattr(_dns, "resolve_dnspython", _dnspython_empty)
-    monkeypatch.setattr(_dns, "resolve_system", _system_should_not_run)
-    monkeypatch.setattr(_dns, "resolve_nslookup", _nslookup_empty)
-
-    assert resolve("example.com", port=5353) == []
-    assert resolve("example.com", tcp=True) == []
-    assert calls == ["dnspython", "nslookup", "dnspython", "nslookup"]
+    asked = _os_resolver(monkeypatch, [(_dns._socket.AF_INET, "1.2.3.4")])
+    with pytest.raises(ValueError, match="no backend"):
+        resolve("example.com", backends="system", **option)
+    assert asked == []
 
 
 def test_resolution_error_is_part_of_the_public_surface():
@@ -938,65 +974,63 @@ def test_resolution_error_is_part_of_the_public_surface():
     assert "ResolutionError" in netimps.__all__
 
 
-def _every_backend_fails(monkeypatch):
-    """Patch all three backends to "could not even ask" -- a resolver outage."""
-    calls = []
+_NSLOOKUP_NO_RESPONSE = (
+    b"*** UnKnown can't find silent.test.: No response from server\r\n"
+)
 
-    def _fails(name, message):
-        def _impl(*a, **k):
-            calls.append(name)
-            raise _dns.ResolutionError(message)
 
-        return _impl
-
-    monkeypatch.setattr(
-        _dns, "resolve_dnspython", _fails("dnspython", "dnspython is not installed")
+def _every_backend_fails(server, fake_program):
+    """A name nothing answers: dnspython and the wire backend time out, nslookup
+    reports no response."""
+    fake = fake_program("nslookup", stdout=_NSLOOKUP_NO_RESPONSE)
+    options = dict(
+        backends=["dnspython", "wire", "nslookup"], timeout=0.4, **_at(server)
     )
-    monkeypatch.setattr(
-        _dns, "resolve_system", _fails("system", "getaddrinfo timed out")
-    )
-    monkeypatch.setattr(
-        _dns, "resolve_nslookup", _fails("nslookup", "nslookup binary not found")
-    )
-    return calls
+    return fake, options
 
 
-def test_resolve_chain_tries_all_and_returns_empty_when_all_fail(monkeypatch):
+def test_resolve_chain_tries_all_and_returns_empty_when_all_fail(server, fake_program):
     """A total outage is [] by default -- the contract every caller was written to.
 
     `if not resolve(host):` has always been the idiom, and most callers do not
     act differently on "no such name" than on "could not ask". The ones that
     do pass strict=True; see the next test.
     """
-    calls = _every_backend_fails(monkeypatch)
-    assert resolve("example.com") == []
-    assert calls == ["dnspython", "system", "nslookup"]
+    fake, options = _every_backend_fails(server, fake_program)
+    assert resolve("silent.test", **options) == []
+    assert len(server.peers) >= 2 and len(fake.calls) == 1
 
 
-def test_resolve_strict_raises_the_last_error_when_no_backend_could_ask(monkeypatch):
+def test_resolve_strict_raises_the_last_error_when_no_backend_could_ask(
+    server, fake_program
+):
     """strict=True is how a caller tells an outage apart from a dead name."""
-    _every_backend_fails(monkeypatch)
-    with pytest.raises(_dns.ResolutionError, match="nslookup binary not found"):
-        resolve("example.com", strict=True)
+    _, options = _every_backend_fails(server, fake_program)
+    with pytest.raises(_dns.ResolutionError, match="No response from server"):
+        resolve("silent.test", strict=True, **options)
 
 
-def test_resolve_strict_does_not_raise_on_a_definitive_empty_answer(monkeypatch):
+def test_resolve_strict_does_not_raise_on_a_definitive_empty_answer(
+    server, fake_program
+):
     """strict= is about *asking*, not about answering.
 
     A name that genuinely does not resolve is not an error at any strictness:
     the backends were reachable and said so.
     """
-    monkeypatch.setattr(_dns, "resolve_dnspython", lambda *a, **k: [])
-    monkeypatch.setattr(_dns, "resolve_system", lambda *a, **k: [])
-    monkeypatch.setattr(_dns, "resolve_nslookup", lambda *a, **k: [])
-    assert resolve("does-not-exist.invalid", strict=True) == []
-
-
-def test_resolve_strict_still_returns_an_answer(monkeypatch):
-    monkeypatch.setattr(
-        _dns, "resolve_dnspython", lambda *a, **k: [IPv4Address("1.2.3.4")]
+    _nxdomain_nslookup(fake_program)
+    got = resolve(
+        "missing.test",
+        backends=["dnspython", "wire", "nslookup"],
+        strict=True,
+        **_at(server),
     )
-    assert resolve("example.com", strict=True) == [IPv4Address("1.2.3.4")]
+    assert got == []
+
+
+def test_resolve_strict_still_returns_an_answer(server):
+    got = resolve("host.test", strict=True, backends="dnspython", **_at(server))
+    assert got == [IPv4Address("10.0.0.5")]
 
 
 def test_resolve_backends_accepts_single_string():
@@ -1006,23 +1040,11 @@ def test_resolve_backends_accepts_single_string():
     )
 
 
-def test_resolve_backends_restricts_and_orders_the_chain(monkeypatch):
-    calls = []
-
-    def _nslookup(query, rdtype, **kwargs):
-        calls.append("nslookup")
-        return [IPv4Address("5.5.5.5")]
-
-    def _dnspython_should_not_run(*a, **k):
-        calls.append("dnspython")
-        return [IPv4Address("1.1.1.1")]
-
-    monkeypatch.setattr(_dns, "resolve_nslookup", _nslookup)
-    monkeypatch.setattr(_dns, "resolve_dnspython", _dnspython_should_not_run)
-    assert resolve("example.com", backends=["nslookup", "dnspython"]) == [
-        IPv4Address("5.5.5.5")
-    ]
-    assert calls == ["nslookup"]
+def test_resolve_backends_restricts_and_orders_the_chain(server, fake_program):
+    fake_program("nslookup", stdout=_NSLOOKUP_A_BIND)
+    got = resolve("host.test", backends=["nslookup", "dnspython"], **_at(server))
+    assert got == [IPv4Address("104.20.23.154"), IPv4Address("172.66.147.243")]
+    assert server.peers == [], "dnspython was asked after nslookup answered"
 
 
 def test_resolve_unknown_backend_name_raises_value_error():
@@ -1032,8 +1054,10 @@ def test_resolve_unknown_backend_name_raises_value_error():
 
 def test_resolve_raises_when_no_backend_can_serve_request(monkeypatch):
     """rdtype='mx' with backends=['system'] -- system can't do MX, nothing else to try."""
+    asked = _os_resolver(monkeypatch, [(_dns._socket.AF_INET, "1.2.3.4")])
     with pytest.raises(ValueError, match="no backend"):
         resolve("example.com", "mx", backends=["system"])
+    assert asked == []
 
 
 # --------------------------------------------------------------------------- #
@@ -1099,7 +1123,7 @@ def test_resolve_system_auto_rdtype_ptr(monkeypatch):
 
 def test_resolve_system_ptr_no_data_is_empty(monkeypatch):
     def fake_gethostbyaddr(query):
-        raise _dns._socket.herror("unknown host")
+        raise _dns._socket.herror(1, "unknown host")
 
     monkeypatch.setattr(_dns._socket, "gethostbyaddr", fake_gethostbyaddr)
     assert resolve_system("203.0.113.1", "ptr") == []

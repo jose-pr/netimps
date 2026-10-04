@@ -207,6 +207,27 @@ probe says so in its prefix.
   `.bat` or `.cmd` is refused. What each function reports for a missing or hung
   program is unchanged.
 
+- **A resolver that could not be asked is no longer an empty answer.**
+  `resolve_dnspython` raises `ResolutionTimeoutError` for a timeout and
+  `ResolutionError` for every server failing (a SERVFAIL, a refused port) or no
+  resolver configuration, where it returned `[]`; `resolve_system` raises
+  `ResolutionError` for a temporary failure (`EAI_AGAIN`, `EAI_FAIL`, `herror`
+  2 and 3) and keeps `[]` for `EAI_NONAME` and no data; `resolve_nslookup`
+  reads the reason after the colon of "can't find <name>: <reason>", so
+  Windows' `No response from server` (exit 0) and `SERVFAIL` raise while
+  `Non-existent domain` stays `[]`. `resolve()` without `strict` still answers
+  `[]`, `strict=True` now raises where it could not before, and `cache=` stores
+  nothing for an outage. `resolve_dnspython` no longer turns every exception
+  into `ValueError("invalid DNS query")`: only a malformed name or an unknown
+  record type is a `ValueError`, an `OSError` is a `ResolutionError`, and
+  anything else propagates; dnspython's missing-configuration error no longer
+  escapes `resolve()` raw.
+
+- **A missing `dns` extra is named.** `resolve_dnspython` raises
+  `ResolutionError` saying `pip install "netimps[dns]"`, and `resolve()` raises
+  the same for a request only `dnspython` could serve (a record type the other
+  backends do not read) instead of returning `[]`. New `has_dns() -> bool`.
+
 ### Removed
 
 - **`get_ip(address, ipv6=None)`.** `Host(x).ip()` is the same
