@@ -19,6 +19,7 @@ unprivileged on every supported platform.
 from __future__ import annotations
 
 import errno as _errno
+from functools import partial as _partial
 import socket as _socket
 import struct as _struct
 from subprocess import DEVNULL as _DEVNULL
@@ -607,8 +608,8 @@ def iter_interfaces(
 
 def get_interface(
     query: InterfaceQuery,
-    strict: bool = True,
     *,
+    strict: bool = True,
     cache: "Union[bool, float]" = False,
 ) -> "Optional[Interface]":
     """Return the first local interface matching ``query``, or ``None``.
@@ -709,6 +710,7 @@ def _make_host_route(address: "IPAddress") -> "Optional[IPInterface]":
 def get_source_ip(
     dst: "HostLike" = _DEFAULT_PROBE,
     port: int = 80,
+    *,
     ipv6: "Optional[bool]" = None,
 ) -> "Optional[IPAddress]":
     """Return the local address the kernel would use to reach ``dst``.
@@ -763,7 +765,7 @@ _IPV6_HEADER = 40
 _UDP_HEADER = 8
 
 
-def max_udp_payload(mtu: int, ipv6: bool = False) -> int:
+def max_udp_payload(mtu: int, *, ipv6: bool = False) -> int:
     """The largest UDP payload that fits *mtu* without fragmenting.
 
     ``mtu - ip_header - 8``, where the IP header is 20 for v4 and 40 for v6::
@@ -801,7 +803,7 @@ def max_udp_payload(mtu: int, ipv6: bool = False) -> int:
     return max(0, mtu - overhead)
 
 
-def get_free_port(src: str = "127.0.0.1", family: int = _socket.AF_INET) -> int:
+def get_free_port(src: str = "127.0.0.1", *, family: int = _socket.AF_INET) -> int:
     """Return a port number that was free a moment ago.
 
     Binds port 0, reads back whatever the OS assigned, and closes::
@@ -843,7 +845,7 @@ def _connect_timeout(timeout: "Optional[float]") -> "Optional[float]":
     return max(float(timeout), _MIN_TIMEOUT)
 
 
-def tcp_check(dst: "HostLike", port: int, timeout: "Optional[float]" = 3.0) -> bool:
+def tcp_check(dst: "HostLike", port: int, *, timeout: "Optional[float]" = 3.0) -> bool:
     """Return True if a TCP connection to ``dst``:``port`` is accepted.
 
     The honest reachability test, and what you almost always want instead of
@@ -919,6 +921,7 @@ def tcp_check(dst: "HostLike", port: int, timeout: "Optional[float]" = 3.0) -> b
 def wait_for_port(
     dst: "HostLike",
     port: int,
+    *,
     timeout: float = 30.0,
     interval: float = 0.1,
     connect_timeout: Optional[float] = None,
@@ -998,6 +1001,7 @@ class Route:
     def __init__(
         self,
         dst: "Union[str, IPAddress]",
+        *,
         src: "Optional[IPAddress]" = None,
         gateway: "Optional[IPAddress]" = None,
         interface_index: int = 0,
@@ -1016,8 +1020,15 @@ class Route:
         restore, which assigns the slots back onto a blank instance.
         """
         return (
-            Route,
-            (self.dst, self.src, self.gateway, self.interface_index, self._on_link),
+            _partial(
+                Route,
+                self.dst,
+                src=self.src,
+                gateway=self.gateway,
+                interface_index=self.interface_index,
+                on_link=self._on_link,
+            ),
+            (),
         )
 
     def __setattr__(self, name: str, value: object) -> None:
@@ -1380,7 +1391,9 @@ def _if_index(name: str) -> int:
         return 0
 
 
-def get_route(dst: "HostLike" = _DEFAULT_PROBE, ipv6: "Optional[bool]" = None) -> Route:
+def get_route(
+    dst: "HostLike" = _DEFAULT_PROBE, *, ipv6: "Optional[bool]" = None
+) -> Route:
     """Return how traffic to ``dst`` leaves this host.
 
     Reports the src address and the **first hop** -- the gateway a packet is
@@ -1551,6 +1564,7 @@ def _hop_count_traceroute(
 
 def count_hops(
     dst: "HostLike",
+    *,
     max_hops: int = 30,
     timeout: float = 1.0,
     allow_traceroute: bool = True,
@@ -1786,7 +1800,7 @@ def _pmtu_for(family: int, sockaddr: Any) -> "Optional[int]":
 
 
 def get_pmtu(
-    dst: "HostLike", port: int = 80, ipv6: "Optional[bool]" = None
+    dst: "HostLike", port: int = 80, *, ipv6: "Optional[bool]" = None
 ) -> "Optional[int]":
     """Return the path MTU the kernel has **already learned**, or ``None``.
 
@@ -1838,6 +1852,7 @@ def get_pmtu(
 
 def discover_mtu(
     dst: "HostLike",
+    *,
     low: int = 576,
     high: int = 9000,
     timeout: float = 1.0,
@@ -1911,7 +1926,7 @@ def discover_mtu(
     port = _coerce_port(port)
     if not probe:
         # Explicitly asked for the kernel's cached answer only.
-        return get_pmtu(dst, port, ping_kwargs.get("ipv6"))
+        return get_pmtu(dst, port, ipv6=ping_kwargs.get("ipv6"))
 
     method = (method or "icmp").lower()
     if method not in ("icmp", "udp", "tcp"):
@@ -1922,7 +1937,7 @@ def discover_mtu(
         # silently becomes many packets and measures nothing. The negotiated
         # MSS is the closest true equivalent -- derive the MTU from it rather
         # than refusing to answer.
-        mss = get_tcp_mss(dst, port, timeout)
+        mss = get_tcp_mss(dst, port, timeout=timeout)
         if mss is None:
             return None
         # Header size differs by family: IPv4 is 20 + 20 TCP, IPv6 is 40 + 20.
@@ -2056,7 +2071,7 @@ def _discover_mtu_udp(
     return low
 
 
-def get_tcp_mss(dst: "HostLike", port: int, timeout: float = 3.0) -> "Optional[int]":
+def get_tcp_mss(dst: "HostLike", port: int, *, timeout: float = 3.0) -> "Optional[int]":
     """Return the TCP maximum segment size negotiated with ``dst``, or ``None``.
 
     The TCP counterpart to an MTU: the largest payload a single segment may
@@ -2187,6 +2202,7 @@ def disable_connreset(sock: "_socket.socket") -> bool:
 
 def set_buffer_size(
     sock: "_socket.socket",
+    *,
     receive: "Optional[int]" = None,
     send: "Optional[int]" = None,
 ) -> "Tuple[int, int]":

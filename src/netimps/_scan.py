@@ -160,7 +160,7 @@ def _probe(addresses: "Sequence[str]", port: int, timeout: float) -> bool:
     resolver -- see :func:`_probe_addresses`.
     """
 
-    return any(tcp_check(address, port, timeout) for address in addresses)
+    return any(tcp_check(address, port, timeout=timeout) for address in addresses)
 
 
 def _resolve_ports(ports) -> "Sequence[int]":
@@ -229,6 +229,7 @@ def _port_number(value, get_default_port) -> "Optional[int]":
 def scan_ports(
     host: "HostLike",
     ports: "PortsLike" = "common",
+    *,
     timeout: float = 1.0,
     workers: int = _DEFAULT_WORKERS,
 ) -> "List[int]":
@@ -289,6 +290,7 @@ def scan_ports(
 def scan_hosts(
     network: "IPNetworkLike",
     port: "Optional[Union[int, str]]" = None,
+    *,
     ports: "Optional[PortsLike]" = None,
     timeout: float = 1.0,
     workers: int = _DEFAULT_WORKERS,

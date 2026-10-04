@@ -104,6 +104,7 @@ def _auto_rdtype(query: str) -> str:
 def resolve_dnspython(
     query: "HostLike",
     rdtype: Optional[str] = None,
+    *,
     ns: Optional[Union[str, List[str]]] = None,
     timeout: Optional[float] = 5.0,
     port: int = 53,
@@ -324,6 +325,7 @@ def _resolve_system_once(
 def resolve_system(
     query: "HostLike",
     rdtype: "Optional[Union[str, Tuple[str, ...]]]" = None,
+    *,
     timeout: Optional[float] = 5.0,
     search: Union[bool, List[str]] = True,
 ) -> "List[Any]":
@@ -681,6 +683,7 @@ def _resolve_nslookup_once(
 def resolve_nslookup(
     query: "HostLike",
     rdtype: Optional[str] = None,
+    *,
     ns: Optional[str] = None,
     timeout: Optional[float] = 5.0,
     search: Union[bool, List[str]] = True,
@@ -790,6 +793,7 @@ def resolve_nslookup(
 def resolve(
     query: "HostLike",
     rdtype: "Optional[Union[str, Tuple[str, ...]]]" = None,
+    *,
     ns: Optional[Union[str, List[str]]] = None,
     timeout: Optional[float] = 5.0,
     port: int = 53,
@@ -1280,6 +1284,7 @@ def _question(query: str, rdtype: "Optional[str]") -> "Tuple[str, str]":
 def resolve_wire(
     query: "HostLike",
     rdtype: Optional[str] = None,
+    *,
     ns: Optional[Union[str, List[str]]] = None,
     timeout: Optional[float] = 5.0,
     port: int = 53,
@@ -1411,6 +1416,7 @@ def _urllib_fetch(
 def resolve_doh(
     query: "HostLike",
     url: str,
+    *,
     rdtype: Optional[str] = None,
     timeout: Optional[float] = 5.0,
     fetch: "Optional[Callable[[str, bytes, dict, Optional[float]], bytes]]" = None,

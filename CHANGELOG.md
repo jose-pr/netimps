@@ -99,6 +99,23 @@ probe says so in its prefix.
   `host.ip(refresh=True)`, which asks again and replaces the memo as before.
   A call that passes any other option neither reads nor writes it. `FQDN.resolve()` no
   longer returns DNS records: call `netimps.resolve(name, rdtype)` for those.
+- **Options are keyword-only.** 37 callables keep only their operands as
+  positional parameters, and every option after them must be named:
+  `ping("h", 3)` is now `ping("h", tries=3)`. Parameter names, order and
+  defaults are unchanged. Positional parameters kept:
+  none for `get_interfaces`; one for `Backoff`, `Route`, `UDPEndpoint`,
+  `count_hops`, `discover_mtu`, `get_free_port`, `get_interface`, `get_route`,
+  `iter_addresses`, `max_udp_payload`, `patch_socket_module`, `ping`,
+  `set_buffer_size` and `split_host`; two for `Interface` (`name`, `index`),
+  `PingResult` (`ok`, `dst`), `backoff_delays`, `get_pmtu`, `get_source_ip`,
+  `get_tcp_mss`, `join_group`, `leave_group`, `multicast_socket`,
+  `register_port`, `resolve`, `resolve_dnspython`, `resolve_doh`,
+  `resolve_nslookup`, `resolve_system`, `resolve_wire`, `retry`, `scan_hosts`,
+  `scan_ports`, `tcp_check`, `try_parse` and `wait_for_port`. `recvmsg`,
+  `sendmsg`, `CMSG_LEN`, `CMSG_SPACE`, `Datagram` and `SocketOption` keep their
+  shapes. `parse`, `try_parse` and `is_valid` name `strict` (the network
+  builders' option) instead of an untyped `**kwargs`; `try_parse(value, type,
+  default)` is now `try_parse(value, type, default=default)`.
 - **`MACAddress.try_parse` and `FQDN.try_parse` take text only.** They answer
   `None` (or the new `default=`) for text that does not parse, and raise
   `TypeError` for anything that is not a `str` -- `MACAddress.try_parse(None)`,

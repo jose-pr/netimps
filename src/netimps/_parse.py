@@ -13,6 +13,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
+    Dict,
     Mapping,
     Optional,
     TypeVar,
@@ -107,56 +108,100 @@ if TYPE_CHECKING:
     # these overloads to quiet the checker: that trades self-check noise for a
     # real loss of precision at every call site.
     @overload  # type: ignore[no-overload-impl]
-    def parse(value: object, type: TypeForm[_T], **kwargs: Any) -> _T: ...
+    def parse(
+        value: object,
+        type: TypeForm[_T],
+        *,
+        strict: Optional[bool] = ...,
+        **options: object,
+    ) -> _T: ...
 
     @overload
-    def parse(value: object, type: Callable[..., _T], **kwargs: Any) -> _T: ...
+    def parse(
+        value: object,
+        type: Callable[..., _T],
+        *,
+        strict: Optional[bool] = ...,
+        **options: object,
+    ) -> _T: ...
 
     @overload
-    def parse(value: object, **kwargs: Any) -> IPAddress: ...
+    def parse(value: object) -> IPAddress: ...
 
     @overload  # type: ignore[no-overload-impl]
     def try_parse(
-        value: object, type: TypeForm[_T], default: None = ..., **kwargs: Any
+        value: object,
+        type: TypeForm[_T],
+        *,
+        default: None = ...,
+        strict: Optional[bool] = ...,
+        **options: object,
     ) -> Optional[_T]: ...
 
     @overload
     def try_parse(
-        value: object, type: TypeForm[_T], default: _D, **kwargs: Any
+        value: object,
+        type: TypeForm[_T],
+        *,
+        default: _D,
+        strict: Optional[bool] = ...,
+        **options: object,
     ) -> Union[_T, _D]: ...
 
     @overload
     def try_parse(
-        value: object, type: Callable[..., _T], default: None = ..., **kwargs: Any
+        value: object,
+        type: Callable[..., _T],
+        *,
+        default: None = ...,
+        strict: Optional[bool] = ...,
+        **options: object,
     ) -> Optional[_T]: ...
 
     @overload
     def try_parse(
-        value: object, type: Callable[..., _T], default: _D, **kwargs: Any
+        value: object,
+        type: Callable[..., _T],
+        *,
+        default: _D,
+        strict: Optional[bool] = ...,
+        **options: object,
     ) -> Union[_T, _D]: ...
 
     @overload
-    def try_parse(
-        value: object, *, default: None = ..., **kwargs: Any
-    ) -> Optional[IPAddress]: ...
+    def try_parse(value: object, *, default: None = ...) -> Optional[IPAddress]: ...
 
     @overload
-    def try_parse(
-        value: object, *, default: _D, **kwargs: Any
-    ) -> Union[IPAddress, _D]: ...
+    def try_parse(value: object, *, default: _D) -> Union[IPAddress, _D]: ...
 
     @overload  # type: ignore[no-overload-impl]
-    def is_valid(value: object, type: TypeForm[_T], **kwargs: Any) -> bool: ...
+    def is_valid(
+        value: object,
+        type: TypeForm[_T],
+        *,
+        strict: Optional[bool] = ...,
+        **options: object,
+    ) -> bool: ...
 
     @overload
-    def is_valid(value: object, type: Callable[..., _T], **kwargs: Any) -> bool: ...
+    def is_valid(
+        value: object,
+        type: Callable[..., _T],
+        *,
+        strict: Optional[bool] = ...,
+        **options: object,
+    ) -> bool: ...
 
     @overload
-    def is_valid(value: object, **kwargs: Any) -> bool: ...
+    def is_valid(value: object) -> bool: ...
 
 
 def parse(  # type: ignore[no-redef]  # the overloads above are the signature
-    value: object, type: "Any" = IPAddress, **kwargs
+    value: object,
+    type: "object" = IPAddress,
+    *,
+    strict: "Optional[bool]" = None,
+    **options: "object",
 ) -> "Any":
     """Build ``type`` from ``value``, raising on bad input.
 
@@ -179,8 +224,9 @@ def parse(  # type: ignore[no-redef]  # the overloads above are the signature
     ``IPv6Address``.
 
     Networks are parsed **non-strict** by default (unlike the stdlib), so a host
-    address with a prefix normalises to its network instead of raising. Extra
-    ``kwargs`` pass through to the underlying builder.
+    address with a prefix normalises to its network instead of raising.
+    ``strict`` is the network builders' option and is passed only when given;
+    any other keyword passes through to the underlying builder.
 
     Raises :class:`NetimpsValueError` (a :class:`ValueError`) on malformed input
     or a family mismatch -- including the ``ipaddress`` builders' own errors --
@@ -188,33 +234,37 @@ def parse(  # type: ignore[no-redef]  # the overloads above are the signature
     not one of the package's builders raises whatever it raises. Use
     :func:`try_parse` for the non-raising form.
     """
+    target: Any = type
+    kwargs: "Dict[str, Any]" = dict(options)
+    if strict is not None:
+        kwargs["strict"] = strict
     # Guarded: an unhashable ``type`` would make these lookups raise TypeError,
     # which try_parse would then swallow into `default` -- turning a caller bug
     # into a silent "invalid value". Fall through to the explicit checks below.
     try:
-        wanted = _CONCRETE.get(type)
-        builder = _BUILDER_TABLE.get(wanted if wanted is not None else type)
+        wanted = _CONCRETE.get(target)
+        builder = _BUILDER_TABLE.get(wanted if wanted is not None else target)
     except TypeError:
         wanted = builder = None
 
     if builder is None:
-        _check_parser(type)  # raises for anything unusable
+        _check_parser(target)  # raises for anything unusable
         # Text goes through the type's own ``parse``, so the spellings a type
         # accepts are defined in one place. Anything else (an ``int`` or
         # ``bytes`` MAC, a ``Host`` or ``FQDN`` already built) is the
         # constructor's, which ``parse`` deliberately does not take.
         if (
             isinstance(value, str)
-            and isinstance(type, _ClassType)
-            and issubclass(type, _TEXT_TYPES)
+            and isinstance(target, _ClassType)
+            and issubclass(target, _TEXT_TYPES)
         ):
-            return type.parse(value, **kwargs)
-        return type(value, **kwargs)
+            return target.parse(value, **kwargs)
+        return target(value, **kwargs)
 
-    options = dict(_BUILDER_DEFAULT_TABLE.get(builder, {}))
-    options.update(kwargs)
+    built = dict(_BUILDER_DEFAULT_TABLE.get(builder, {}))
+    built.update(kwargs)
     try:
-        result = builder(value, **options)
+        result = builder(value, **built)
     except NetimpsValueError:
         raise
     except ValueError as exc:
@@ -222,8 +272,8 @@ def parse(  # type: ignore[no-redef]  # the overloads above are the signature
         # `NetmaskValueError`) or a plain one; a caller catches one type.
         raise NetimpsValueError(str(exc)) from exc
 
-    if wanted is not None and not isinstance(result, type):
-        raise NetimpsValueError("%r is not a %s" % (value, type.__name__))
+    if wanted is not None and not isinstance(result, target):
+        raise NetimpsValueError("%r is not a %s" % (value, target.__name__))
     return result
 
 
@@ -234,9 +284,11 @@ _MISSING = object()
 
 def try_parse(  # type: ignore[no-redef]  # the overloads above are the signature
     value: object,
-    type: "Any" = IPAddress,
-    default: "Any" = None,
-    **kwargs,
+    type: "object" = IPAddress,
+    *,
+    default: "object" = None,
+    strict: "Optional[bool]" = None,
+    **options: "object",
 ) -> "Any":
     """Return ``type(value)``, or ``default`` if it rejects the input. Never raises.
 
@@ -278,17 +330,20 @@ def try_parse(  # type: ignore[no-redef]  # the overloads above are the signatur
     # Validate the type *before* the try, so the TypeError raised for an
     # unusable one is not swallowed as if the value had been rejected. Only the
     # parse itself is guarded.
-    _check_parser(type)
+    target: Any = type
+    _check_parser(target)
     try:
-        return parse(value, type, **kwargs)
+        return parse(value, target, strict=strict, **options)
     except (ValueError, TypeError):
         return default
 
 
 def is_valid(  # type: ignore[no-redef]  # the overloads above are the signature
     value: object,
-    type: "Any" = IPAddress,
-    **kwargs,
+    type: "object" = IPAddress,
+    *,
+    strict: "Optional[bool]" = None,
+    **options: "object",
 ) -> "bool":
     """Return ``True`` if ``value`` parses as ``type``. Never raises.
 
@@ -310,4 +365,8 @@ def is_valid(  # type: ignore[no-redef]  # the overloads above are the signature
        sentinel rather than testing ``try_parse(...) is not None``, which cannot
        tell "returned None" from "rejected the input".
     """
-    return try_parse(value, type, _MISSING, **kwargs) is not _MISSING
+    target: Any = type
+    return (
+        try_parse(value, target, default=_MISSING, strict=strict, **options)
+        is not _MISSING
+    )

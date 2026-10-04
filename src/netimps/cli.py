@@ -711,7 +711,7 @@ class Split(_Base):
 
     def __call__(self) -> "int | None":
         try:
-            host, port = split_host(self.value, self.default_port)
+            host, port = split_host(self.value, default_port=self.default_port)
         except ValueError as exc:
             _error("error: %s" % exc)
             return 2

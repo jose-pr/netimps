@@ -33,6 +33,15 @@ The package is consistent about what the first argument means:
 `dst`/`src` are abbreviated symmetrically, matching packet-header convention.
 A `dst` accepts a hostname; an `address` does not.
 
+**Options are keyword-only.** A function takes the thing it acts on (and, where
+the signature below shows it, one more operand) positionally; every other
+parameter must be named, so `ping("h", 3)` is a `TypeError` and
+`ping("h", tries=3)` is the call. The signature lines in this file show the `*`
+where the keyword-only options begin. Constructors follow the same rule
+(`Interface(name, index, *, mac=..., ...)`); `recvmsg`, `sendmsg`, `CMSG_LEN`
+and `CMSG_SPACE` keep the standard library's shapes, and the `Datagram` and
+`SocketOption` named tuples are positional by nature.
+
 **Every `dst`-typed parameter accepts `HostLike`** — a hostname string, an
 address string, an existing `IPv4Address`/`IPv6Address`, a `Host`, an `FQDN`,
 or an `IPv4Interface`/`IPv6Interface` (its `.ip` is used, dropping the `/prefix`,
@@ -103,12 +112,13 @@ they describe what goes in, not what to build.
 
 ## Parsing
 
-- **`parse(value, type=IPAddress, **kwargs)`** — build `type` from `value`,
+- **`parse(value, type=IPAddress, *, strict=None, **options)`** — build `type` from `value`,
   raising on bad input. `type` is a union alias, a concrete class, or any
-  callable. Extra `kwargs` pass to the underlying builder.
-- **`try_parse(value, type=IPAddress, default=None, **kwargs)`** — same, but
+  callable. `strict` is the network builders' option and is passed only when
+  given; other `options` pass to the underlying builder.
+- **`try_parse(value, type=IPAddress, *, default=None, strict=None, **options)`** — same, but
   returns `default` instead of raising.
-- **`is_valid(value, type=IPAddress, **kwargs)`** — same, returning `bool`.
+- **`is_valid(value, type=IPAddress, *, strict=None, **options)`** — same, returning `bool`.
 
 All three spell the second argument `type`, so it works positionally or by
 keyword. Key behaviours:
@@ -219,7 +229,7 @@ only in the case or separator they were parsed from are equal.
 
 ## Interface discovery
 
-**`get_interfaces(raw=False) -> List[Interface]`** — adapter names, MACs, MTU
+**`get_interfaces(*, raw=False, cache=False) -> List[Interface]`** — adapter names, MACs, MTU
 and **real prefix lengths**, via `ctypes` bindings to `getifaddrs(3)` (POSIX)
 and `GetAdaptersAddresses` (Windows). **No third-party dependency**; `ifaddr`
 is deliberately not used.
@@ -277,7 +287,7 @@ is deliberately not used.
 - `__eq__` compares name, index, MAC, addresses and MTU, and the hash covers
   exactly those; the loopback flag and `.raw` are deliberately outside both.
 
-**`iter_addresses(interfaces=None, family=None)`** — the flattened
+**`iter_addresses(interfaces=None, *, family=None)`** — the flattened
 `(interface, address)` view, yielded once per address rather than per adapter,
 for consumers that filter or act per address. The full `Interface` comes along,
 so nothing is lost. Pass an existing enumeration in a loop; it is a syscall.
@@ -339,7 +349,7 @@ so nothing is lost. Pass an existing enumeration in a loop; it is a syscall.
   address form is unspecified. A `%zone` is stripped first. **Never raises** —
   anything unparseable is simply not a wildcard, so it stays usable in a branch
   without a guard. Agrees with what `bind("")` treats as the wildcard.
-- **`split_host(text, default_port=None) -> (host, port)`** — split
+- **`split_host(text, *, default_port=None) -> (host, port)`** — split
   `host:port`, handling IPv6 brackets. **`"::1"` stays an address**, never host
   `"::"` port `1` — the mistake hand-rolled splitters make. Only a bracketed v6
   address may carry a port; brackets are stripped from the returned host and a
@@ -359,7 +369,7 @@ so nothing is lost. Pass an existing enumeration in a loop; it is a syscall.
 - **`get_default_scheme(port) -> str | None`** — the inverse, then
   `getservbyport`. An out-of-range `port` is `None` rather than an error: this
   is a table lookup, not a socket operation.
-- **`register_port(scheme, port, canonical=False)`** — extend or override.
+- **`register_port(scheme, port, *, canonical=False)`** — extend or override.
   Raises `ValueError` for an empty scheme or a port outside `0-65535` (the
   range is named in the message) and `TypeError` for a non-`int` port.
 
@@ -425,7 +435,7 @@ with an empty or over-long label, raised before anything is sent) and from
 and `resolve_doh` an unreadable *reply* is not raised as such: it becomes a
 `ResolutionError` whose `__cause__` is the `DNSDecodeError`.
 
-**`resolve(query, rdtype=None, ns=None, timeout=5.0, port=53, tcp=False, search=True, backends=None, strict=False, source=None)`**
+**`resolve(query, rdtype=None, *, ns=None, timeout=5.0, port=53, tcp=False, search=True, backends=None, strict=False, source=None)`**
 
 `query` accepts `HostLike` (a hostname string, an address string, an
 `IPv4Address`/`IPv6Address`, or an `IPv4Interface`/`IPv6Interface` -- its
@@ -500,7 +510,7 @@ calls instead of one, the last of which may spawn `nslookup`. Narrow
   without trying every backend — that's a caller bug, not a resolution
   outcome.
 
-**`resolve_dnspython(query, rdtype=None, ns=None, timeout=5.0, port=53, tcp=False, search=True, source=None)`**
+**`resolve_dnspython(query, rdtype=None, *, ns=None, timeout=5.0, port=53, tcp=False, search=True, source=None)`**
 
 The original backend: `dnspython`, structured records, every `rdtype`. Same
 `HostLike` `query` and auto-`rdtype` behavior as `resolve()`. A `"ptr"`
@@ -527,7 +537,7 @@ address itself -- the caller never constructs that name by hand.
   `resolve()`'s chain falls through to the next backend instead of erroring
   outright.
 
-**`resolve_system(query, rdtype=None, timeout=5.0, search=True)`**
+**`resolve_system(query, rdtype=None, *, timeout=5.0, search=True)`**
 
 The OS resolver, via `socket.getaddrinfo()`/`socket.gethostbyaddr()` — **hosts
 file, NSS (`nsswitch.conf`) and DNS, in the order the OS applies them**,
@@ -562,7 +572,7 @@ cannot see (its own DNS query bypasses all of that). Same `HostLike`
   lets `resolve()`'s chain reach `nslookup` on schedule. The reverse path used
   to ignore `timeout` outright: measured 4.6s against a 0.1s deadline.
 
-**`resolve_nslookup(query, rdtype=None, ns=None, timeout=5.0, search=True)`**
+**`resolve_nslookup(query, rdtype=None, *, ns=None, timeout=5.0, search=True)`**
 
 Shells out to the `nslookup` binary — a fallback for when neither Python-level
 path is usable. Address records only: `rdtype` must be `"a"`, `"aaaa"` or
@@ -597,7 +607,7 @@ path is usable. Address records only: `rdtype` must be `"a"`, `"aaaa"` or
   NXDOMAIN and stopped `resolve()`'s chain. A genuine "no such name" — exit 1
   *with* the marker text — is still `[]`.
 
-**`resolve_wire(query, rdtype=None, ns=None, timeout=5.0, port=53, tcp=False, search=True, source=None)`**
+**`resolve_wire(query, rdtype=None, *, ns=None, timeout=5.0, port=53, tcp=False, search=True, source=None)`**
 
 The DNS protocol itself, standard library only: one question over UDP to each
 nameserver in turn, asked again over TCP when the reply is truncated (TCP
@@ -619,7 +629,7 @@ native-value contract as the other backends.
 - NXDOMAIN and "no record of this type" are `[]`; no server answering (or only
   SERVFAIL/REFUSED) is `ResolutionError`.
 
-**`resolve_doh(query, url, rdtype=None, timeout=5.0, fetch=None)`**
+**`resolve_doh(query, url, *, rdtype=None, timeout=5.0, fetch=None)`**
 
 DNS over HTTPS (RFC 8484): the same DNS message POSTed to `url` as
 `application/dns-message`. **Not part of `resolve()`'s chain** -- a caller that
@@ -634,7 +644,7 @@ names a DoH endpoint wants that answer alone.
 
 ## Reachability
 
-**`ping(dst, tries=1, timeout=1.0, ipv6=None, src=None, size=None, ttl=None, dont_fragment=False, method="icmp", port=None) -> PingResult`**
+**`ping(dst, *, tries=1, timeout=1.0, ipv6=None, src=None, size=None, ttl=None, dont_fragment=False, method="icmp", port=None) -> PingResult`**
 
 `PingResult` is **truthy on success** and compares equal to `bool`, so
 `if ping(host):` and `== True` keep working, while carrying `.ok`, `.host`,
@@ -794,7 +804,7 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
 
   **Not on by default.** The report is sometimes wanted: a client talking to one
   peer learns the peer is gone. A server loop almost always wants it off.
-- **`set_buffer_size(sock, receive=None, send=None) -> (receive, send)`** — grow
+- **`set_buffer_size(sock, *, receive=None, send=None) -> (receive, send)`** — grow
   `SO_RCVBUF`/`SO_SNDBUF` and report what was **granted**, read back with
   `getsockopt` rather than echoed from the request. Default UDP buffers are small
   (64 KiB on Windows), so a burst of large datagrams overruns them and the tail
@@ -855,7 +865,7 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
   A **cached call returns the stored `Interface` objects in a fresh list.**
   An `Interface` cannot change after construction and `.ips` is a tuple, so
   one caller cannot corrupt another's view. Only `.raw`, a dict, is copied.
-- **`get_interface(query, strict=True) -> Interface | None`** — first matching
+- **`get_interface(query, *, strict=True, cache=False) -> Interface | None`** — first matching
   adapter in OS enumeration order. `query` accepts an `Interface`, exact
   `IPAddress`, exact `.ip` from an `IPInterface`, an `IPNetwork` containing at
   least one assigned address, or an exact `MACAddress`. Address-like strings,
@@ -883,7 +893,7 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
   adapter **name** on BSD. A zone naming an adapter that does not hold the
   address is a miss, the honest answer to a contradiction. That form is what
   `getsockname()` and `getaddrinfo` hand back, so it can be passed straight in.
-- **`get_source_ip(dst="8.8.8.8", port=80, ipv6=None) -> IPAddress | None`** —
+- **`get_source_ip(dst="8.8.8.8", port=80, *, ipv6=None) -> IPAddress | None`** —
   which local address the kernel would use to reach `dst`. `dst` accepts
   `HostLike`. **Sends no packets** — `connect()` on a UDP socket only
   consults the routing table. The answer depends on `dst`: with a VPN up, a
@@ -893,11 +903,11 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
   contains a colon**, so every name was probed as IPv4 and a v6-only one
   answered `None`. The returned address carries **no `%zone`** — the zone
   identifies the adapter, and `get_interface` is the way back to it.
-- **`get_free_port(src="127.0.0.1", family=AF_INET) -> int`** — bind port 0 and
+- **`get_free_port(src="127.0.0.1", *, family=AF_INET) -> int`** — bind port 0 and
   read it back. **Inherently racy** — the port frees the instant it returns; if
   you can, bind port 0 in the server itself instead. `SO_REUSEADDR` is
   deliberately *not* set (it would hand back a `TIME_WAIT` port).
-- **`tcp_check(dst, port, timeout=3.0) -> bool`** — the honest reachability
+- **`tcp_check(dst, port, *, timeout=3.0) -> bool`** — the honest reachability
   test. Proves the handshake completed, not that the service is healthy; a
   filtered port is indistinguishable from a closed one.
 
@@ -922,7 +932,7 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
 
 ## Routing, hops and MTU
 
-- **`get_route(dst="8.8.8.8", ipv6=None) -> Route`** — `.dst`, `.src`,
+- **`get_route(dst="8.8.8.8", *, ipv6=None) -> Route`** — `.dst`, `.src`,
   `.gateway`, `.interface_index`, `.on_link`. **First hop only, deliberately**
   — that is available unprivileged everywhere, unlike the full path. Never
   raises for an unknown route; unknown pieces are `None`/`0`. A network as
@@ -953,7 +963,7 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
   > write any more, and that spelling was exactly the confusion. `Route` is
   > **hashable**, and `__eq__` compares `dst`, `src`, `gateway`,
   > `interface_index` and `on_link`.
-- **`count_hops(dst, max_hops=30, timeout=1.0, allow_traceroute=True, ipv6=None)`**
+- **`count_hops(dst, *, max_hops=30, timeout=1.0, allow_traceroute=True, ipv6=None)`**
   — uses raw-socket probes when permitted, otherwise drives the system
   `traceroute`/`tracert`, so it **works unprivileged**. Only the hop number and
   destination address are parsed, never localised prose.
@@ -963,7 +973,7 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
   IPv4-only lookup used before returned `None` for a v6 destination, read as
   "never answered" rather than "never asked". **`None` means "no answer", never
   "unreachable"** — firewalls routinely drop ICMP even for an elevated process.
-- **`discover_mtu(dst, low=576, high=9000, timeout=1.0, src=None, port=80, probe=True, method="icmp", **ping_kwargs)`**
+- **`discover_mtu(dst, *, low=576, high=9000, timeout=1.0, src=None, port=80, probe=True, method="icmp", **ping_kwargs)`**
   — **measures** the path MTU by binary-searching probes, so packets really
   traverse the path. Returns the MTU **including headers**, comparable with
   `Interface.mtu`.
@@ -986,14 +996,14 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
   the `udp` method reads only `ipv6=` from them. `size` and `dont_fragment` are
   what the search varies, so passing either raises `TypeError`. `probe=False`
   skips probing entirely and returns `get_pmtu` instead.
-- **`get_tcp_mss(dst, port, timeout=3.0) -> int | None`** — the negotiated TCP
+- **`get_tcp_mss(dst, port, *, timeout=3.0) -> int | None`** — the negotiated TCP
   maximum segment size. **Opens a real connection** to read it, then closes.
   MSS is normally the path MTU minus 40, so a reduced value signals a tunnel
   shrinking the path (measured: 1412 over a VPN on a 1500-MTU link, 32741 on
   loopback). `None` where `TCP_MAXSEG` is unavailable or the connection fails.
   This is what the two *kernels agreed*, not what a middlebox further along
   will pass.
-- **`get_pmtu(dst, port=80, ipv6=None) -> int | None`** — a **lookup**, not a
+- **`get_pmtu(dst, port=80, *, ipv6=None) -> int | None`** — a **lookup**, not a
   measurement: reads the path MTU the kernel has *already* learned, and sends
   nothing. `discover_mtu(..., probe=False)` is exactly this.
 
@@ -1031,8 +1041,8 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
 
 ## Scanning
 
-- **`scan_ports(host, ports="common", timeout=1.0, workers=100) -> List[int]`**
-- **`scan_hosts(network, port=None, ports=None, timeout=1.0, workers=100)`** —
+- **`scan_ports(host, ports="common", *, timeout=1.0, workers=100) -> List[int]`**
+- **`scan_hosts(network, port=None, *, ports=None, timeout=1.0, workers=100)`** —
   returns `[(address, [open_ports]), ...]` sorted by address, hosts with
   nothing open omitted.
 
@@ -1069,7 +1079,7 @@ accepts a scheme name too; passing both raises `ValueError`.
 
 ## Multicast
 
-- **`multicast_socket(group=None, port=0, interface=None, ttl=1, loop=True, bind=True, reuse=True, ipv6=None)`**
+- **`multicast_socket(group=None, port=0, *, interface=None, ttl=1, loop=True, bind=True, reuse=True, ipv6=None)`**
   — a UDP socket configured and joined in one call. `group` is a group address
   or a list of them; `group=None` gives a send-only socket.
   `ipv6=None` takes the family from `group`, which is what you want whenever
@@ -1086,7 +1096,7 @@ accepts a scheme name too; passing both raises `ValueError`.
   index there — the first non-loopback adapter carrying a link-local address.
   An explicit `interface=` always wins, on every platform; the fallback only
   covers the case where nobody chose and the kernel would not either.
-- **`join_group(sock, group, interface=None)`** / **`leave_group(...)`** —
+- **`join_group(sock, group, *, interface=None)`** / **`leave_group(...)`** —
   closing the socket drops membership too, so `leave_group` is only needed to
   leave while keeping the socket open.
 - **`is_multicast(address) -> bool`** — `224.0.0.0/4` or `ff00::/8`; never raises.
@@ -1279,7 +1289,7 @@ broadcast request, and DHCP must tell a broadcast DISCOVER from a unicast RENEW.
 - A `/31` or `/32` is skipped: it has no broadcast address distinct from its
   hosts, though `broadcast_address` still answers for one.
 
-**`max_udp_payload(mtu, ipv6=False)`** — the largest UDP payload that fits
+**`max_udp_payload(mtu, *, ipv6=False)`** — the largest UDP payload that fits
 without fragmenting: `mtu - ip_header - 8`, so `1472` for a 1500 MTU and `1452`
 for v6. Pair it with `Interface.mtu` to size a datagram to the interface it leaves
 by.
@@ -1321,7 +1331,7 @@ second cmsg.
 `hasattr(socket.socket, "recvmsg")`, which answers a different question once the
 patch below is installed.
 
-**`patch_socket_module(enable=True)`** → list of names changed.
+**`patch_socket_module(enable=True, *, iov_max=None)`** → list of names changed.
 **`is_socket_patched()`** → whether anything is installed right now.
 
 > **Installing this patch changes what *other* libraries infer.** It is additive
@@ -1433,7 +1443,7 @@ patch below is installed.
 
 ## UDP with arrival interface
 
-**`UDPEndpoint(sock, pktinfo=True)`** — wraps a bound UDP socket so each
+**`UDPEndpoint(sock, *, pktinfo=True)`** — wraps a bound UDP socket so each
 datagram reports which interface it arrived on. Essential for broadcast
 protocols, where a wildcard-bound server otherwise cannot tell which network a
 request came from.
@@ -1677,7 +1687,7 @@ wrapped socket expires, on every supported Python (before 3.10
 
 ## Retry
 
-**`retry(func, attempts=3, delay=0.5, multiplier=2.0, max_delay=30.0, jitter=0.1, retryable=(OSError,), on_retry=None)`**
+**`retry(func, attempts=3, *, delay=0.5, multiplier=2.0, max_delay=30.0, jitter=0.1, retryable=(OSError,), on_retry=None, jitter_seconds=None, symmetric=False)`**
 
 Calls `func()`, retrying transient failures with exponential backoff. Returns
 whatever `func` returns; if every attempt fails **the last exception is
@@ -1695,7 +1705,7 @@ re-raised unwrapped**, so the traceback still points at the real problem.
 - Synchronous — it blocks. For async, drive **`backoff_delays(...)`** from your
   own loop; it yields the same schedule, `attempts - 1` values.
 
-**`backoff_delays(attempts=3, delay=0.5, multiplier=2.0, max_delay=30.0, jitter=0.1, *, jitter_seconds=None, symmetric=False)`**
+**`backoff_delays(attempts=3, delay=0.5, *, multiplier=2.0, max_delay=30.0, jitter=0.1, jitter_seconds=None, symmetric=False)`**
 
 Two **opt-in symmetric modes** sit alongside the default, because a protocol's
 own specification can require what the default forbids — it only ever *shortens*
@@ -1725,7 +1735,7 @@ a delay, so neither DHCP standard can be expressed with it:
 > **No mode ever returns a negative delay**, and the default mode's hard ceiling
 > is unchanged.
 
-**`Backoff(delay=0.5, multiplier=2.0, max_delay=30.0, jitter=0.0, *, jitter_seconds=None, symmetric=False)`**
+**`Backoff(delay=0.5, *, multiplier=2.0, max_delay=30.0, jitter=0.0, jitter_seconds=None, symmetric=False)`**
 
 A **retransmission timer**: grows on loss, **resets on progress**. This is the
 shape `backoff_delays` cannot express, and the one every protocol client in this

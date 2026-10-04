@@ -46,6 +46,7 @@ only via ``get_interfaces(raw=True)`` -- see :class:`Interface.raw`.
 from __future__ import annotations
 
 import ctypes as _ctypes
+from functools import partial as _partial
 import ipaddress as _ipaddress
 import socket as _socket
 import struct as _struct
@@ -168,6 +169,7 @@ class Interface:
         self,
         name: str,
         index: int = 0,
+        *,
         mac: "Optional[MACAddress]" = None,
         ips: "Optional[Iterable[_IPInterface]]" = None,
         mtu: "Optional[int]" = None,
@@ -189,16 +191,17 @@ class Interface:
         restore, which assigns the slots back onto a blank instance.
         """
         return (
-            Interface,
-            (
+            _partial(
+                Interface,
                 self.name,
                 self.index,
-                self.mac,
-                self.ips,
-                self.mtu,
-                self.raw,
-                self._is_loopback,
+                mac=self.mac,
+                ips=self.ips,
+                mtu=self.mtu,
+                raw=self.raw,
+                is_loopback=self._is_loopback,
             ),
+            (),
         )
 
     def __setattr__(self, name: str, value: object) -> None:
@@ -1086,8 +1089,8 @@ def _copy_interfaces(found: "List[Interface]") -> "List[Interface]":
 
 
 def get_interfaces(
-    raw: bool = False,
     *,
+    raw: bool = False,
     cache: "Union[bool, float]" = False,
 ) -> "List[Interface]":
     """Return this host's network interfaces.
@@ -1254,6 +1257,7 @@ def is_broadcast(
 
 def iter_addresses(
     interfaces: "Optional[Iterable[Interface]]" = None,
+    *,
     family: "Optional[int]" = None,
 ) -> "Iterator[Tuple[Interface, _IPInterface]]":
     """Yield ``(interface, address)`` once per address, not once per adapter.

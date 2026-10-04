@@ -149,7 +149,7 @@ def _service_name(port: int) -> "Optional[str]":
     return None
 
 
-def register_port(scheme: str, port: int, canonical: bool = False) -> None:
+def register_port(scheme: str, port: int, *, canonical: bool = False) -> None:
     """Register (or override) a scheme's conventional port.
 
     The built-in table covers the common cases, but every consumer eventually

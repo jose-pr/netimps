@@ -167,7 +167,7 @@ def _membership_request(group: str, interface: "InterfaceLike", ipv6: bool):
 
 
 def join_group(
-    sock: "_socket.socket", group: str, interface: "InterfaceLike" = None
+    sock: "_socket.socket", group: str, *, interface: "InterfaceLike" = None
 ) -> None:
     """Join ``group`` on ``sock``, optionally via a specific ``interface``.
 
@@ -196,7 +196,7 @@ def join_group(
 
 
 def leave_group(
-    sock: "_socket.socket", group: str, interface: "InterfaceLike" = None
+    sock: "_socket.socket", group: str, *, interface: "InterfaceLike" = None
 ) -> None:
     """Leave ``group`` on ``sock``. The inverse of :func:`join_group`.
 
@@ -217,6 +217,7 @@ def leave_group(
 def multicast_socket(
     group: "Union[str, List[str], None]" = None,
     port: int = 0,
+    *,
     interface: "InterfaceLike" = None,
     ttl: int = 1,
     loop: bool = True,
@@ -342,7 +343,7 @@ def multicast_socket(
             sock.bind(("", port))
 
         for entry in groups:
-            join_group(sock, entry, interface)
+            join_group(sock, entry, interface=interface)
     except BaseException:
         sock.close()
         raise

@@ -137,22 +137,17 @@ assert_type(try_parse("::1", IPv6Network), Optional[IPv6Network])
 assert_type(try_parse("02:00:00:00:00:01", MACAddress), Optional[MACAddress])
 assert_type(try_parse("value", Built, enabled=True), Optional[Built])
 
-# An explicit ``default`` widens the result instead of replacing it, whether it
-# is passed positionally or by keyword.
+# An explicit ``default`` widens the result instead of replacing it.
 assert_type(
     try_parse("bad", IPAddress, default=fallback),
     Union[IPAddress, Fallback],
 )
 assert_type(
-    try_parse("bad", IPAddress, fallback),
-    Union[IPAddress, Fallback],
-)
-assert_type(
-    try_parse("bad", IPv4Address, fallback),
+    try_parse("bad", IPv4Address, default=fallback),
     Union[IPv4Address, Fallback],
 )
 assert_type(
-    try_parse("bad", MACAddress, fallback),
+    try_parse("bad", MACAddress, default=fallback),
     Union[MACAddress, Fallback],
 )
 assert_type(

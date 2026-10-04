@@ -387,7 +387,7 @@ def is_socket_patched() -> bool:
 
 
 def patch_socket_module(
-    enable: bool = True, iov_max: "Optional[int]" = None
+    enable: bool = True, *, iov_max: "Optional[int]" = None
 ) -> "List[str]":
     """Add ``recvmsg``/``sendmsg``/``CMSG_LEN``/``CMSG_SPACE`` where missing.
 

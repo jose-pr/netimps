@@ -549,8 +549,8 @@ def test_normalize_host_splits(text, expected):
 
 
 def test_normalize_host_uses_the_default_port():
-    assert netimps.split_host("example.com", 443) == ("example.com", 443)
-    assert netimps.split_host("example.com:80", 443) == ("example.com", 80)
+    assert netimps.split_host("example.com", default_port=443) == ("example.com", 443)
+    assert netimps.split_host("example.com:80", default_port=443) == ("example.com", 80)
 
 
 @pytest.mark.parametrize(

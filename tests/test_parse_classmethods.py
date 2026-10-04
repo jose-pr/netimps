@@ -113,7 +113,7 @@ def test_the_generic_try_parse_still_answers_the_default_for_any_object():
     for kind in (MACAddress, FQDN):
         assert netimps.try_parse(None, kind) is None
         assert netimps.try_parse(3.5, kind) is None
-        assert netimps.try_parse([], kind, "fallback") == "fallback"
+        assert netimps.try_parse([], kind, default="fallback") == "fallback"
         assert netimps.is_valid(None, kind) is False
 
 

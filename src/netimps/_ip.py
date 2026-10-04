@@ -275,6 +275,7 @@ def subtract(
 
 def split_host(
     text: "Union[str, IPAddress, IPInterface, Any]",
+    *,
     default_port: Optional[int] = None,
 ) -> "Tuple[str, Optional[int]]":
     """Split ``"host:port"`` into ``(host, port)``, handling IPv6 brackets.

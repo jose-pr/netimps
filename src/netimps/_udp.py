@@ -436,7 +436,7 @@ class UDPEndpoint:
         "_notifier",
     )
 
-    def __init__(self, sock: "_socket.socket", pktinfo: bool = True) -> None:
+    def __init__(self, sock: "_socket.socket", *, pktinfo: bool = True) -> None:
         self.socket = sock
         self.has_pktinfo = False
         self.has_src_pinning = False

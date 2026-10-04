@@ -9,6 +9,7 @@ Re-exported from :mod:`netimps`.
 
 from __future__ import annotations
 
+from functools import partial as _partial
 import math as _math
 import os as _os
 import re as _re
@@ -58,6 +59,7 @@ class PingResult:
         self,
         ok: bool,
         host: "HostLike",
+        *,
         rtt_ms: Optional[float] = None,
         ttl: Optional[int] = None,
         src: "Optional[IPAddress]" = None,
@@ -77,8 +79,16 @@ class PingResult:
         restore, which assigns the slots back onto a blank instance.
         """
         return (
-            PingResult,
-            (self.ok, self.host, self.rtt_ms, self.ttl, self.src, self.attempts),
+            _partial(
+                PingResult,
+                self.ok,
+                self.host,
+                rtt_ms=self.rtt_ms,
+                ttl=self.ttl,
+                src=self.src,
+                attempts=self.attempts,
+            ),
+            (),
         )
 
     def __setattr__(self, name: str, value: object) -> None:
@@ -512,6 +522,7 @@ def _ping_command(
 
 def ping(
     dst: "HostLike",
+    *,
     tries: int = 1,
     timeout: float = 1.0,
     ipv6: Optional[bool] = None,
