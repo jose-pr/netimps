@@ -1488,7 +1488,8 @@ everywhere else. **Both address families, and both directions.**
 **`recvmsg(sock, bufsize, ancbufsize=0, flags=0)`** → `(data, ancdata,
 msg_flags, address)`, exactly CPython's 4-tuple. `ancdata` is a list of
 `(cmsg_level, cmsg_type, cmsg_data)`. `address` is `(host, port)` for `AF_INET`
-and `(host, port, flowinfo, scope_id)` for `AF_INET6`.
+and `(host, port, flowinfo, scope_id)` for `AF_INET6`. On a **stream** socket
+it reads with `WSARecv` on Windows: no ancillary data, address `None`.
 
 **`sendmsg(sock, buffers, ancdata=(), flags=0, address=None)`** → bytes sent.
 `buffers` is a *sequence* of bytes-like objects, not a bare `bytes` (passing
@@ -1505,8 +1506,12 @@ second cmsg.
 `hasattr(socket.socket, "recvmsg")`, which answers a different question once the
 patch below is installed.
 
-**`patch_socket_module(enable=True, *, iov_max=None)`** → list of names changed.
-**`is_socket_patched()`** → whether anything is installed right now.
+**`patch_socket_module(enable=True, *, iov_max=None)`** → list of names changed;
+`ValueError` for an `iov_max` below 1 **before** anything is installed.
+**`is_socket_patched()`** → whether anything is installed right now. Importing
+the package a second time in one process (a reloader, a test runner) is
+harmless: the second copy treats the first copy's installed functions as its
+own, never as the platform's.
 
 > **Installing this patch changes what *other* libraries infer.** It is additive
 > in *names* and therefore not additive in *behaviour*: code that tests

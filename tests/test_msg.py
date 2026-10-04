@@ -1030,3 +1030,94 @@ def test_a_value_that_cannot_be_read_stops_the_import(env, named):
     returncode, out, err = _fresh("import netimps", env)
     assert returncode != 0
     assert "ValueError" in err and named in err
+
+
+# --------------------------------------------------------------------------- #
+# A second import, a failed patch call, a stream socket                        #
+# --------------------------------------------------------------------------- #
+
+
+def test_a_second_import_of_the_package_decodes_and_reports_the_same():
+    """A reloader or a test runner imports the package again in one process.
+
+    The second copy captured the first copy's installed `recvmsg` as the native
+    one, so on Windows it reshaped the control data twice: the destination came
+    out as `1.0.0.0` with index 0, and `is_socket_patched()` said False while
+    the method was still on `socket.socket`.
+    """
+    code = (
+        "import sys, socket\n"
+        "import netimps\n"
+        "def look():\n"
+        "    r = netimps.bind('127.0.0.1', 0)\n"
+        "    ep = netimps.UDPEndpoint(r)\n"
+        "    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n"
+        "    s.sendto(b'x', r.getsockname())\n"
+        "    r.settimeout(5)\n"
+        "    d = ep.recv()\n"
+        "    ep.close(); s.close()\n"
+        "    return str(d.destination), d.interface_index != 0, "
+        "netimps.is_socket_patched(), hasattr(socket.socket, 'recvmsg')\n"
+        "first = look()\n"
+        "for n in [n for n in sys.modules if n == 'netimps' or n.startswith('netimps.')]:\n"
+        "    del sys.modules[n]\n"
+        "import netimps\n"
+        "print(first == look(), first)\n"
+    )
+    rc, out, err = _fresh(code)
+    assert rc == 0, err
+    assert out.startswith("True"), out
+
+
+def test_a_second_import_can_remove_what_the_first_installed():
+    if not IS_WINDOWS:
+        pytest.skip("POSIX installs nothing, so there is nothing to adopt")
+    code = (
+        "import sys, socket\n"
+        "import netimps\n"
+        "for n in [n for n in sys.modules if n == 'netimps' or n.startswith('netimps.')]:\n"
+        "    del sys.modules[n]\n"
+        "import netimps\n"
+        "assert netimps.is_socket_patched()\n"
+        "netimps.patch_socket_module(False)\n"
+        "print(hasattr(socket.socket, 'recvmsg'), netimps.is_socket_patched())\n"
+    )
+    rc, out, err = _fresh(code)
+    assert rc == 0, err
+    assert out == "False False"
+
+
+def test_a_patch_call_that_raises_changes_nothing():
+    """`iov_max=0` raised `ValueError` after the patch was already installed."""
+    was_patched = netimps.is_socket_patched()
+    netimps.patch_socket_module(False)
+    try:
+        with pytest.raises(ValueError):
+            netimps.patch_socket_module(True, iov_max=0)
+        assert netimps.is_socket_patched() is False
+        assert not (IS_WINDOWS and hasattr(socket.socket, "recvmsg"))
+    finally:
+        if was_patched:
+            netimps.patch_socket_module()
+
+
+def test_recvmsg_works_on_a_stream_socket():
+    """`WSARecvMsg` refuses a stream socket with `WSAEINVAL`; the send side
+    already picks `WSASend` for one, and the receive side picks `WSARecv`."""
+    a, b = socket.socketpair()
+    try:
+        a.settimeout(5)
+        b.sendall(b"hello")
+        data, ancdata, flags, _address = netimps.recvmsg(a, 100, 64)
+        assert data == b"hello"
+        assert ancdata == []
+        assert flags == 0
+        a.settimeout(0.3)
+        with pytest.raises(socket.timeout):
+            netimps.recvmsg(a, 100)
+        b.close()
+        a.settimeout(5)
+        assert netimps.recvmsg(a, 100)[0] == b""
+    finally:
+        a.close()
+        b.close()

@@ -263,6 +263,16 @@ probe says so in its prefix.
 
 ### Fixed
 
+- **The `socket` patch survives a second import of the package, a bad call and
+  a stream socket.** A second copy of the package in one process captured the
+  first copy's installed `recvmsg` as the native one, so on Windows
+  `UDPEndpoint.recv().destination` came out as `1.0.0.0` with index 0 and
+  `is_socket_patched()` said `False` while the method was installed; it now
+  recognises and takes over what the first installed.
+  `patch_socket_module(iov_max=0)` raised after installing the patch; it
+  validates first. `recvmsg` on a Windows stream socket failed with
+  `WinError 10022`; it uses `WSARecv`.
+
 - **IPv4 on FreeBSD reports the arrival and pins the source.** `UDPEndpoint`
   there set `IP_PKTINFO`, which FreeBSD lacks, so `has_pktinfo` was false and
   `destination` was `None`, while `has_src_pinning` was true and

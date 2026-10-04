@@ -190,6 +190,19 @@ _ws2.WSASend.argtypes = [
 ]
 _ws2.WSASend.restype = _ctypes.c_int
 
+#: ``WSARecv``, the receive that works on a **stream** socket; ``WSARecvMsg``
+#: answers ``WSAEINVAL`` for one, as ``WSASendMsg`` does.
+_ws2.WSARecv.argtypes = [
+    _SOCKET,
+    _ctypes.POINTER(_WSABUF),
+    _ULONG,
+    _ctypes.POINTER(_DWORD),
+    _ctypes.POINTER(_DWORD),
+    _ctypes.c_void_p,
+    _ctypes.c_void_p,
+]
+_ws2.WSARecv.restype = _ctypes.c_int
+
 _ws2.WSASendMsg.argtypes = [
     _SOCKET,
     _ctypes.POINTER(_WSAMSG),
@@ -490,6 +503,8 @@ def recvmsg(
     """
     if bufsize < 0:
         raise ValueError("negative buffer size")
+    if sock.type == _socket.SOCK_STREAM:
+        return _recv_stream(sock, bufsize, int(flags))
     fn = _wsarecvmsg_for(sock)
     family = sock.family
 
@@ -553,6 +568,42 @@ def recvmsg(
 
     msg_flags = int(message.dwFlags) | truncated
     return payload, ancdata, msg_flags, _decode_sockaddr(name.raw, family)
+
+
+def _recv_stream(
+    sock: "Any", bufsize: int, flags: int
+) -> "Tuple[bytes, List[Tuple[int, int, bytes]], int, Optional[Any]]":
+    """:func:`recvmsg` on a stream socket: ``WSARecv``, with no ancillary data.
+
+    A stream carries none on Windows, and its peer is not reported per read, so
+    the list is empty and the address ``None``, as for a connected stream on
+    POSIX.
+    """
+    data = _ctypes.create_string_buffer(bufsize) if bufsize else None
+    buffers = (_WSABUF * 1)()
+    buffers[0].len = bufsize
+    buffers[0].buf = _ctypes.cast(data, _ctypes.c_void_p) if data else None
+    received = _DWORD()
+    deadline = _deadline(sock)
+    while True:
+        _wait(sock, deadline)
+        c_flags = _DWORD(flags)
+        rc = _ws2.WSARecv(
+            sock.fileno(),
+            buffers,
+            1,
+            _ctypes.byref(received),
+            _ctypes.byref(c_flags),
+            None,
+            None,
+        )
+        if rc == 0:
+            break
+        code = _ws2.WSAGetLastError()
+        if code != _WSAEWOULDBLOCK or deadline is None:
+            raise _ctypes.WinError(code)  # type: ignore[attr-defined]
+    payload = data.raw[: received.value] if data else b""
+    return payload, [], int(c_flags.value), None
 
 
 def sendmsg(

@@ -54,7 +54,17 @@ import os as _os
 import socket as _socket
 import struct as _struct
 import sys as _sys
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+    TypeVar,
+)
 
 __all__ = [
     "recvmsg",
@@ -68,15 +78,42 @@ __all__ = [
 
 _IS_WINDOWS = _sys.platform == "win32"
 
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+_MARK = "_netimps_installed"
+
+
+def _mark(function: _F) -> _F:
+    """Tag *function* as one this package installs into another module.
+
+    A second copy of the package in the same process (a reloader, a test
+    runner) finds the first copy's installed functions on :mod:`socket` and
+    :mod:`os`; the tag is how it tells them from the platform's own.
+    """
+    setattr(function, _MARK, True)
+    return function
+
+
+def _is_ours(candidate: "Any") -> bool:
+    return getattr(candidate, _MARK, False) is True
+
+
+def _native(candidate: "Any") -> "Any":
+    """*candidate* when the platform provides it, ``None`` when it is absent or
+    was installed by a copy of this package."""
+    return None if _is_ours(candidate) else candidate
+
+
 #: Captured **at import, before any patching**, which is what makes the
 #: delegation below safe: once :func:`patch_socket_module` has installed our
 #: function as ``socket.socket.recvmsg``, a ``hasattr`` check would find it and
 #: :func:`recvmsg` would call itself forever. Binding the native method up
-#: front removes the possibility rather than guarding against it.
-_NATIVE_RECVMSG = getattr(_socket.socket, "recvmsg", None)
-_NATIVE_SENDMSG = getattr(_socket.socket, "sendmsg", None)
-_NATIVE_CMSG_LEN = getattr(_socket, "CMSG_LEN", None)
-_NATIVE_CMSG_SPACE = getattr(_socket, "CMSG_SPACE", None)
+#: front removes the possibility rather than guarding against it. A function
+#: an earlier copy of this package installed is not native.
+_NATIVE_RECVMSG = _native(getattr(_socket.socket, "recvmsg", None))
+_NATIVE_SENDMSG = _native(getattr(_socket.socket, "sendmsg", None))
+_NATIVE_CMSG_LEN = _native(getattr(_socket, "CMSG_LEN", None))
+_NATIVE_CMSG_SPACE = _native(getattr(_socket, "CMSG_SPACE", None))
 
 
 def _load_winsock() -> "Any":
@@ -118,6 +155,7 @@ def has_recvmsg() -> bool:
     return _NATIVE_RECVMSG is not None or _winsock_module is not None
 
 
+@_mark
 def CMSG_LEN(length: int) -> int:
     """Bytes one cmsg of ``length`` payload occupies, header included.
 
@@ -131,6 +169,7 @@ def CMSG_LEN(length: int) -> int:
     return _unsupported("CMSG_LEN")
 
 
+@_mark
 def CMSG_SPACE(length: int) -> int:
     """Buffer space one cmsg of ``length`` payload needs, padding included.
 
@@ -325,6 +364,7 @@ _IOV_MAX = 1024
 _SYSCONF_VALUES = {"SC_IOV_MAX": _IOV_MAX}
 
 
+@_mark
 def _shim_sysconf(name: "Any") -> int:
     """Stand in for ``os.sysconf`` where the platform has none.
 
@@ -376,6 +416,13 @@ def _shim_sysconf(name: "Any") -> int:
 _installed: "Dict[str, Any]" = {}
 
 
+def _free(target: "Any", attribute: str) -> bool:
+    """Whether *attribute* of *target* may be installed over: absent, or put
+    there by a copy of this package. The platform's own is never replaced."""
+    existing = getattr(target, attribute, None)
+    return existing is None or _is_ours(existing)
+
+
 def is_socket_patched() -> bool:
     """Whether netimps has added anything to :mod:`socket` right now.
 
@@ -397,7 +444,8 @@ def patch_socket_module(
 
     Idempotent in both directions, and strictly additive: a name the platform
     already provides is never replaced, so on Linux and macOS this is a
-    verified no-op. ``enable=False`` removes exactly what was installed,
+    verified no-op. A name an earlier copy of this package installed is taken
+    over, so the second import of the package in a process owns the patch. ``enable=False`` removes exactly what was installed,
     leaving a natively-provided name alone.
 
     On a platform with no ``os.sysconf`` this also installs one -- see
@@ -423,6 +471,9 @@ def patch_socket_module(
     """
     changed: "List[str]" = []
 
+    if enable and iov_max is not None and iov_max < 1:
+        raise ValueError("iov_max must be at least 1, got %r" % (iov_max,))
+
     if not enable:
         # Reset the tunable too: leaving a previous call's iov_max in place
         # would make a later re-install silently inherit it.
@@ -446,7 +497,7 @@ def patch_socket_module(
         ("socket.sendmsg", _patched_sendmsg),
     ):
         attribute = name.split(".", 1)[1]
-        if name in _installed or hasattr(_socket.socket, attribute):
+        if name in _installed or not _free(_socket.socket, attribute):
             continue
         setattr(_socket.socket, attribute, value)
         _installed[name] = (_socket.socket, attribute)
@@ -458,18 +509,17 @@ def patch_socket_module(
     # removing them together is what keeps that coupling honest -- see
     # `_shim_sysconf`.
     if iov_max is not None:
-        if iov_max < 1:
-            raise ValueError("iov_max must be at least 1, got %r" % (iov_max,))
         _SYSCONF_VALUES["SC_IOV_MAX"] = int(iov_max)
         if "os.sysconf_names" in _installed:
             # Keep the advertised table in step with what sysconf answers.
             _os.sysconf_names.update(_SYSCONF_VALUES)  # type: ignore[attr-defined]
 
-    if "os.sysconf" not in _installed and not hasattr(_os, "sysconf"):
+    if "os.sysconf" not in _installed and _free(_os, "sysconf"):
+        earlier_copy = hasattr(_os, "sysconf")
         setattr(_os, "sysconf", _shim_sysconf)
         _installed["os.sysconf"] = (_os, "sysconf")
         changed.append("os.sysconf")
-        if not hasattr(_os, "sysconf_names"):
+        if earlier_copy or not hasattr(_os, "sysconf_names"):
             setattr(_os, "sysconf_names", dict(_SYSCONF_VALUES))
             _installed["os.sysconf_names"] = (_os, "sysconf_names")
             changed.append("os.sysconf_names")
@@ -481,7 +531,7 @@ def patch_socket_module(
         ("CMSG_LEN", CMSG_LEN),
         ("CMSG_SPACE", CMSG_SPACE),
     ):
-        if helper in _installed or hasattr(_socket, helper):
+        if helper in _installed or not _free(_socket, helper):
             continue
         setattr(_socket, helper, function)
         _installed[helper] = (_socket, helper)
@@ -490,6 +540,7 @@ def patch_socket_module(
     return changed
 
 
+@_mark
 def _patched_recvmsg(
     self: "Any",
     bufsize: int,
@@ -509,6 +560,7 @@ def _patched_recvmsg(
     return data, _to_posix_shape(ancdata), msg_flags, address
 
 
+@_mark
 def _patched_sendmsg(
     self: "Any",
     buffers: "Sequence[bytes]",
