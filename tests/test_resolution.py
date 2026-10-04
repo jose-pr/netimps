@@ -157,7 +157,7 @@ def _spy(monkeypatch, answers=()):
         seen.append((query, rdtype, kwargs))
         return list(answers)
 
-    monkeypatch.setattr(netimps._dns, "resolve", resolve)
+    monkeypatch.setattr(netimps._dns._lookup, "resolve", resolve)
     return seen
 
 
@@ -204,7 +204,7 @@ def test_the_default_does_not_touch_the_other_backends(monkeypatch, fake_program
 
     nslookup = fake_program("nslookup")
     monkeypatch.setattr(dns.resolver.Resolver, "resolve", explode)
-    monkeypatch.setattr(netimps._dns, "_exchange", explode)
+    monkeypatch.setattr(netimps._dns._wire, "_exchange", explode)
     monkeypatch.setattr(socket, "getaddrinfo", _answer(DB))
     assert Host("db.internal").ip() == DB
     assert nslookup.calls == []

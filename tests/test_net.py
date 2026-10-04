@@ -127,13 +127,15 @@ def fake_dns(monkeypatch, fake_program):
     # about dnspython alone -- the fall-through itself is what the "backend
     # chain orchestration" section below exercises.
     def _no_such_name(*args, **kwargs):
-        raise _dns._socket.gaierror(_dns._socket.EAI_NONAME, "no such name")
+        raise _dns._system._socket.gaierror(
+            _dns._system._socket.EAI_NONAME, "no such name"
+        )
 
     def _no_such_address(*args, **kwargs):
-        raise _dns._socket.herror(1, "unknown host")
+        raise _dns._system._socket.herror(1, "unknown host")
 
-    monkeypatch.setattr(_dns._socket, "getaddrinfo", _no_such_name)
-    monkeypatch.setattr(_dns._socket, "gethostbyaddr", _no_such_address)
+    monkeypatch.setattr(_dns._system._socket, "getaddrinfo", _no_such_name)
+    monkeypatch.setattr(_dns._system._socket, "gethostbyaddr", _no_such_address)
     fake_program("nslookup", stderr=b"** server can't find x: NXDOMAIN\n", returncode=1)
     _FakeResolver.result = None
     _FakeResolver.error = None
@@ -186,8 +188,8 @@ def test_resolve_dnspython_returns_empty_list_for_an_answer_of_no_record(fake_dn
 @pytest.mark.parametrize(
     "exc,expected",
     [
-        (_NoNameservers, _dns.ResolutionError),
-        (_LifetimeTimeout, _dns.ResolutionTimeoutError),
+        (_NoNameservers, netimps.ResolutionError),
+        (_LifetimeTimeout, netimps.ResolutionTimeoutError),
     ],
 )
 def test_resolve_dnspython_raises_when_the_resolver_could_not_be_asked(
@@ -296,7 +298,7 @@ def _fake_getaddrinfo(records):
                 type,
                 0,
                 "",
-                (addr, 0) if fam == _dns._socket.AF_INET else (addr, 0, 0, 0),
+                (addr, 0) if fam == _dns._system._socket.AF_INET else (addr, 0, 0, 0),
             )
             for fam, addr in records
         ]
@@ -306,18 +308,18 @@ def _fake_getaddrinfo(records):
 
 def test_resolve_system_returns_native_address_objects(monkeypatch):
     monkeypatch.setattr(
-        _dns._socket,
+        _dns._system._socket,
         "getaddrinfo",
-        _fake_getaddrinfo([(_dns._socket.AF_INET, "93.184.216.34")]),
+        _fake_getaddrinfo([(_dns._system._socket.AF_INET, "93.184.216.34")]),
     )
     assert resolve_system("example.com") == [IPv4Address("93.184.216.34")]
 
 
 def test_resolve_system_aaaa(monkeypatch):
     monkeypatch.setattr(
-        _dns._socket,
+        _dns._system._socket,
         "getaddrinfo",
-        _fake_getaddrinfo([(_dns._socket.AF_INET6, "2606:2800::1")]),
+        _fake_getaddrinfo([(_dns._system._socket.AF_INET6, "2606:2800::1")]),
     )
     assert resolve_system("example.com", "aaaa") == [IPv6Address("2606:2800::1")]
 
@@ -325,12 +327,12 @@ def test_resolve_system_aaaa(monkeypatch):
 def test_resolve_system_dedupes_addresses(monkeypatch):
     """getaddrinfo can list the same address once per socket type (SOCK_STREAM/DGRAM/RAW)."""
     monkeypatch.setattr(
-        _dns._socket,
+        _dns._system._socket,
         "getaddrinfo",
         _fake_getaddrinfo(
             [
-                (_dns._socket.AF_INET, "1.2.3.4"),
-                (_dns._socket.AF_INET, "1.2.3.4"),
+                (_dns._system._socket.AF_INET, "1.2.3.4"),
+                (_dns._system._socket.AF_INET, "1.2.3.4"),
             ]
         ),
     )
@@ -339,11 +341,11 @@ def test_resolve_system_dedupes_addresses(monkeypatch):
 
 def test_resolve_system_empty_on_lookup_failure(monkeypatch):
     def _raise(*a, **k):
-        raise _dns._socket.gaierror(
-            _dns._socket.EAI_NONAME, "nodename nor servname provided"
+        raise _dns._system._socket.gaierror(
+            _dns._system._socket.EAI_NONAME, "nodename nor servname provided"
         )
 
-    monkeypatch.setattr(_dns._socket, "getaddrinfo", _raise)
+    monkeypatch.setattr(_dns._system._socket, "getaddrinfo", _raise)
     assert resolve_system("does-not-exist.invalid") == []
 
 
@@ -362,7 +364,7 @@ def hung_getaddrinfo(monkeypatch):
         released.wait(30.0)
         return []
 
-    monkeypatch.setattr(_dns._socket, "getaddrinfo", _hang)
+    monkeypatch.setattr(_dns._system._socket, "getaddrinfo", _hang)
     try:
         yield
     finally:
@@ -381,7 +383,7 @@ def test_resolve_system_timeout_bounds_wall_time(hung_getaddrinfo):
     import time
 
     start = time.monotonic()
-    with pytest.raises(_dns.ResolutionError, match="timed out"):
+    with pytest.raises(netimps.ResolutionError, match="timed out"):
         resolve_system("slow.example.invalid", timeout=0.1)
     elapsed = time.monotonic() - start
     assert elapsed < 1.0, "waited %.2fs for a lookup capped at 0.1s" % elapsed
@@ -392,7 +394,7 @@ def test_resolve_system_search_list_timeout_is_per_candidate(hung_getaddrinfo):
     import time
 
     start = time.monotonic()
-    with pytest.raises(_dns.ResolutionError, match="timed out"):
+    with pytest.raises(netimps.ResolutionError, match="timed out"):
         resolve_system("host", timeout=0.1, search=["a.example", "b.example"])
     assert time.monotonic() - start < 2.0
 
@@ -431,10 +433,10 @@ def test_resolve_system_ptr_timeout_bounds_wall_time(monkeypatch):
         released.wait(30.0)
         return ("never.example.invalid", [], [query])
 
-    monkeypatch.setattr(_dns._socket, "gethostbyaddr", _hang)
+    monkeypatch.setattr(_dns._system._socket, "gethostbyaddr", _hang)
     try:
         start = time.monotonic()
-        with pytest.raises(_dns.ResolutionError, match="timed out"):
+        with pytest.raises(netimps.ResolutionError, match="timed out"):
             resolve_system("192.0.2.77", "ptr", timeout=0.1)
         elapsed = time.monotonic() - start
     finally:
@@ -444,7 +446,7 @@ def test_resolve_system_ptr_timeout_bounds_wall_time(monkeypatch):
 
 def test_resolve_system_rejects_non_address_rdtype():
     """system has no MX/TXT/etc equivalent -- this is a caller bug, not a lookup outcome."""
-    with pytest.raises(_dns.ResolutionError):
+    with pytest.raises(netimps.ResolutionError):
         resolve_system("example.com", "mx")
 
 
@@ -453,9 +455,9 @@ def test_resolve_system_search_true_leaves_query_unqualified(monkeypatch):
 
     def _impl(host, port, family=0, type=0, proto=0, flags=0):
         captured["host"] = host
-        return [(_dns._socket.AF_INET, type, 0, "", ("1.2.3.4", 0))]
+        return [(_dns._system._socket.AF_INET, type, 0, "", ("1.2.3.4", 0))]
 
-    monkeypatch.setattr(_dns._socket, "getaddrinfo", _impl)
+    monkeypatch.setattr(_dns._system._socket, "getaddrinfo", _impl)
     resolve_system("host")
     assert captured["host"] == "host"
 
@@ -466,9 +468,9 @@ def test_resolve_system_search_false_qualifies_with_trailing_dot(monkeypatch):
 
     def _impl(host, port, family=0, type=0, proto=0, flags=0):
         captured["host"] = host
-        return [(_dns._socket.AF_INET, type, 0, "", ("1.2.3.4", 0))]
+        return [(_dns._system._socket.AF_INET, type, 0, "", ("1.2.3.4", 0))]
 
-    monkeypatch.setattr(_dns._socket, "getaddrinfo", _impl)
+    monkeypatch.setattr(_dns._system._socket, "getaddrinfo", _impl)
     resolve_system("host", search=False)
     assert captured["host"] == "host."
 
@@ -478,9 +480,9 @@ def test_resolve_system_search_false_does_not_double_qualify_an_fqdn(monkeypatch
 
     def _impl(host, port, family=0, type=0, proto=0, flags=0):
         captured["host"] = host
-        return [(_dns._socket.AF_INET, type, 0, "", ("1.2.3.4", 0))]
+        return [(_dns._system._socket.AF_INET, type, 0, "", ("1.2.3.4", 0))]
 
-    monkeypatch.setattr(_dns._socket, "getaddrinfo", _impl)
+    monkeypatch.setattr(_dns._system._socket, "getaddrinfo", _impl)
     resolve_system("host.example.com.", search=False)
     assert captured["host"] == "host.example.com."
 
@@ -491,12 +493,12 @@ def test_resolve_system_search_list_tries_candidates_in_order(monkeypatch):
     def _impl(host, port, family=0, type=0, proto=0, flags=0):
         calls.append(host)
         if host == "host.eng.example.com":
-            return [(_dns._socket.AF_INET, type, 0, "", ("1.2.3.4", 0))]
-        raise _dns._socket.gaierror(
-            _dns._socket.EAI_NONAME, "nodename nor servname provided"
+            return [(_dns._system._socket.AF_INET, type, 0, "", ("1.2.3.4", 0))]
+        raise _dns._system._socket.gaierror(
+            _dns._system._socket.EAI_NONAME, "nodename nor servname provided"
         )
 
-    monkeypatch.setattr(_dns._socket, "getaddrinfo", _impl)
+    monkeypatch.setattr(_dns._system._socket, "getaddrinfo", _impl)
     result = resolve_system("host", search=["eng.example.com", "example.com"])
     assert result == [IPv4Address("1.2.3.4")]
     assert calls == ["host", "host.eng.example.com"]
@@ -507,11 +509,11 @@ def test_resolve_system_search_list_ignores_empty_entries(monkeypatch):
 
     def _impl(host, port, family=0, type=0, proto=0, flags=0):
         calls.append(host)
-        raise _dns._socket.gaierror(
-            _dns._socket.EAI_NONAME, "nodename nor servname provided"
+        raise _dns._system._socket.gaierror(
+            _dns._system._socket.EAI_NONAME, "nodename nor servname provided"
         )
 
-    monkeypatch.setattr(_dns._socket, "getaddrinfo", _impl)
+    monkeypatch.setattr(_dns._system._socket, "getaddrinfo", _impl)
     resolve_system("host", search=["", ".", "example.com"])
     assert calls == ["host", "host.example.com"]
 
@@ -521,9 +523,9 @@ def test_resolve_system_search_list_ignored_for_already_qualified_query(monkeypa
 
     def _impl(host, port, family=0, type=0, proto=0, flags=0):
         calls.append(host)
-        return [(_dns._socket.AF_INET, type, 0, "", ("1.2.3.4", 0))]
+        return [(_dns._system._socket.AF_INET, type, 0, "", ("1.2.3.4", 0))]
 
-    monkeypatch.setattr(_dns._socket, "getaddrinfo", _impl)
+    monkeypatch.setattr(_dns._system._socket, "getaddrinfo", _impl)
     resolve_system("host.internal.", search=["example.com"])
     assert calls == ["host.internal."]
 
@@ -683,7 +685,7 @@ def test_resolve_nslookup_nonzero_exit_without_a_marker_is_not_an_answer(
         stderr=b";; connection timed out; no servers could be reached\n",
         returncode=1,
     )
-    with pytest.raises(_dns.ResolutionError, match="exited 1"):
+    with pytest.raises(netimps.ResolutionError, match="exited 1"):
         resolve_nslookup("example.com", search=False)
 
 
@@ -702,19 +704,19 @@ def test_resolve_nslookup_nxdomain_exit_code_is_still_an_empty_answer(
 def test_resolve_nslookup_missing_binary_raises_resolution_error(tmp_path, monkeypatch):
     """No nslookup on PATH is a ResolutionError naming the program, not a crash."""
     monkeypatch.setenv("PATH", str(tmp_path))
-    with pytest.raises(_dns.ResolutionError, match="nslookup"):
+    with pytest.raises(netimps.ResolutionError, match="nslookup"):
         resolve_nslookup("example.com")
 
 
 def test_resolve_nslookup_deadline_raises_resolution_timeout(fake_program):
     """A hung nslookup is killed and reported as the deadline, not as 'unavailable'."""
     fake_program("nslookup", hang=True)
-    with pytest.raises(_dns.ResolutionTimeoutError):
+    with pytest.raises(netimps.ResolutionTimeoutError):
         resolve_nslookup("example.com", timeout=1.0, search=False)
 
 
 def test_resolve_nslookup_rejects_unsupported_rdtype():
-    with pytest.raises(_dns.ResolutionError):
+    with pytest.raises(netimps.ResolutionError):
         resolve_nslookup("example.com", "mx")
 
 
@@ -745,7 +747,9 @@ def test_resolve_nslookup_search_true_tries_search_domains_in_order(
         returncode=[1, 0],
     )
     monkeypatch.setattr(
-        _dns, "_system_search_domains", lambda: ["eng.example.com", "example.com"]
+        _dns._common,
+        "_system_search_domains",
+        lambda: ["eng.example.com", "example.com"],
     )
     result = resolve_nslookup("host")
     assert result == [IPv4Address("104.20.23.154"), IPv4Address("172.66.147.243")]
@@ -755,7 +759,7 @@ def test_resolve_nslookup_search_true_tries_search_domains_in_order(
 def test_resolve_nslookup_search_list_overrides_system_list(fake_program, monkeypatch):
     fake = fake_program("nslookup", stderr=_NSLOOKUP_NXDOMAIN, returncode=1)
     monkeypatch.setattr(
-        _dns, "_system_search_domains", lambda: ["should-not-be-used.com"]
+        _dns._common, "_system_search_domains", lambda: ["should-not-be-used.com"]
     )
     resolve_nslookup("host", search=["only-this.example.com"])
     assert [call[1] for call in fake.calls] == ["host", "host.only-this.example.com"]
@@ -774,7 +778,7 @@ def test_resolve_nslookup_search_ignores_empty_domain_entries(fake_program):
 
 def test_resolve_nslookup_search_ignored_for_ptr(fake_program, monkeypatch):
     fake = fake_program("nslookup", stdout=_NSLOOKUP_PTR)
-    monkeypatch.setattr(_dns, "_system_search_domains", lambda: ["example.com"])
+    monkeypatch.setattr(_dns._common, "_system_search_domains", lambda: ["example.com"])
     resolve_nslookup("8.8.8.8", "ptr")
     assert [call[1] for call in fake.calls] == ["8.8.8.8"]
 
@@ -783,7 +787,7 @@ def test_resolve_nslookup_search_ignored_for_already_qualified_query(
     fake_program, monkeypatch
 ):
     fake = fake_program("nslookup", stdout=_NSLOOKUP_A_BIND)
-    monkeypatch.setattr(_dns, "_system_search_domains", lambda: ["example.com"])
+    monkeypatch.setattr(_dns._common, "_system_search_domains", lambda: ["example.com"])
     resolve_nslookup("host.internal.")
     assert [call[1] for call in fake.calls] == ["host.internal."]
 
@@ -799,7 +803,7 @@ def test_system_search_domains_falls_back_to_empty_without_dnspython(monkeypatch
         return real_import(name, *a, **k)
 
     monkeypatch.setattr(builtins, "__import__", _blocked_import)
-    assert _dns._system_search_domains() == []
+    assert _dns._common._system_search_domains() == []
 
 
 # --------------------------------------------------------------------------- #
@@ -822,7 +826,7 @@ def _os_resolver(monkeypatch, records=(), error=None):
             raise error
         return answer(host, *args, **kwargs)
 
-    monkeypatch.setattr(_dns._socket, "getaddrinfo", getaddrinfo)
+    monkeypatch.setattr(_dns._system._socket, "getaddrinfo", getaddrinfo)
     return asked
 
 
@@ -851,7 +855,7 @@ def _without_dnspython(monkeypatch):
 def test_resolve_chain_falls_through_when_a_backend_is_unavailable(monkeypatch):
     """dnspython absent -> the OS resolver is tried next."""
     _without_dnspython(monkeypatch)
-    _os_resolver(monkeypatch, [(_dns._socket.AF_INET, "9.9.9.9")])
+    _os_resolver(monkeypatch, [(_dns._system._socket.AF_INET, "9.9.9.9")])
     assert resolve("example.com") == [IPv4Address("9.9.9.9")]
 
 
@@ -935,21 +939,21 @@ def test_resolve_chain_falls_through_when_nslookup_cannot_reach_a_server(
         stderr=b";; connection timed out; no servers could be reached\n",
         returncode=1,
     )
-    _os_resolver(monkeypatch, [(_dns._socket.AF_INET, "1.2.3.4")])
+    _os_resolver(monkeypatch, [(_dns._system._socket.AF_INET, "1.2.3.4")])
     assert resolve("example.com", backends=["nslookup", "system"]) == [
         IPv4Address("1.2.3.4")
     ]
 
 
 def test_resolve_chain_skips_system_for_non_address_rdtype(server, monkeypatch):
-    asked = _os_resolver(monkeypatch, [(_dns._socket.AF_INET, "1.2.3.4")])
+    asked = _os_resolver(monkeypatch, [(_dns._system._socket.AF_INET, "1.2.3.4")])
     got = resolve("mail.test", "mx", backends=["system", "dnspython"], **_at(server))
     assert got == ["10 mx.mail.test"]
     assert asked == []
 
 
 def test_resolve_chain_skips_system_when_ns_given(server, monkeypatch):
-    asked = _os_resolver(monkeypatch, [(_dns._socket.AF_INET, "1.2.3.4")])
+    asked = _os_resolver(monkeypatch, [(_dns._system._socket.AF_INET, "1.2.3.4")])
     got = resolve("host.test", backends=["system", "dnspython"], **_at(server))
     assert got == [IPv4Address("10.0.0.5")]
     assert asked == []
@@ -962,7 +966,7 @@ def test_resolve_chain_skips_system_for_an_explicit_port_or_tcp(monkeypatch, opt
     The docstring already said `ns=`/`port=` excluded it; the code checked
     `ns` alone, so `port=5353` was quietly answered by whatever port 53 said.
     """
-    asked = _os_resolver(monkeypatch, [(_dns._socket.AF_INET, "1.2.3.4")])
+    asked = _os_resolver(monkeypatch, [(_dns._system._socket.AF_INET, "1.2.3.4")])
     with pytest.raises(ValueError, match="no backend"):
         resolve("example.com", backends="system", **option)
     assert asked == []
@@ -971,7 +975,7 @@ def test_resolve_chain_skips_system_for_an_explicit_port_or_tcp(monkeypatch, opt
 def test_resolution_error_is_part_of_the_public_surface():
     """Three public functions document raising it, so catching it must not
     mean importing the private module the repo's own rules forbid."""
-    assert netimps.ResolutionError is _dns.ResolutionError
+    assert netimps.ResolutionError is netimps._exceptions.ResolutionError
     assert "ResolutionError" in netimps.__all__
 
 
@@ -1009,7 +1013,7 @@ def test_resolve_strict_raises_the_last_error_when_no_backend_could_ask(
 ):
     """strict=True is how a caller tells an outage apart from a dead name."""
     _, options = _every_backend_fails(server, fake_program)
-    with pytest.raises(_dns.ResolutionError, match="No response from server"):
+    with pytest.raises(netimps.ResolutionError, match="No response from server"):
         resolve("silent.test", strict=True, **options)
 
 
@@ -1057,7 +1061,7 @@ def test_resolve_unknown_backend_name_raises_value_error():
 
 def test_resolve_raises_when_no_backend_can_serve_request(monkeypatch):
     """rdtype='mx' with backends=['system'] -- system can't do MX, nothing else to try."""
-    asked = _os_resolver(monkeypatch, [(_dns._socket.AF_INET, "1.2.3.4")])
+    asked = _os_resolver(monkeypatch, [(_dns._system._socket.AF_INET, "1.2.3.4")])
     with pytest.raises(ValueError, match="no backend"):
         resolve("example.com", "mx", backends=["system"])
     assert asked == []
@@ -1120,15 +1124,15 @@ def test_resolve_system_auto_rdtype_ptr(monkeypatch):
     def fake_gethostbyaddr(query):
         return ("dns.google", [], ["8.8.8.8"])
 
-    monkeypatch.setattr(_dns._socket, "gethostbyaddr", fake_gethostbyaddr)
+    monkeypatch.setattr(_dns._system._socket, "gethostbyaddr", fake_gethostbyaddr)
     assert resolve_system("8.8.8.8") == ["dns.google"]
 
 
 def test_resolve_system_ptr_no_data_is_empty(monkeypatch):
     def fake_gethostbyaddr(query):
-        raise _dns._socket.herror(1, "unknown host")
+        raise _dns._system._socket.herror(1, "unknown host")
 
-    monkeypatch.setattr(_dns._socket, "gethostbyaddr", fake_gethostbyaddr)
+    monkeypatch.setattr(_dns._system._socket, "gethostbyaddr", fake_gethostbyaddr)
     assert resolve_system("203.0.113.1", "ptr") == []
 
 

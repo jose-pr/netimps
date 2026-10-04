@@ -104,7 +104,7 @@ def test_the_system_search_list_is_empty_without_resolver_configuration(monkeypa
         raise dns_resolver.NoResolverConfiguration("no resolv.conf")
 
     monkeypatch.setattr(dns_resolver.Resolver, "__init__", no_configuration)
-    assert _dns._system_search_domains() == []
+    assert _dns._common._system_search_domains() == []
 
 
 def test_dnspython_does_not_rewrite_a_programming_error(monkeypatch):
@@ -168,7 +168,7 @@ def test_a_record_type_only_dnspython_serves_raises_when_it_is_missing(no_dnspyt
 
 def test_an_address_lookup_falls_back_without_the_extra(no_dnspython, monkeypatch):
     monkeypatch.setattr(
-        _dns._socket,
+        _dns._system._socket,
         "getaddrinfo",
         lambda *a, **k: [(socket.AF_INET, 0, 0, "", ("10.0.0.5", 0))],
     )
@@ -187,14 +187,16 @@ def test_the_wire_backend_serves_a_record_type_without_the_extra(no_dnspython, s
 
 
 def test_the_system_backend_answers_no_such_name_with_empty(monkeypatch):
-    monkeypatch.setattr(_dns._socket, "getaddrinfo", gai_error(socket.EAI_NONAME))
+    monkeypatch.setattr(
+        _dns._system._socket, "getaddrinfo", gai_error(socket.EAI_NONAME)
+    )
     assert resolve_system("nothere.test", "a") == []
 
 
 @pytest.mark.parametrize("code", [getattr(socket, "EAI_AGAIN"), socket.EAI_FAIL])
 def test_the_system_backend_raises_for_a_temporary_failure(monkeypatch, code):
     """Measured on ec35558: ``[]`` for ``EAI_AGAIN``."""
-    monkeypatch.setattr(_dns._socket, "getaddrinfo", gai_error(code))
+    monkeypatch.setattr(_dns._system._socket, "getaddrinfo", gai_error(code))
     with pytest.raises(ResolutionError, match="scripted"):
         resolve_system("host.test", "a")
 
@@ -203,19 +205,21 @@ def test_a_reverse_lookup_tells_no_record_from_a_failure(monkeypatch):
     def host_not_found(address):
         raise socket.herror(1, "Unknown host")
 
-    monkeypatch.setattr(_dns._socket, "gethostbyaddr", host_not_found)
+    monkeypatch.setattr(_dns._system._socket, "gethostbyaddr", host_not_found)
     assert resolve_system("192.0.2.9", "ptr") == []
 
     def try_again(address):
         raise socket.herror(2, "Host name lookup failure")
 
-    monkeypatch.setattr(_dns._socket, "gethostbyaddr", try_again)
+    monkeypatch.setattr(_dns._system._socket, "gethostbyaddr", try_again)
     with pytest.raises(ResolutionError, match="Host name lookup failure"):
         resolve_system("192.0.2.9", "ptr")
 
 
 def test_strict_raises_for_a_system_outage_and_the_default_answers_empty(monkeypatch):
-    monkeypatch.setattr(_dns._socket, "getaddrinfo", gai_error(socket.EAI_AGAIN))
+    monkeypatch.setattr(
+        _dns._system._socket, "getaddrinfo", gai_error(socket.EAI_AGAIN)
+    )
     assert resolve("host.test", "a", backends="system", search=False) == []
     with pytest.raises(ResolutionError):
         resolve("host.test", "a", backends="system", search=False, strict=True)
@@ -228,7 +232,7 @@ def test_an_outage_is_not_cached(monkeypatch):
         calls.append(args)
         raise socket.gaierror(socket.EAI_AGAIN, "scripted")
 
-    monkeypatch.setattr(_dns._socket, "getaddrinfo", fail)
+    monkeypatch.setattr(_dns._system._socket, "getaddrinfo", fail)
     for _ in range(2):
         assert resolve("host.test", "a", backends="system", cache=True) == []
     assert len(calls) == 2, "the second lookup was answered from the cache"
@@ -241,7 +245,7 @@ def test_a_name_that_does_not_exist_is_still_cached(monkeypatch):
         calls.append(args)
         raise socket.gaierror(socket.EAI_NONAME, "scripted")
 
-    monkeypatch.setattr(_dns._socket, "getaddrinfo", missing)
+    monkeypatch.setattr(_dns._system._socket, "getaddrinfo", missing)
     for _ in range(2):
         assert resolve("host.test", "a", backends="system", cache=True) == []
     assert len(calls) == 1
@@ -383,7 +387,7 @@ def test_a_malformed_ns_is_the_same_value_error_on_every_backend(bad):
 
 @pytest.mark.parametrize("spelling", ["[::1]:5353", "[::1]", "::1", "127.0.0.1:5353"])
 def test_the_nameserver_parser_reads_every_documented_spelling(spelling):
-    ((host, port),) = _dns._nameservers([spelling], 53)
+    ((host, port),) = _dns._common._nameservers([spelling], 53)
     assert port == (5353 if spelling.endswith(":5353") else 53)
     assert ":" not in host or host == "::1"
 

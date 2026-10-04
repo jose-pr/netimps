@@ -103,7 +103,7 @@ def test_a_hung_system_lookup_raises_the_timeout_error(monkeypatch):
         released.wait(30.0)
         return []
 
-    monkeypatch.setattr(_dns._socket, "getaddrinfo", _hang)
+    monkeypatch.setattr(_dns._system._socket, "getaddrinfo", _hang)
     try:
         with pytest.raises(ResolutionTimeoutError):
             netimps.resolve_system("slow.example.invalid", timeout=0.05)

@@ -90,7 +90,16 @@ src/netimps/
 │   ├── _hops.py      # count_hops
 │   ├── _pmtu.py      # get_pmtu, get_tcp_mss, the don't-fragment option
 │   └── _mtu.py       # discover_mtu, max_udp_payload
-├── _dns.py        # private: resolve() chaining dnspython/system/nslookup backends
+├── _dns/          # private package: resolve() chaining the backends
+│   ├── _common.py    # deadline, record-type helpers, nameserver spellings, search_candidates
+│   ├── _dnspython.py # resolve_dnspython, has_dns
+│   ├── _system.py    # resolve_system and the bounded OS lookup
+│   ├── _nslookup.py  # resolve_nslookup and its output parser
+│   ├── _wire.py      # resolve_wire: the protocol over UDP/TCP
+│   ├── _doh.py       # resolve_doh
+│   ├── _cache.py     # the cache= answer cache
+│   ├── _chain.py     # resolve: the backend chain, deadline and cache
+│   └── _lookup.py    # lookup_ip, lookup_fqdn: the Host and FQDN adapters
 ├── _ping.py       # private: ping() over the platform binary
 ├── _proc.py       # private: the one runner every platform binary goes through
 ├── _retry.py      # private: bounded retry with exponential backoff
@@ -278,7 +287,7 @@ map:
 - **`ThreadPoolExecutor.__exit__` calls `shutdown(wait=True)`,** and its atexit
   hook joins worker threads too. It is therefore the wrong tool for bounding a
   blocking call: a daemon `threading.Thread` joined through a queue is what
-  `_dns._bounded_lookup` uses, and why. Every blocking resolver call goes
+  `_dns._system._bounded_lookup` uses, and why. Every blocking resolver call goes
   through it — the `ptr` branch called `gethostbyaddr` directly and was
   measured at 4.6s against a 0.1s deadline.
 - **Match a ping reply by address token, and remember hostnames are plural.**

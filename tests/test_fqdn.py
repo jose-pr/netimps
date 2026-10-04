@@ -511,7 +511,7 @@ def test_resolve_is_the_name_and_its_address(monkeypatch):
         seen.update(query=query, rdtype=rdtype, kwargs=kwargs)
         return [netimps.parse("192.0.2.7")]
 
-    monkeypatch.setattr(netimps._dns, "resolve", fake_resolve)
+    monkeypatch.setattr(netimps._dns._lookup, "resolve", fake_resolve)
     name = FQDN("www.example.com")
     result = name.resolve(ipv6=True, ns="192.0.2.53")
     assert result == (name, netimps.parse("192.0.2.7"))
@@ -526,7 +526,7 @@ def test_resolve_passes_the_fully_qualified_form_through(monkeypatch):
     survive the delegation rather than being normalised away."""
     seen = {}
     monkeypatch.setattr(
-        netimps._dns,
+        netimps._dns._lookup,
         "resolve",
         lambda query, *a, **kw: seen.setdefault("query", query) and [],
     )
@@ -550,10 +550,10 @@ def test_ping_is_a_pass_through(monkeypatch):
 def test_ip_returns_the_first_answer_or_none(monkeypatch):
     first, second = netimps.parse("192.0.2.1"), netimps.parse("192.0.2.2")
     monkeypatch.setattr(
-        netimps._dns, "resolve", lambda query, *a, **kw: [first, second]
+        netimps._dns._lookup, "resolve", lambda query, *a, **kw: [first, second]
     )
     assert FQDN("example.com").ip() == first
-    monkeypatch.setattr(netimps._dns, "resolve", lambda query, *a, **kw: [])
+    monkeypatch.setattr(netimps._dns._lookup, "resolve", lambda query, *a, **kw: [])
     assert FQDN("example.com").ip() is None
 
 
@@ -562,7 +562,7 @@ def test_ip_does_not_cache_unlike_host(monkeypatch):
     on it would be a lie about freshness."""
     calls = []
     monkeypatch.setattr(
-        netimps._dns,
+        netimps._dns._lookup,
         "resolve",
         lambda query, *a, **kw: calls.append(query) or [netimps.parse("192.0.2.1")],
     )

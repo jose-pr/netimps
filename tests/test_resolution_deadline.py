@@ -97,7 +97,7 @@ def hung_getaddrinfo(monkeypatch):
         released.wait(30.0)
         return []
 
-    monkeypatch.setattr(_dns._socket, "getaddrinfo", hang)
+    monkeypatch.setattr(_dns._system._socket, "getaddrinfo", hang)
     yield
     released.set()
 
@@ -134,7 +134,7 @@ def test_a_record_type_pair_shares_the_deadline(server):
 
 def test_the_deadline_does_not_outlive_the_call(server):
     resolve("host.test", ns="127.0.0.1:%d" % server.port, backends="wire", deadline=5)
-    assert _dns._DEADLINE.get() is None
+    assert _dns._common._DEADLINE.get() is None
     with pytest.raises(ResolutionError):
         resolve(
             "silent.test",
@@ -143,7 +143,7 @@ def test_the_deadline_does_not_outlive_the_call(server):
             deadline=0.3,
             strict=True,
         )
-    assert _dns._DEADLINE.get() is None
+    assert _dns._common._DEADLINE.get() is None
 
 
 def test_a_deadline_that_is_not_hit_changes_nothing(server):

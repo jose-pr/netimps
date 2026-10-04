@@ -273,7 +273,7 @@ def test_a_nameserver_port_out_of_range_is_a_value_error_before_a_socket(
     def no_socket(*args, **kwargs):
         raise AssertionError("a socket was created")
 
-    monkeypatch.setattr(_dns._socket, "socket", no_socket)
+    monkeypatch.setattr(_dns._wire._socket, "socket", no_socket)
     with pytest.raises(ValueError, match="port"):
         netimps.resolve_wire("host.test", ns=entry, timeout=0.3, search=False)
 
@@ -428,7 +428,7 @@ def test_the_query_string_stays_out_of_messages(endpoint):
 
 def test_a_shown_url_has_no_credentials_query_or_fragment():
     assert (
-        _dns._shown_url("https://u:p@h.example:8443/dns?token=S#f")
+        _dns._doh._shown_url("https://u:p@h.example:8443/dns?token=S#f")
         == "https://h.example:8443/dns"
     )
-    assert _dns._shown_url("https://[::1]/q?a=b") == "https://[::1]/q"
+    assert _dns._doh._shown_url("https://[::1]/q?a=b") == "https://[::1]/q"

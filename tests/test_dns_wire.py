@@ -156,12 +156,12 @@ def test_a_source_of_the_wrong_family_skips_the_server(server):
     ],
 )
 def test_nameserver_entries(entry, expected):
-    assert _dns._servers(entry, 53) == expected
+    assert _dns._wire._servers(entry, 53) == expected
 
 
 def test_a_nameserver_must_be_an_address():
     with pytest.raises(ValueError):
-        _dns._servers("dns.example", 53)
+        _dns._wire._servers("dns.example", 53)
 
 
 # --------------------------------------------------------------------------- #
@@ -184,9 +184,9 @@ def test_source_excludes_the_backends_that_cannot_choose_it():
 def test_wire_is_skipped_without_ns_or_source(monkeypatch):
     """No nameserver was named, so nothing is sent: the OS resolver answers."""
     sent = []
-    monkeypatch.setattr(_dns, "_exchange", lambda *a, **k: sent.append(a) or b"")
+    monkeypatch.setattr(_dns._wire, "_exchange", lambda *a, **k: sent.append(a) or b"")
     monkeypatch.setattr(
-        _dns._socket,
+        _dns._wire._socket,
         "getaddrinfo",
         lambda *a, **k: [(socket.AF_INET, 0, 0, "", ("1.2.3.4", 0))],
     )

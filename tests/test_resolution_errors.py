@@ -107,9 +107,9 @@ def test_a_passed_deadline_is_not_rewritten_by_the_dnspython_socket_handler():
     now; the handler for socket failures must not turn it into a plain
     ``ResolutionError``."""
     pytest.importorskip("dns.resolver")
-    token = _dns._DEADLINE.set(time.monotonic() - 1.0)
+    token = _dns._common._DEADLINE.set(time.monotonic() - 1.0)
     try:
         with pytest.raises(ResolutionTimeoutError, match="deadline"):
             resolve_dnspython("host.test", "a", ns="127.0.0.1", search=False)
     finally:
-        _dns._DEADLINE.reset(token)
+        _dns._common._DEADLINE.reset(token)
