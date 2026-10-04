@@ -1,7 +1,7 @@
 """Socket-level helpers and route/MTU queries (internal).
 
 The small functions every network tool ends up rewriting: which local address
-would be used to reach a host, an unused port for a test server, an honest TCP
+would reach a host, an unused port for a test server, an honest TCP
 reachability check, and waiting for a service to come up. Plus the routing and
 MTU queries that need per-platform work.
 

@@ -1890,7 +1890,7 @@ wrapped socket expires, on every supported Python (before 3.10
 
   **A second loop rebinds.** Serving one endpoint from a new loop —
   `asyncio.run(serve())` twice, or a server stopped and started again — retires
-  the old thread and starts another. A thread keeps the loop it started with, so
+  its thread and starts another. A thread keeps the loop it started with, so
   without the rebind the second run would receive nothing and the thread would
   die posting to a closed loop, with the traceback going to stderr where no
   caller could see it.
