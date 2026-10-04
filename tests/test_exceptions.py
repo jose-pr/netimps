@@ -262,37 +262,17 @@ def test_a_custom_parse_callable_keeps_its_own_error():
     assert not isinstance(caught.value, NetimpsError)
 
 
-def test_udp_recv_timeout_is_the_builtin_timeout_error(monkeypatch):
+@pytest.mark.parametrize("pktinfo", [True, False])
+def test_udp_recv_timeout_is_the_builtin_timeout_error(pktinfo):
     """On 3.9 `socket.timeout` is only an `OSError`; a caller catching
     `TimeoutError` around `recv` would miss it. A real socket with a real
-    timeout, through the plain `recvfrom` path (Windows `recvmsg` does not
-    wait out a socket timeout at all)."""
-    from netimps import _udp
-
+    timeout, through both receive paths: `recvmsg` when the endpoint asks for
+    pktinfo, `recvfrom` when it does not. On Windows the `recvmsg` path used to
+    fail at once with `BlockingIOError` instead of waiting."""
     sock = netimps.bind("127.0.0.1", 0)
     sock.settimeout(0.05)
-    monkeypatch.setattr(_udp, "_supports_recvmsg", lambda: False)
     try:
-        with netimps.UdpEndpoint(sock) as endpoint:
-            endpoint.supports_pktinfo = False
-            with pytest.raises(TimeoutError):
-                endpoint.recv()
-    finally:
-        sock.close()
-
-
-def test_udp_recv_translates_a_socket_timeout_from_recvmsg(monkeypatch):
-    """The pktinfo path reads through `recvmsg`; its timeout is translated too."""
-    from netimps import _udp
-
-    def timed_out(*args, **kwargs):
-        raise socket.timeout("timed out")
-
-    monkeypatch.setattr(_udp, "_recvmsg", timed_out)
-    sock = netimps.bind("127.0.0.1", 0)
-    try:
-        with netimps.UdpEndpoint(sock) as endpoint:
-            endpoint.supports_pktinfo = True
+        with netimps.UdpEndpoint(sock, pktinfo=pktinfo) as endpoint:
             with pytest.raises(TimeoutError):
                 endpoint.recv()
     finally:

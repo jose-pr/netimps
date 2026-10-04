@@ -1389,8 +1389,10 @@ patch below is installed.
   `IP_PKTINFO` (26), contrary to the usual "BSD needs `IP_RECVDSTADDR`" advice.
   `UdpEndpoint` uses the literal where the value is documented and stable and
   lets `OSError` from `setsockopt` be the real "unsupported" signal.
-- Errors are CPython's: `BlockingIOError` on an empty non-blocking socket (on
-  Windows too), and `OSError(ENOTSUP)` only where neither backend can serve it.
+- Errors are CPython's: `BlockingIOError` on an empty non-blocking socket,
+  `socket.timeout` when the socket's own timeout runs out (both on Windows
+  too, where the call waits for readiness itself), and `OSError(ENOTSUP)` only
+  where neither backend can serve it.
 - A datagram too large for `bufsize` sets `MSG_TRUNC` in `msg_flags` rather than
   raising, because Winsock reports that as an error where POSIX sets a flag.
 

@@ -33,6 +33,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `resolve_wire` and `resolve_doh` chain an unreadable reply's
   `DNSDecodeError` as the `__cause__` of the `ResolutionError` they raise.
 
+### Fixed
+
+- **`recvmsg` and `sendmsg` honour a socket timeout on Windows.** A socket
+  with a timeout is non-blocking underneath, and the Winsock calls returned
+  at once: `UdpEndpoint.recv()` on a socket with `settimeout(0.3)` raised
+  `BlockingIOError` after 0.000 s instead of waiting. Both now wait for
+  readiness and raise `socket.timeout` when the time runs out, as the
+  stdlib methods do on POSIX. A blocking socket and a non-blocking one
+  behave as before.
+
 ## [0.3.4] - 2026-10-03
 
 ### Fixed

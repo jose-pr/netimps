@@ -33,6 +33,9 @@ what a reader would reasonably guess from the POSIX equivalents:
   translation table lives in :mod:`netimps._udp`.
 - An empty read on a non-blocking socket surfaces as :class:`BlockingIOError`,
   because ``ctypes.WinError`` maps ``WSAEWOULDBLOCK`` through ``errno``.
+- A socket with a timeout is non-blocking underneath, so both calls wait for
+  readiness themselves and raise ``socket.timeout`` when it runs out, as the
+  stdlib methods do. Without that wait a 0.3 s timeout failed in 0.000 s.
 
 ``DWORD``/``ULONG`` are spelled ``c_uint32`` rather than taken from
 :mod:`ctypes.wintypes` on purpose. ``import ctypes.wintypes`` fails outright on
@@ -44,7 +47,9 @@ removes both questions from the struct layouts.
 from __future__ import annotations
 
 import ctypes as _ctypes
+import select as _select
 import socket as _socket
+import time as _time
 import weakref as _weakref
 from typing import Any, Iterable, List, Optional, Sequence, Tuple
 
@@ -76,6 +81,7 @@ _SIO_GET_EXTENSION_FUNCTION_POINTER = 0xC8000006
 _ALIGN = _ctypes.sizeof(_ctypes.c_void_p)
 
 _WSAEMSGSIZE = 10040
+_WSAEWOULDBLOCK = 10035
 
 
 class _GUID(_ctypes.Structure):
@@ -418,6 +424,35 @@ def _build_control(ancdata: "Iterable[Tuple[int, int, bytes]]") -> "Any":
     return buffer
 
 
+def _deadline(sock: "Any") -> "Optional[float]":
+    """When a call on ``sock`` must give up, or ``None`` if its timeout needs no help.
+
+    A socket with a positive timeout is non-blocking underneath: CPython's own
+    methods wait for readiness and then call. A bare Winsock call on it returns
+    ``WSAEWOULDBLOCK`` at once, so the wait has to be done here. A blocking
+    socket (``None``) and a non-blocking one (``0``) already behave as asked.
+    """
+    timeout = sock.gettimeout()
+    return _time.monotonic() + timeout if timeout else None
+
+
+def _wait(sock: "Any", deadline: "Optional[float]", writing: bool = False) -> None:
+    """Block until ``sock`` is ready or ``deadline`` passes; no-op without one.
+
+    Raises ``socket.timeout``, which is what the stdlib method raises (and is
+    the builtin :class:`TimeoutError` from Python 3.10).
+    """
+    if deadline is None:
+        return
+    remaining = deadline - _time.monotonic()
+    if remaining > 0:
+        readers, writers = ([], [sock]) if writing else ([sock], [])
+        ready = _select.select(readers, writers, [], remaining)
+        if ready[0] or ready[1]:
+            return
+    raise _socket.timeout("timed out")
+
+
 def recvmsg(
     sock: "Any",
     bufsize: int,
@@ -462,14 +497,28 @@ def recvmsg(
 
     received = _DWORD()
     truncated = 0
-    if fn(sock.fileno(), _ctypes.byref(message), _ctypes.byref(received), None, None):
+    deadline = _deadline(sock)
+    while True:
+        _wait(sock, deadline)
+        if not fn(
+            sock.fileno(), _ctypes.byref(message), _ctypes.byref(received), None, None
+        ):
+            break
         code = _ws2.WSAGetLastError()
-        if code != _WSAEMSGSIZE:
+        if code == _WSAEMSGSIZE:
+            # The datagram did not fit. POSIX signals that in msg_flags and
+            # hands back what it read; do the same rather than raising, so a
+            # caller looping on recvmsg sees one contract on both platforms.
+            truncated = getattr(_socket, "MSG_TRUNC", 0) or 0x20
+            break
+        if code != _WSAEWOULDBLOCK or deadline is None:
             raise _ctypes.WinError(code)  # type: ignore[attr-defined]
-        # The datagram did not fit. POSIX signals that in msg_flags and hands
-        # back what it read; do the same rather than raising, so a caller
-        # looping on recvmsg sees one contract on both platforms.
-        truncated = getattr(_socket, "MSG_TRUNC", 0) or 0x20
+        # Readable a moment ago and empty now: another reader took the
+        # datagram. Wait again for what is left of the timeout, with the
+        # in/out fields put back as the call expects to find them.
+        message.namelen = _SOCKADDR_STORAGE_SIZE
+        message.Control.len = ancbufsize
+        message.dwFlags = int(flags)
 
     payload = data.raw[: received.value] if data else b""
 
@@ -539,6 +588,7 @@ def sendmsg(
         array[index].buf = _ctypes.cast(held, _ctypes.c_void_p) if held else None
 
     control = _build_control(ancdata)
+    _wait(sock, _deadline(sock), writing=True)
 
     if control is None and address is None:
         # Buffers only, to a connected socket: WSASend. This is the only route

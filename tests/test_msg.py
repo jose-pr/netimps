@@ -133,6 +133,59 @@ def test_sendmsg_rejects_a_bare_bytes_like_cpython_does():
         sock.close()
 
 
+def test_recvmsg_waits_out_a_socket_timeout():
+    """A socket with a timeout is non-blocking underneath. `recvmsg` has to wait
+    for it as the stdlib method does: on Windows it returned `WSAEWOULDBLOCK`
+    as `BlockingIOError` after 0.000 s of a 0.3 s timeout."""
+    import time
+
+    sock = netimps.bind("127.0.0.1", 0)
+    sock.settimeout(0.2)
+    try:
+        began = time.monotonic()
+        with pytest.raises(socket.timeout):
+            netimps.recvmsg(sock, 100)
+        assert time.monotonic() - began >= 0.15
+    finally:
+        sock.close()
+
+
+def test_recvmsg_returns_a_datagram_that_arrives_inside_the_timeout():
+    """The wait ends when the datagram arrives, not when the timeout does."""
+    import threading
+    import time
+
+    sock = netimps.bind("127.0.0.1", 0)
+    sock.settimeout(5.0)
+    sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    timer = threading.Timer(0.1, sender.sendto, (b"late", sock.getsockname()))
+    try:
+        began = time.monotonic()
+        timer.start()
+        data = netimps.recvmsg(sock, 100)[0]
+        assert data == b"late"
+        assert time.monotonic() - began < 4.0
+    finally:
+        timer.cancel()
+        timer.join()
+        sender.close()
+        sock.close()
+
+
+def test_sendmsg_works_on_a_socket_with_a_timeout():
+    """The send side waits for writability the same way; a UDP socket is
+    writable at once, so the call must simply succeed."""
+    sock = netimps.bind("127.0.0.1", 0)
+    sock.settimeout(0.5)
+    peer = netimps.bind("127.0.0.1", 0)
+    try:
+        assert netimps.sendmsg(sock, [b"ping"], (), 0, peer.getsockname()) == 4
+        assert peer.recvfrom(100)[0] == b"ping"
+    finally:
+        peer.close()
+        sock.close()
+
+
 def test_empty_non_blocking_socket_raises_blockingioerror():
     """The error vocabulary is CPython's, on Windows too.
 
