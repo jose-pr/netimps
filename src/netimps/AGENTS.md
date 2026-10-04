@@ -377,11 +377,14 @@ so nothing is lost. Pass an existing enumeration in a loop; it is a syscall.
 
 ## Scheme ↔ port registry
 
-- **`get_default_port(scheme) -> int | None`** — built-in table (30 entries,
-  including the socks variants and the `ws`/`wss` websocket schemes, all absent
-  from `/etc/services`), then `getservbyname`. Case-insensitive.
+- **`get_default_port(scheme) -> int | None`** — built-in table (35 entries,
+  including the socks variants, the `ws`/`wss` websocket schemes and the
+  WS-Management spellings `wsman`/`wsmans` (IANA), `winrm`/`winrms` and `psrp`
+  — 5985 for the plain forms, 5986 for the `s` forms — all absent from
+  `/etc/services`), then `getservbyname`. Case-insensitive.
 - **`get_default_scheme(port) -> str | None`** — the inverse, then
-  `getservbyport`. An out-of-range `port` is `None` rather than an error: this
+  `getservbyport`. The first scheme registered for a port is its canonical name,
+  so `5985` is `"wsman"` and `5986` is `"wsmans"`, not their aliases. An out-of-range `port` is `None` rather than an error: this
   is a table lookup, not a socket operation.
 - **`register_port(scheme, port, *, canonical=False)`** — extend or override.
   Raises `ValueError` for an empty scheme or a port outside `0-65535` (the

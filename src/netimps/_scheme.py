@@ -58,6 +58,16 @@ _DEFAULT_PORTS = {
     "mysql": 3306,
     "rdp": 3389,
     "postgresql": 5432,
+    # WS-Management over HTTP and HTTPS: IANA registers 5985 and 5986 as
+    # `wsman` and `wsmans`, and Windows Remote Management, PowerShell remoting
+    # and their URIs spell the same two ports `winrm`/`winrms` and `psrp`. The
+    # IANA names come first so they stay the canonical ones for the reverse
+    # lookup.
+    "wsman": 5985,
+    "wsmans": 5986,
+    "winrm": 5985,
+    "winrms": 5986,
+    "psrp": 5985,
     "redis": 6379,
     "http-alt": 8080,
 }

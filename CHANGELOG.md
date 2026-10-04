@@ -49,6 +49,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - **`is_unicast(address, interface=None, *, cache=False)` and `Datagram.is_unicast`**: false for the wildcard, a multicast group and a broadcast (limited or subnet), true otherwise. `Datagram.is_unicast` is `None` when there was no pktinfo to say where the datagram went.
 
+- **WS-Management schemes in the registry**: `wsman` 5985, `wsmans` 5986 (IANA), `winrm` 5985, `winrms` 5986 and `psrp` 5985, so `get_default_port("winrm")` is no longer `None`. `get_default_scheme(5985)` is `wsman` and `get_default_scheme(5986)` is `wsmans`.
+
 - **`cache=` on `resolve()`, `Host.ip/fqdn/resolve` and `FQDN.ip/resolve`, with `clear_resolution_cache()` and `RESOLUTION_CACHE_TTL` (30 seconds).** `False` (the default) never reads or writes the cache, `True` uses the TTL, a number is the TTL, as on `get_interfaces`. Keyed on the name and every option; an empty answer is cached like any other, an outage is not. A call that passes `cache=` neither reads nor writes a `Host`'s memo.
 
 - **`split_zone(text)`**, **`is_local_host(host, *, resolve=False, cache=False)`** and **`split_host` of a `(host, port)` pair**. `split_zone("fe80::1%eth0")` is `("fe80::1", "eth0")`; `is_local_host` is true for a loopback or locally assigned literal, `localhost`, and this machine's own name, and resolves any other name only when asked; `split_host(("h", None), default_port=69)` is `("h", 69)`.
