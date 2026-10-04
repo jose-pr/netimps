@@ -42,6 +42,7 @@ from subprocess import run as _run
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from . import _dnswire
+from ._exceptions import ResolutionError, ResolutionTimeoutError
 from ._ip import AddressLike, _dst_argument
 
 __all__ = [
@@ -51,7 +52,6 @@ __all__ = [
     "resolve_nslookup",
     "resolve_wire",
     "resolve_doh",
-    "ResolutionError",
 ]
 
 #: Backends `resolve()` tries, in order, by name. Each entry is looked up on
@@ -59,13 +59,6 @@ __all__ = [
 _BACKENDS = ("dnspython", "wire", "system", "nslookup")
 
 _ADDRESS_RDTYPES = ("a", "aaaa")
-
-
-class ResolutionError(Exception):
-    """A backend could not even attempt the query (missing binary, unsupported
-    ``rdtype``, transport/setup failure). Distinct from a definitive DNS
-    answer of "no such record", which is `[]`, not an exception.
-    """
 
 
 def _native_record(record):
@@ -276,7 +269,7 @@ def _bounded_lookup(lookup: "Callable[[], Any]", timeout: Optional[float]) -> "A
     Whatever ``lookup`` raises is re-raised verbatim in the calling thread, so
     each caller keeps classifying its own errors (a ``gaierror``/``herror``
     means "no answer", not a transport failure). Only the deadline itself
-    becomes a :class:`ResolutionError`.
+    becomes a :class:`ResolutionTimeoutError`.
     """
     if timeout is None:
         return lookup()
@@ -296,7 +289,9 @@ def _bounded_lookup(lookup: "Callable[[], Any]", timeout: Optional[float]) -> "A
     try:
         kind, payload = outcome.get(timeout=timeout)
     except _queue.Empty:
-        raise ResolutionError("resolve_system timed out after %.1fs" % (timeout,))
+        raise ResolutionTimeoutError(
+            "resolve_system timed out after %.1fs" % (timeout,)
+        )
     if kind == "error":
         raise payload
     return payload
@@ -368,7 +363,7 @@ def resolve_system(
         helper thread and is abandoned (without cancelling the underlying
         blocking call) past the deadline. The deadline bounds **wall time**:
         a resolver that hangs for a minute still raises
-        :class:`ResolutionError` at ``timeout``, and the abandoned thread
+        :class:`ResolutionTimeoutError` at ``timeout``, and the abandoned thread
         holds up neither the caller nor interpreter exit. ``None`` waits
         indefinitely.
     :param search: how to expand an unqualified ``query``. Ignored for
@@ -612,8 +607,10 @@ def _resolve_nslookup_once(
         # against the configured nameserver. A library never hands its
         # caller's stdin to a subprocess.
         response = _run(cmd, capture_output=True, timeout=timeout, stdin=_DEVNULL)
-    except (OSError, _SubprocessTimeout) as exc:
-        raise ResolutionError("nslookup unavailable or timed out: %s" % (exc,)) from exc
+    except _SubprocessTimeout as exc:
+        raise ResolutionTimeoutError("nslookup timed out: %s" % (exc,)) from exc
+    except OSError as exc:
+        raise ResolutionError("nslookup unavailable: %s" % (exc,)) from exc
 
     text = (response.stdout or b"").decode("utf-8", "replace")
     stderr_text = (response.stderr or b"").decode("utf-8", "replace")
@@ -1122,7 +1119,11 @@ def resolve_wire(
         reads no system search list).
 
     Contract as the other backends: native values, ``[]`` for NXDOMAIN or no
-    record of the type, :class:`ResolutionError` when no server answered.
+    record of the type, :class:`ResolutionError` when no server answered
+    (:class:`ResolutionTimeoutError` when the deadline or a socket timeout
+    was the reason). A reply the codec cannot read, or a name it cannot encode,
+    is not raised as such: it counts as that server not answering, and the
+    :class:`DNSDecodeError` is the ``__cause__`` of the final error.
     A CNAME chain inside the reply is followed.
     """
     query = _dst_argument(query)
@@ -1138,9 +1139,9 @@ def resolve_wire(
         for index, server in enumerate(servers):
             remaining = deadline - _time.monotonic()
             if remaining <= 0:
-                raise ResolutionError(
+                raise ResolutionTimeoutError(
                     "no answer within %ss (last: %s)" % (timeout, last)
-                )
+                ) from last
             # Each server gets its share of what is left, so a dead first one
             # cannot use up the time the next would have answered in.
             remaining /= len(servers) - index
@@ -1180,7 +1181,11 @@ def resolve_wire(
             break
     if answered:
         return []
-    raise ResolutionError("no nameserver answered: %s" % (last,))
+    if isinstance(last, _socket.timeout):
+        raise ResolutionTimeoutError(
+            "no nameserver answered in time: %s" % (last,)
+        ) from last
+    raise ResolutionError("no nameserver answered: %s" % (last,)) from last
 
 
 def _urllib_fetch(
@@ -1202,9 +1207,12 @@ def _urllib_fetch(
                 )
             return response.read()
     except urllib.error.HTTPError as exc:
-        raise ResolutionError("%s answered HTTP %d" % (url, exc.code))
+        raise ResolutionError("%s answered HTTP %d" % (url, exc.code)) from exc
     except (urllib.error.URLError, OSError) as exc:
-        raise ResolutionError("%s: %s" % (url, getattr(exc, "reason", exc)))
+        reason = getattr(exc, "reason", exc)
+        if isinstance(exc, _socket.timeout) or isinstance(reason, _socket.timeout):
+            raise ResolutionTimeoutError("%s: %s" % (url, reason)) from exc
+        raise ResolutionError("%s: %s" % (url, reason)) from exc
 
 
 def resolve_doh(
@@ -1229,7 +1237,11 @@ def resolve_doh(
 
     Contract as the other backends: native values, ``[]`` for NXDOMAIN or no
     record of the type, :class:`ResolutionError` when the endpoint could not
-    be asked or answered something else. Not part of :func:`resolve`'s chain.
+    be asked or answered something else (:class:`ResolutionTimeoutError` on a
+    timeout), with an unreadable reply as the error's ``__cause__``
+    (:class:`DNSDecodeError`). A ``query`` the codec cannot encode (an empty or
+    over-long label) raises :class:`DNSDecodeError` itself, before anything is
+    sent. Not part of :func:`resolve`'s chain.
     """
     query = _dst_argument(query)
     name, rdtype = _question(query, rdtype)
@@ -1243,8 +1255,10 @@ def resolve_doh(
         reply = _dnswire.parse_response(body, 0)
     except ResolutionError:
         raise
+    except _socket.timeout as exc:
+        raise ResolutionTimeoutError("DNS over HTTPS via %s: %s" % (url, exc)) from exc
     except (OSError, ValueError) as exc:
-        raise ResolutionError("DNS over HTTPS via %s: %s" % (url, exc))
+        raise ResolutionError("DNS over HTTPS via %s: %s" % (url, exc)) from exc
     if reply.rcode == _dnswire.NXDOMAIN:
         return []
     if reply.rcode != _dnswire.NOERROR:

@@ -67,6 +67,14 @@ from ipaddress import (
     IPv6Network,
 )
 
+from ._exceptions import (
+    AddressInUseError,
+    DNSDecodeError,
+    NetimpsError,
+    NetimpsValueError,
+    ResolutionError,
+    ResolutionTimeoutError,
+)
 from ._ip import (
     APIPA,
     LINK_LOCAL_V6,
@@ -137,6 +145,10 @@ __all__ = [
     "resolve_wire",
     "resolve_doh",
     "ResolutionError",
+    "ResolutionTimeoutError",
+    "DNSDecodeError",
+    "NetimpsError",
+    "NetimpsValueError",
     "ping",
     "PingResult",
     "Interface",
@@ -508,7 +520,6 @@ from ._ifaddrs import (  # noqa: E402
     iter_addresses,
 )
 from ._dns import (  # noqa: E402
-    ResolutionError,
     resolve,
     resolve_dnspython,
     resolve_system,
@@ -556,7 +567,6 @@ from ._udp import Datagram, UdpEndpoint, supports_pktinfo  # noqa: E402
 from ._sockets import (  # noqa: E402
     bind,
     max_udp_payload,
-    AddressInUseError,
     SocketOption,
     disable_connreset,
     set_buffer_size,

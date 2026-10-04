@@ -371,13 +371,38 @@ failure** (NXDOMAIN, NODATA, timeout) — never `None` — with **native
 types**: `A`/`AAAA` records are `ipaddress` objects, everything else is
 `str` (trailing root dot stripped, TXT strings unquoted).
 
-**`ResolutionError(Exception)`** — a backend could not even *attempt* the
+**Exceptions.** Every exception netimps raises on its own account descends
+from **`NetimpsError(Exception)`**, and each one also inherits the builtin a
+caller would already catch, so an existing `except ValueError` /
+`TimeoutError` / `OSError` keeps working. All are exported from `netimps`:
+
+| Class | Bases | Raised for |
+| --- | --- | --- |
+| `NetimpsError` | `Exception` | the base; catch it for "anything netimps reported" |
+| `NetimpsValueError` | `NetimpsError`, `ValueError` | text that is not the value it was asked to become |
+| `ResolutionError` | `NetimpsError` | a backend could not even attempt the query |
+| `ResolutionTimeoutError` | `ResolutionError`, `TimeoutError` | a backend's deadline expired |
+| `DNSDecodeError` | `NetimpsValueError` | the DNS codec cannot read a reply or write a name |
+| `AddressInUseError` | `NetimpsError`, `OSError` | `bind()` found the address taken |
+
+A caller's own mistake (a bad option, a wrong argument type) is plain
+`ValueError` / `TypeError`, never a `NetimpsError`.
+
+**`ResolutionError`** — a backend could not even *attempt* the
 query: a missing `nslookup` binary, `dnspython` not installed, an `rdtype` the
-backend structurally cannot serve, a timeout, a transport failure. It is
+backend structurally cannot serve, a transport failure. It is
 deliberately **not** how "no such record" is reported — that is `[]`. It is
-the documented raised type of `resolve`, `resolve_system` and
-`resolve_nslookup`, and it is exported from `netimps`, so catching it no
-longer means importing a private module.
+the documented raised type of `resolve`, `resolve_system`, `resolve_nslookup`,
+`resolve_wire` and `resolve_doh`. When the reason is an expired deadline
+(`resolve_system`, `resolve_nslookup`, `resolve_wire`, `resolve_doh`) it is the
+subclass **`ResolutionTimeoutError`**, so `except ResolutionError` and
+`except TimeoutError` both catch it.
+
+**`DNSDecodeError`** reaches a caller directly from `resolve_doh` (a `query`
+with an empty or over-long label, raised before anything is sent) and from
+`Fqdn.wire` (a name whose labels cannot be encoded). Inside `resolve_wire`
+and `resolve_doh` an unreadable *reply* is not raised as such: it becomes a
+`ResolutionError` whose `__cause__` is the `DNSDecodeError`.
 
 **`resolve(query, rdtype=None, ns=None, timeout=5.0, port=53, tcp=False, search=True, backends=None, strict=False, source=None)`**
 
@@ -503,7 +528,7 @@ cannot see (its own DNS query bypasses all of that). Same `AddressLike`
 - **`timeout` bounds wall time, per candidate name tried — `"ptr"` included.**
   Neither `getaddrinfo` nor `gethostbyaddr` has a timeout of its own, so each
   attempt runs in a daemon helper thread that is abandoned at the deadline,
-  raising `ResolutionError`; the underlying call is not cancelled, but neither
+  raising `ResolutionTimeoutError`; the underlying call is not cancelled, but neither
   the caller nor interpreter exit waits for it. A broken resolver therefore
   costs `timeout`, not however long it takes to give up — which is also what
   lets `resolve()`'s chain reach `nslookup` on schedule. The reverse path used
@@ -702,7 +727,7 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
   > and no error. So the flag that read as "strictest" was the least strict one
   > available. `reuse_address` now governs POSIX `SO_REUSEADDR` only;
   > `allow_address_takeover=True` is the single way to opt into a takeover.
-- **`AddressInUseError(OSError)`** — what `bind()` raises when the address is
+- **`AddressInUseError(NetimpsError, OSError)`** — what `bind()` raises when the address is
   taken, on every platform and interpreter. The same situation used to surface
   three ways: `PermissionError`/errno 13 on Windows 3.14, `OSError`/errno 10013
   on 3.9, `OSError`/errno 10048 without `allow_address_takeover`. The first is
@@ -711,7 +736,7 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
 
   `errno` is `EADDRINUSE`, the message is `bind_error_hint()`'s text, and the
   original exception is chained as `__cause__` (so `winerror` is still
-  reachable). Subclasses `OSError` but **not** `PermissionError`, so
+  reachable). Subclasses `OSError` (and `NetimpsError`) but **not** `PermissionError`, so
   `except OSError` is unaffected while `except PermissionError` stops catching
   this. A real POSIX `EACCES` on a port below 1024 is untouched.
 

@@ -7,7 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **One exception base and four new exported classes.** `NetimpsError` is the
+  base of everything netimps raises on its own account;
+  `NetimpsValueError(NetimpsError, ValueError)` is for text that is not the
+  value it was asked to become; `ResolutionTimeoutError(ResolutionError,
+  TimeoutError)` is what the resolvers now raise when a deadline expires
+  (`resolve_system`, `resolve_nslookup`, `resolve_wire`, `resolve_doh`);
+  `DNSDecodeError(NetimpsValueError)` is the DNS codec's error, formerly the
+  private `WireError(ValueError)`.
+
+### Changed
+
+- `ResolutionError` and `AddressInUseError` now also derive from
+  `NetimpsError`. Every existing `except` clause keeps matching.
+- `resolve_wire` and `resolve_doh` chain an unreadable reply's
+  `DNSDecodeError` as the `__cause__` of the `ResolutionError` they raise.
 
 ## [0.3.4] - 2026-10-03
 

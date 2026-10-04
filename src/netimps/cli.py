@@ -66,7 +66,7 @@ else:
 # commands run. The class-level fields are the ones that must stay
 # ``_ty.Optional[...]`` -- and they are.
 
-from ._dns import ResolutionError
+from ._exceptions import ResolutionError
 from . import (
     IPNetwork,
     MACAddress,

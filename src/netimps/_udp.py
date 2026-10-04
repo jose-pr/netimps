@@ -886,7 +886,7 @@ class UdpEndpoint:
         candidates.append((family, ""))
 
         from ._sockets import bind as _bind
-        from ._sockets import AddressInUseError
+        from ._exceptions import AddressInUseError
 
         if isinstance(port, int):
             ports: "tuple" = (port,)

@@ -1,0 +1,208 @@
+"""The exception hierarchy: the bases each class has, and the one place every
+class is defined.
+
+A base that is wrong here is invisible to a caller until an ``except`` clause
+they wrote against the builtin (or against the package base) stops matching.
+"""
+
+import socket
+import subprocess
+import threading
+from pathlib import Path
+
+import pytest
+
+import netimps
+from netimps import (
+    AddressInUseError,
+    DNSDecodeError,
+    NetimpsError,
+    NetimpsValueError,
+    ResolutionError,
+    ResolutionTimeoutError,
+    _dns,
+    _dnswire,
+)
+
+#: Each class with its direct bases, in declaration order.
+_BASES = [
+    (NetimpsError, (Exception,)),
+    (NetimpsValueError, (NetimpsError, ValueError)),
+    (ResolutionError, (NetimpsError,)),
+    (ResolutionTimeoutError, (ResolutionError, TimeoutError)),
+    (DNSDecodeError, (NetimpsValueError,)),
+    (AddressInUseError, (NetimpsError, OSError)),
+]
+_IDS = [cls.__name__ for cls, _ in _BASES]
+
+
+@pytest.mark.parametrize("cls, bases", _BASES, ids=_IDS)
+def test_each_exception_has_exactly_its_documented_bases(cls, bases):
+    """A dropped builtin co-parent (``ValueError``, ``TimeoutError``,
+    ``OSError``) silently breaks every caller's existing ``except``."""
+    assert cls.__bases__ == bases
+
+
+@pytest.mark.parametrize("cls, bases", _BASES, ids=_IDS)
+def test_every_exception_is_exported_from_the_root(cls, bases):
+    """A class missing from the root `__all__` is not API a caller may catch."""
+    assert getattr(netimps, cls.__name__) is cls
+    assert cls.__name__ in netimps.__all__
+
+
+def test_every_exception_class_is_defined_in_one_module():
+    """A class defined elsewhere is a second home for a name the root
+    re-exports, and an `import` cycle waiting to happen."""
+    src = Path(netimps.__file__).parent
+    homes = {
+        path.name
+        for path in src.glob("*.py")
+        if any(
+            line.startswith("class ") and "Error" in line.split("(")[0]
+            for line in path.read_text(encoding="utf-8").splitlines()
+        )
+    }
+    assert homes == {"_exceptions.py"}
+
+
+def test_a_timeout_is_caught_as_a_resolution_error_and_as_a_timeout():
+    """The chain moves on for ``ResolutionError``; a caller's deadline handling
+    catches ``TimeoutError``. One exception has to satisfy both."""
+    error = ResolutionTimeoutError("deadline")
+    for catches in (ResolutionError, TimeoutError, NetimpsError):
+        with pytest.raises(catches):
+            raise error
+
+
+def test_a_decode_error_is_a_value_error_and_a_package_error():
+    """Every ``except ValueError`` written against the old private class."""
+    for catches in (ValueError, NetimpsValueError, NetimpsError):
+        with pytest.raises(catches):
+            _dnswire.encode_name("a..b")
+
+
+def test_the_address_in_use_error_keeps_its_errno():
+    """Two co-parents must not cost the ``errno`` attribute, and the class must
+    still not be a ``PermissionError``."""
+    error = AddressInUseError(98, "taken")
+    assert error.errno == 98
+    assert isinstance(error, OSError)
+    assert not isinstance(error, PermissionError)
+
+
+# --------------------------------------------------------------------------- #
+# Where a deadline becomes ResolutionTimeoutError.
+# --------------------------------------------------------------------------- #
+def test_a_hung_system_lookup_raises_the_timeout_error(monkeypatch):
+    """`resolve_system`'s deadline must be catchable as a ``TimeoutError``."""
+    released = threading.Event()
+
+    def _hang(*args, **kwargs):
+        released.wait(30.0)
+        return []
+
+    monkeypatch.setattr(_dns._socket, "getaddrinfo", _hang)
+    try:
+        with pytest.raises(ResolutionTimeoutError):
+            netimps.resolve_system("slow.example.invalid", timeout=0.05)
+    finally:
+        released.set()
+
+
+def test_an_nslookup_timeout_raises_the_timeout_error(monkeypatch):
+    """The subprocess's own ``TimeoutExpired`` is neither an ``OSError`` nor a
+    ``TimeoutError``; without translation the caller sees only the text."""
+
+    def _slow(cmd, **kwargs):
+        raise subprocess.TimeoutExpired(cmd, 1)
+
+    monkeypatch.setattr(_dns, "_run", _slow)
+    with pytest.raises(ResolutionTimeoutError):
+        netimps.resolve_nslookup("example.com", timeout=1)
+
+
+def test_a_missing_nslookup_is_a_resolution_error_but_not_a_timeout(monkeypatch):
+    """A missing binary is not a deadline; the two must stay distinguishable."""
+
+    def _missing(cmd, **kwargs):
+        raise FileNotFoundError("nslookup")
+
+    monkeypatch.setattr(_dns, "_run", _missing)
+    with pytest.raises(ResolutionError) as caught:
+        netimps.resolve_nslookup("example.com")
+    assert not isinstance(caught.value, TimeoutError)
+
+
+def test_a_silent_nameserver_raises_the_timeout_error():
+    """No answer inside the deadline from a server that is up but quiet."""
+    quiet = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    quiet.bind(("127.0.0.1", 0))
+    try:
+        with pytest.raises(ResolutionTimeoutError):
+            netimps.resolve_wire(
+                "host.test", ns="127.0.0.1:%d" % quiet.getsockname()[1], timeout=0.2
+            )
+    finally:
+        quiet.close()
+
+
+def test_a_doh_socket_timeout_raises_the_timeout_error():
+    """A caller-supplied fetch that times out must surface as the deadline."""
+
+    def _fetch(url, body, headers, timeout):
+        raise socket.timeout("timed out")
+
+    with pytest.raises(ResolutionTimeoutError):
+        netimps.resolve_doh("host.test", "https://doh.invalid/q", fetch=_fetch)
+
+
+# --------------------------------------------------------------------------- #
+# Where DNSDecodeError goes.
+# --------------------------------------------------------------------------- #
+def test_doh_chains_an_unreadable_reply_as_the_cause():
+    """A garbage body is a `ResolutionError`; the codec's reason is its cause,
+    not lost behind a formatted string."""
+
+    def _fetch(url, body, headers, timeout):
+        return b"\x00\x01"
+
+    with pytest.raises(ResolutionError) as caught:
+        netimps.resolve_doh("host.test", "https://doh.invalid/q", fetch=_fetch)
+    assert isinstance(caught.value.__cause__, DNSDecodeError)
+
+
+def test_doh_raises_the_decode_error_for_a_name_it_cannot_encode():
+    """Nothing is sent for a name the codec cannot write."""
+
+    def _fetch(url, body, headers, timeout):  # pragma: no cover - never reached
+        raise AssertionError("nothing may be sent for an unencodable name")
+
+    with pytest.raises(DNSDecodeError):
+        netimps.resolve_doh("a..b", "https://doh.invalid/q", fetch=_fetch)
+
+
+def test_wire_chains_an_unreadable_reply_as_the_cause():
+    """A server answering with junk is "no server answered", with the codec's
+    reason as the cause."""
+    junk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    junk.bind(("127.0.0.1", 0))
+    junk.settimeout(2)
+
+    def _answer():
+        try:
+            _data, peer = junk.recvfrom(4096)
+            junk.sendto(b"\x00\x01", peer)
+        except OSError:
+            pass
+
+    thread = threading.Thread(target=_answer, daemon=True)
+    thread.start()
+    try:
+        with pytest.raises(ResolutionError) as caught:
+            netimps.resolve_wire(
+                "host.test", ns="127.0.0.1:%d" % junk.getsockname()[1], timeout=1
+            )
+    finally:
+        thread.join(3)
+        junk.close()
+    assert isinstance(caught.value.__cause__, DNSDecodeError)

@@ -55,6 +55,12 @@ from netimps import (
     IPv6Network,
     Interface,
     MACAddress,
+    NetimpsError,
+    NetimpsValueError,
+    ResolutionError,
+    ResolutionTimeoutError,
+    DNSDecodeError,
+    AddressInUseError,
     interface_for,
     interfaces_for,
     is_broadcast,
@@ -307,3 +313,27 @@ def _backoff_is_a_timer(timer: Backoff) -> None:
     assert_type(timer.advance(), float)
     assert_type(timer.reset(), float)
     assert_type(timer.attempt, int)
+
+
+# The hierarchy is part of the typing contract: a handler written against a
+# builtin must still narrow, and one written against the package base must
+# accept every package exception.
+def _exceptions_subclass_what_they_promise() -> None:
+    def _package(error: NetimpsError) -> None: ...
+
+    def _value(error: ValueError) -> None: ...
+
+    def _timeout(error: TimeoutError) -> None: ...
+
+    def _os(error: OSError) -> None: ...
+
+    _package(NetimpsValueError("x"))
+    _package(ResolutionError("x"))
+    _package(ResolutionTimeoutError("x"))
+    _package(DNSDecodeError("x"))
+    _package(AddressInUseError(98, "x"))
+    _value(NetimpsValueError("x"))
+    _value(DNSDecodeError("x"))
+    _timeout(ResolutionTimeoutError("x"))
+    _os(AddressInUseError(98, "x"))
+    _package(ResolutionTimeoutError("x"))

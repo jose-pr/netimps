@@ -30,6 +30,7 @@ import time as _time
 from ._iface_spec import InterfaceSpec, interface_address as _interface_address
 from ._iface_spec import _without_zone
 from ._iface_spec import interface_index as _interface_index
+from ._exceptions import AddressInUseError
 from ._ifaddrs import Interface
 from ._ip import (
     AddressLike,
@@ -54,7 +55,6 @@ _InterfaceQuery = Union[
 __all__ = [
     "bind",
     "max_udp_payload",
-    "AddressInUseError",
     "SocketOption",
     "disable_connreset",
     "set_buffer_size",
@@ -136,43 +136,6 @@ class SocketOption(NamedTuple):
     level: int
     name: int
     value: Any
-
-
-class AddressInUseError(OSError):
-    """The address is taken -- one stable type, whatever the platform called it.
-
-    "The port is already bound" surfaces as **three different shapes** depending
-    on the flags and the interpreter. Measured on Windows 11 ARM64 against an
-    exclusive holder:
-
-    ==========================  ==================  ========  ==========
-    call                        type                ``errno``  ``winerror``
-    ==========================  ==================  ========  ==========
-    3.14, ``allow_takeover``    ``PermissionError``  13        10013
-    3.9, ``allow_takeover``     ``OSError``          10013     10013
-    either, plain               ``OSError``          10048     10048
-    ==========================  ==================  ========  ==========
-
-    The 3.14 row is the harmful one: ``PermissionError`` says "privilege
-    problem", and on Windows there is no such thing for a port -- the address is
-    simply held. A caller branching on the type then sends its user after an
-    elevation problem that cannot exist -- and the alternative is a wrapper that
-    re-derives the fact by string-matching :func:`bind_error_hint`'s message,
-    which is worse.
-
-    So :func:`bind` raises this instead, with ``errno`` normalised to
-    ``EADDRINUSE``, the hint as the message, and the original exception chained
-    as ``__cause__`` -- so ``winerror`` and the platform's own code stay
-    reachable for anyone who wants them.
-
-    **Subclasses :class:`OSError` and deliberately not
-    :class:`PermissionError`**: every existing ``except OSError`` keeps working,
-    while ``except PermissionError`` stops catching a case that was never about
-    permission. A genuine privilege failure -- POSIX ``EACCES`` on a port below
-    1024 -- is left exactly as it was.
-    """
-
-    __slots__ = ()
 
 
 def bind(

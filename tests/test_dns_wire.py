@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import pytest
 
 import netimps
-from netimps import _dns, _dnswire
+from netimps import DNSDecodeError, _dns, _dnswire
 
 # --------------------------------------------------------------------------- #
 # A fake nameserver: answers from ZONE by the question's name and type.
@@ -163,9 +163,9 @@ def test_a_query_is_one_question_with_edns():
 
 
 def test_unknown_types_and_bad_names_are_refused():
-    with pytest.raises(_dnswire.WireError):
+    with pytest.raises(DNSDecodeError):
         _dnswire.build_query("example.com", "hinfo", 1)
-    with pytest.raises(_dnswire.WireError):
+    with pytest.raises(DNSDecodeError):
         _dnswire.encode_name("a..b")
 
 
@@ -179,7 +179,7 @@ def test_compressed_names_and_loops():
     parsed = _dnswire.parse_response(reply, 1)
     assert parsed.records("A.TEST.", "a") == [ipaddress.IPv4Address("1.2.3.4")]
     looping = reply[:12] + b"\xc0\x0c"
-    with pytest.raises(_dnswire.WireError):
+    with pytest.raises(DNSDecodeError):
         _dnswire.parse_response(looping + b"\x00\x01\x00\x01", 1)
 
 
