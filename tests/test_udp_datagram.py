@@ -11,6 +11,7 @@ import asyncio
 import ipaddress
 import select
 import socket
+import sys
 
 import pytest
 
@@ -45,8 +46,9 @@ def test_an_address_src_is_used_as_given_and_enumerates_nothing():
     Resolving an address to its adapter walked every interface on each send:
     1.29 ms against 0.04 ms for an ``Interface``.
     """
+    # A wildcard-bound sender: FreeBSD pins a source only on one.
     with (
-        UDPEndpoint(bind("127.0.0.1", 0)) as sender,
+        UDPEndpoint(bind("0.0.0.0", 0)) as sender,
         UDPEndpoint(bind("127.0.0.1", 0)) as receiver,
     ):
         if not sender.has_src_pinning:
@@ -74,7 +76,7 @@ def test_a_name_src_still_resolves_to_an_adapter():
     if loopback is None or not loopback.ipv4:
         pytest.skip("no loopback adapter with an IPv4 address")
     with (
-        UDPEndpoint(bind("127.0.0.1", 0)) as sender,
+        UDPEndpoint(bind("0.0.0.0", 0)) as sender,
         UDPEndpoint(bind("127.0.0.1", 0)) as receiver,
     ):
         if not sender.has_src_pinning:
@@ -310,3 +312,140 @@ def test_a_closed_endpoint_ends_the_loop_without_calling_on_error():
 
     assert _run(serve()) == []
     assert calls == []
+
+
+# --------------------------------------------------------------------------- #
+# Pinning a source from a wildcard-bound endpoint                              #
+# --------------------------------------------------------------------------- #
+
+_IS_WINDOWS = sys.platform == "win32"
+
+
+def _wildcard_endpoint(family, dual=False):
+    sock = socket.socket(family, socket.SOCK_DGRAM)
+    if dual:
+        try:
+            sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        except (OSError, AttributeError):
+            sock.close()
+            pytest.skip("no dual-stack sockets here")
+    try:
+        sock.bind(("::" if family == socket.AF_INET6 else "0.0.0.0", 0))
+    except OSError as exc:
+        sock.close()
+        pytest.skip("cannot bind a wildcard %r socket: %s" % (family, exc))
+    return UDPEndpoint(sock)
+
+
+def _peer(family, host):
+    try:
+        sock = bind(host, 0, family=family)
+    except OSError as exc:
+        pytest.skip("cannot bind %s: %s" % (host, exc))
+    sock.settimeout(5)
+    return sock
+
+
+def _loopback_index():
+    found = next((i for i in netimps.get_interfaces() if i.is_loopback), None)
+    if found is None or not found.index:
+        pytest.skip("no loopback adapter with an index")
+    return found.index
+
+
+def test_a_wildcard_ipv6_endpoint_refuses_an_index_only_pin_on_windows():
+    """Windows sends a zero source address literally, in either family.
+
+    The refusal existed for IPv4 only: a wildcard-bound IPv6 endpoint pinned by
+    an interface with no IPv6 address arrived from ``::``. POSIX reads the same
+    zero as "kernel chooses", so there the datagram goes out from the loopback
+    address.
+    """
+    spec = Interface(
+        name="index-only",
+        index=_loopback_index(),
+        ips=[ipaddress.IPv4Interface("127.0.0.1/8")],
+    )
+    with _wildcard_endpoint(socket.AF_INET6) as sender:
+        if not sender.has_src_pinning:
+            pytest.skip("this host cannot pin a source address")
+        peer = _peer(socket.AF_INET6, "::1")
+        try:
+            port = peer.getsockname()[1]
+            if _IS_WINDOWS:
+                with pytest.raises(ValueError, match="index alone"):
+                    sender.send(b"x", "::1", port, src=spec)
+            else:
+                sender.send(b"x", "::1", port, src=spec)
+                assert peer.recvfrom(10)[1][0] == "::1"
+        finally:
+            peer.close()
+
+
+@pytest.mark.parametrize(
+    "family, target, zero",
+    [(socket.AF_INET6, "::1", "::"), (socket.AF_INET, "127.0.0.1", "0.0.0.0")],
+)
+def test_a_zero_address_pin_is_refused_on_windows_and_kernel_chosen_elsewhere(
+    family, target, zero
+):
+    with _wildcard_endpoint(family) as sender:
+        if not sender.has_src_pinning:
+            pytest.skip("this host cannot pin a source address")
+        peer = _peer(family, target)
+        try:
+            port = peer.getsockname()[1]
+            if _IS_WINDOWS:
+                with pytest.raises(ValueError, match="zero|index alone"):
+                    sender.send(b"x", target, port, src=zero)
+            else:
+                sender.send(b"x", target, port, src=zero)
+                assert peer.recvfrom(10)[1][0] == target
+        finally:
+            peer.close()
+
+
+@pytest.mark.skipif(
+    sys.platform == "darwin", reason="dual-stack source pinning is unmeasured on macOS"
+)
+def test_a_dual_stack_endpoint_pins_an_ipv4_source():
+    """The peer sees the pinned IPv4 source, whether given plain or mapped.
+
+    On Windows the v6 control message cannot carry an IPv4 source: it needs an
+    ``IPPROTO_IP`` one, and the send failed with ``WinError 10022``.
+    """
+    with _wildcard_endpoint(socket.AF_INET6, dual=True) as sender:
+        if not sender.has_src_pinning:
+            pytest.skip("this host cannot pin a source address")
+        peer = _peer(socket.AF_INET, "127.0.0.1")
+        try:
+            port = peer.getsockname()[1]
+            for source in ("127.0.0.1", "::ffff:127.0.0.1"):
+                sender.send(b"x", "::ffff:127.0.0.1", port, src=source)
+                data, seen = peer.recvfrom(10)
+                assert data == b"x"
+                assert seen[0] == "127.0.0.1", "pinned from %r" % (source,)
+        finally:
+            peer.close()
+
+
+def test_a_pinned_send_to_a_host_name_resolves_it():
+    """A name is resolved for the socket's family, pinned or not.
+
+    The Winsock path accepted address literals only: an unpinned send to
+    ``localhost`` worked and the same send with ``src=`` failed with
+    ``illegal IP address string passed to inet_pton``.
+    """
+    with _wildcard_endpoint(socket.AF_INET) as sender:
+        if not sender.has_src_pinning:
+            pytest.skip("this host cannot pin a source address")
+        peer = _peer(socket.AF_INET, "127.0.0.1")
+        try:
+            port = peer.getsockname()[1]
+            assert sender.send(b"a", "localhost", port) == 1
+            assert sender.send(b"b", "localhost", port, src="127.0.0.1") == 1
+            got = [peer.recvfrom(10) for _ in range(2)]
+        finally:
+            peer.close()
+    assert [data for data, _ in got] == [b"a", b"b"]
+    assert got[1][1][0] == "127.0.0.1"

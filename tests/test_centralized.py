@@ -9,6 +9,7 @@ import ipaddress
 import os
 import socket
 import struct
+import sys
 
 import pytest
 
@@ -523,6 +524,10 @@ def test_udp_endpoint_round_trip(family, host):
     # where the kernel exports this family's option, it has to be used.
     receive_option = _udp._pktinfo_options(family)[1]
     if receive_option is not None and hasattr(socket.socket, "recvmsg"):
+        assert endpoint.has_pktinfo
+    if sys.platform.startswith("freebsd") and family == socket.AF_INET:
+        # FreeBSD's IPv4 carrier is not IP_PKTINFO, so the option table above
+        # names nothing for it; the platform delivers the arrival all the same.
         assert endpoint.has_pktinfo
 
     if not endpoint.has_pktinfo:

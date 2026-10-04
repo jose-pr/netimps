@@ -348,16 +348,34 @@ def _encode_sockaddr(address: "Any", family: int) -> "Any":
             sin6_flowinfo=_socket.htonl(flowinfo),
             sin6_scope_id=scope_id,
         )
-        packed = _socket.inet_pton(_socket.AF_INET6, host)
+        packed = _packed_host(host, _socket.AF_INET6)
         _ctypes.memmove(sa6.sin6_addr, packed, 16)
         return sa6
     sa4 = _SOCKADDR_IN(
         sin_family=_socket.AF_INET,
         sin_port=_socket.htons(port),
     )
-    packed = _socket.inet_pton(_socket.AF_INET, host)
+    packed = _packed_host(host, _socket.AF_INET)
     _ctypes.memmove(sa4.sin_addr, packed, 4)
     return sa4
+
+
+def _packed_host(host: str, family: int) -> bytes:
+    """The packed address of *host* for *family*: a literal, else a looked-up name.
+
+    CPython's ``sendmsg`` accepts a host name and the empty string (the
+    wildcard) as ``sendto`` does, so this does too.
+    """
+    try:
+        return _socket.inet_pton(family, host)
+    except OSError:
+        pass
+    if host == "":
+        return b"\x00" * (16 if family == _socket.AF_INET6 else 4)
+    if host == "<broadcast>" and family == _socket.AF_INET:
+        return b"\xff" * 4
+    resolved = _socket.getaddrinfo(host, None, family, _socket.SOCK_DGRAM)[0][4][0]
+    return _socket.inet_pton(family, str(resolved).partition("%")[0])
 
 
 def _if_nametoindex(zone: str) -> int:

@@ -87,8 +87,12 @@ in -- both are decided once, at construction, from the socket's own family.
 
 One asymmetry has no degrade available: **Windows sends a zero source address
 literally**, where POSIX reads zero as "kernel chooses". Pinning by interface
-index alone therefore raises :class:`ValueError` there instead of quietly
-sending from ``0.0.0.0``.
+index alone, or by ``0.0.0.0`` or ``::``, therefore raises :class:`ValueError`
+there instead of quietly sending from the zero address. On a dual-stack
+endpoint an IPv4 source goes as an ``IPPROTO_IP`` message there.
+
+IPv4 on FreeBSD has no ``IP_PKTINFO``; :mod:`netimps._freebsd` carries it with
+``IP_RECVDSTADDR``, ``IP_RECVIF`` and ``IP_SENDSRCADDR``.
 """
 
 from __future__ import annotations
@@ -112,6 +116,7 @@ from typing import (
     cast,
 )
 
+from . import _freebsd
 from ._iface_spec import InterfaceLike
 from ._ifaddrs import INTERFACE_CACHE_TTL, Interface
 from ._ip import HostLike, IPAddress, IPv4Address, IPv6Address, _dst_argument
@@ -180,6 +185,10 @@ if _IS_WINDOWS:
     _PKTINFO_FALLBACK = (19, 19, None)
 elif _sys.platform.startswith("linux"):
     _PKTINFO_FALLBACK = (8, 50, 49)
+elif _sys.platform.startswith("freebsd"):
+    # No IPv4 IP_PKTINFO (errno 42): `_freebsd` carries IPv4 there. IPv6 uses
+    # the same options as macOS.
+    _PKTINFO_FALLBACK = (None, 46, 61)
 elif _sys.platform == "darwin" or "bsd" in _sys.platform:
     # macOS really does have IP_PKTINFO (26), with Linux's exact 12-byte layout.
     # The widespread "BSD has no IP_PKTINFO, use IP_RECVDSTADDR + IP_RECVIF"
@@ -441,8 +450,10 @@ class UDPEndpoint:
         is ``False`` -- not an optimistic ``True`` -- whenever the option for
         *this socket's family* is missing or refused.
     :ivar has_src_pinning: :meth:`send` can honour ``src``. ``False``
-        where the platform exports no pktinfo cmsg for this family; ``src`` is
-        then ignored, and the kernel picks the source as it always would.
+        where the platform exports no pktinfo cmsg for this family, and for an
+        IPv4 endpoint on FreeBSD that is bound to an address (the kernel pins
+        only on a wildcard-bound socket); ``src`` is then ignored, and the
+        kernel picks the source as it always would.
     """
 
     __slots__ = (
@@ -470,6 +481,15 @@ class UDPEndpoint:
 
         family = getattr(sock, "family", _socket.AF_INET)
         level, receive_option, send_type, _layout = _pktinfo_options(family)
+
+        if _freebsd.IS_FREEBSD and family == _socket.AF_INET:
+            # FreeBSD carries IPv4 arrival data and the source pin in other
+            # options; see `_freebsd`. The pin needs a wildcard-bound socket.
+            self.has_src_pinning = _supports_recvmsg() and _freebsd.can_pin(sock)
+            if pktinfo and _supports_recvmsg() and _freebsd.enable_receive(sock):
+                self.has_pktinfo = True
+                self._cmsg_size = _cmsg_space(_CMSG_SLOT_BYTES) * _CMSG_SLOTS
+            return
 
         # Sending needs no socket option, only ``sendmsg`` and a cmsg type for
         # the family -- so it is decided independently of ``pktinfo=``, which
@@ -603,10 +623,15 @@ class UDPEndpoint:
         local: "Optional[IPAddress]" = None
         for level, ctype, cdata in ancdata:
             decoded = _unpack_pktinfo(level, ctype, cdata)
-            if decoded is None:
-                continue
-            index, local = decoded
-            break
+            if decoded is not None:
+                index, local = decoded
+                break
+            if _freebsd.IS_FREEBSD:
+                # Two messages, one per fact, so neither ends the scan.
+                arrival = _freebsd.decode_arrival(level, ctype, cdata)
+                if arrival is not None:
+                    index = arrival[0] or index
+                    local = arrival[1] or local
 
         if self.socket.family == _socket.AF_INET6 and isinstance(local, IPv4Address):
             # A v4 arrival on a dual-stack socket. Windows reports it at level
@@ -656,9 +681,10 @@ class UDPEndpoint:
 
         family = self.socket.family
         level, _receive_option, send_type, _layout = _pktinfo_options(family)
-        if send_type is None:  # pragma: no cover - guarded by the flag above
-            return None
         want_ipv6 = family == _socket.AF_INET6
+        by_address_only = _freebsd.IS_FREEBSD and not want_ipv6
+        if send_type is None and not by_address_only:  # pragma: no cover
+            return None  # guarded by the flag above
 
         local: "Optional[IPAddress]"
         literal = src if isinstance(src, (IPv4Address, IPv6Address)) else None
@@ -684,8 +710,46 @@ class UDPEndpoint:
                 "cannot resolve src %r to a local address or interface index" % (src,)
             )
 
+        if by_address_only:
+            # IPv4 on FreeBSD has no index pin: an interface is pinned by its
+            # IPv4 address, which `interface_address` took from it above.
+            if isinstance(local, IPv6Address):
+                raise ValueError(
+                    "cannot pin an IPv6 source (%s) on an AF_INET socket -- "
+                    "build the endpoint on an AF_INET6 socket instead" % (local,)
+                )
+            if local is None:
+                raise ValueError(
+                    "cannot pin src %r on FreeBSD: IPv4 is pinned by address "
+                    "and it names no IPv4 address" % (src,)
+                )
+            return _freebsd.source_control(local)
+
+        if send_type is None:  # pragma: no cover - the by-address case returned
+            return None
+
         if want_ipv6:
-            if isinstance(local, IPv4Address):
+            if _IS_WINDOWS:
+                from ._ip import unmap
+
+                if local is not None:
+                    local = unmap(local)
+                _refuse_zero_source(local, index)
+                if isinstance(local, IPv4Address):
+                    # A dual-stack socket takes an IPv4 source as an IPPROTO_IP
+                    # IN_PKTINFO, the message recv decodes for an IPv4 arrival;
+                    # the IPv6 one is refused with WSAEINVAL for a mapped
+                    # address (WinError 10022).
+                    ip_level, _opt, ip_type, _ip_layout = _pktinfo_options(
+                        _socket.AF_INET
+                    )
+                    assert ip_type is not None
+                    return (
+                        ip_level,
+                        ip_type,
+                        _struct.pack(_PKTINFO_V4, local.packed, index),
+                    )
+            elif isinstance(local, IPv4Address):
                 # A dual-stack socket sends IPv4 as v4-mapped, and so must the
                 # source it is pinned to. Measured on Linux: pinning
                 # ::ffff:127.0.0.1 delivers, and the receiver sees 127.0.0.1.
@@ -698,17 +762,8 @@ class UDPEndpoint:
                 "cannot pin an IPv6 source (%s) on an AF_INET socket -- "
                 "build the endpoint on an AF_INET6 socket instead" % (local,)
             )
-        if local is None and _IS_WINDOWS:
-            # Windows sends a zero source address **literally**: measured, a pin
-            # of 0.0.0.0 arrives from 0.0.0.0 rather than letting the kernel
-            # choose, which is what Linux does with the same bytes. An
-            # index-only pin therefore cannot be expressed this way here, and
-            # silently sending from 0.0.0.0 would be far worse than refusing.
-            raise ValueError(
-                "cannot pin by interface index alone on Windows (index %d): the "
-                "platform sends a zero source address literally rather than "
-                "choosing one. Pass an address-bearing src instead." % (index,)
-            )
+        if _IS_WINDOWS:
+            _refuse_zero_source(local, index)
         packed = local.packed if local is not None else b"\x00" * 4
         if _PKTINFO_V4_ADDR_FIRST:
             # Windows IN_PKTINFO has no spec_dst, and ipi_addr *is* the field
@@ -1212,6 +1267,29 @@ class UDPEndpoint:
             bound,
             self.has_pktinfo,
             self.has_src_pinning,
+        )
+
+
+def _refuse_zero_source(local: "Optional[IPAddress]", index: int) -> None:
+    """Raise on Windows for a pin that would send from the zero address.
+
+    Windows sends a zero source address **literally**: measured, a pin of
+    ``0.0.0.0`` or ``::`` arrives from that address rather than letting the
+    kernel choose, which is what Linux does with the same bytes. An index-only
+    pin, or a literal zero, cannot be expressed this way there, and silently
+    sending from the zero address would be far worse than refusing.
+    """
+    if local is None:
+        raise ValueError(
+            "cannot pin by interface index alone on Windows (index %d): the "
+            "platform sends a zero source address literally rather than "
+            "choosing one. Pass an address-bearing src instead." % (index,)
+        )
+    if local.is_unspecified:
+        raise ValueError(
+            "cannot pin the unspecified address %s on Windows: the platform "
+            "sends a zero source address literally rather than choosing one. "
+            "Pass an address-bearing src instead." % (local,)
         )
 
 

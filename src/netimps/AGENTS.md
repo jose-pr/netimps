@@ -1658,8 +1658,19 @@ wrapped socket expires, on every supported Python (before 3.10
   family.** `has_pktinfo` — `recv` will report the arrival interface;
   `False`, never an optimistic `True`, whenever the option for *this* family is
   missing or refused. `has_src_pinning` — `send(src=)` can be honoured;
-  `False` where there is no pktinfo cmsg for the family (macOS has no
-  `IP_PKTINFO`).
+  `False` where there is no pktinfo cmsg for the family, or the socket cannot
+  use it (see **FreeBSD** below).
+- **FreeBSD, IPv4: no `IP_PKTINFO`, other options.** The arrival address and
+  interface come from `IP_RECVDSTADDR` (7) and `IP_RECVIF` (20), so
+  `has_pktinfo` is `True` there and `destination` and `interface_index` are
+  filled. The source is pinned with a control message of number 7
+  (`IP_SENDSRCADDR`), which the kernel accepts **only on an unconnected socket
+  bound to the wildcard address** (errno 22 otherwise): `has_src_pinning` is
+  `True` for such an endpoint and `False` for one bound to an address, where
+  `send(src=)` sends unpinned. IPv4 has no pin by interface index there, so an
+  `Interface` (or name or MAC) given as `src` pins that interface's IPv4 address,
+  and a `src` naming no IPv4 address raises `ValueError`. IPv6 on FreeBSD works
+  as on macOS.
 - **Windows is supported, as of the Winsock backend.** Both flags are `True`
   there for v4, v6 **and** dual-stack `::`, on 3.9 through 3.14, via
   `WSARecvMsg`/`WSASendMsg` — see **Ancillary data** above. `UDPEndpoint` calls
@@ -1676,9 +1687,15 @@ wrapped socket expires, on every supported Python (before 3.10
   cmsg is not, so the two halves contradict each other until normalised.
 - **One thing Windows cannot do: pin by interface index alone.** It sends a zero
   source address *literally* — measured, a pin of `0.0.0.0` arrives from
-  `0.0.0.0` — where Linux reads zero as "kernel chooses". An index-only `src`
-  therefore raises `ValueError` there rather than sending from the wrong
-  address. Pass an address-bearing `src`.
+  `0.0.0.0` — where Linux reads zero as "kernel chooses". An index-only `src`,
+  or a `src` of `0.0.0.0` or `::`, therefore raises `ValueError` there in either
+  family, rather than sending from the wrong address. Pass an address-bearing
+  `src`.
+- **A dual-stack `AF_INET6` endpoint pins an IPv4 source** (plain or
+  `::ffff:`-mapped) on Windows, Linux and, unmeasured, elsewhere; on Windows it
+  is sent as an `IPPROTO_IP` control message.
+- **`send` to a host name works pinned or not**, on Windows too: the name is
+  resolved for the socket's family.
 - **Degrades rather than failing**, where a platform still cannot serve it:
   `recv` falls back to `recvfrom` with empty interface fields, and `send` sends
   unpinned. Check the two flags rather than inferring from an empty result.

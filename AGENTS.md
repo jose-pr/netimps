@@ -77,6 +77,7 @@ src/netimps/
 ├── _proc.py       # private: the one runner every platform binary goes through
 ├── _retry.py      # private: bounded retry with exponential backoff
 ├── _udp.py        # private: UDP receive with arrival interface (pktinfo)
+├── _freebsd.py    # private: IPv4 arrival data and source pinning on FreeBSD
 ├── _fqdn.py       # private: FQDN domain-name value type (label algebra)
 ├── _msg.py        # private: cross-platform recvmsg/sendmsg + the socket patch
 ├── _aio.py        # private: add_reader polyfill, so arecv works on a Proactor loop

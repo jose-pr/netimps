@@ -263,6 +263,20 @@ probe says so in its prefix.
 
 ### Fixed
 
+- **IPv4 on FreeBSD reports the arrival and pins the source.** `UDPEndpoint`
+  there set `IP_PKTINFO`, which FreeBSD lacks, so `has_pktinfo` was false and
+  `destination` was `None`, while `has_src_pinning` was true and
+  `send(src=)` raised `OSError` 42. It now uses `IP_RECVDSTADDR` and
+  `IP_RECVIF` to receive and an `IP_SENDSRCADDR` message to pin; the pin needs
+  a wildcard-bound, unconnected socket, so `has_src_pinning` is false for an
+  endpoint bound to an address. Measured on FreeBSD 16.0; IPv6 is unchanged.
+
+- **Pinning a source on Windows.** A wildcard-bound IPv6 endpoint pinned by an
+  interface with no IPv6 address, or by `::`, sent from `::`; both raise
+  `ValueError` now, as the IPv4 twin did. A dual-stack endpoint pins an IPv4
+  source (it failed with `WinError 10022`). A pinned `send` to a host name
+  resolves it (it failed with `illegal IP address string passed to inet_pton`).
+
 - **Closing a `UDPEndpoint` ends a pending `arecv`, and `arecv` leaves the
   socket's timeout alone.** `close()` and `aclose()` from another task now wake
   a task in `arecv` with `RuntimeError` and finish a `datagrams()` loop
