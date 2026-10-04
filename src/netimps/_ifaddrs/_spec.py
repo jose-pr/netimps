@@ -28,13 +28,12 @@ not part of the public surface.
 from __future__ import annotations
 
 from typing import Optional, Union
-
-from ._ifaddrs import Interface
-from ._ip import IPAddress
-from ._mac import MACAddress
-from ._parse import is_valid, parse, try_parse
-
-__all__ = ["InterfaceLike", "interface_address", "interface_index"]
+from .._ip import IPAddress
+from .._mac import MACAddress
+from .._parse import is_valid, try_parse
+from ._cache import get_interfaces
+from ._lookup import get_interface
+from ._model import Interface
 
 #: The loose "which interface?" spec every ``src=``/``interface=`` parameter
 #: in the package accepts: an :class:`Interface`, a :class:`MACAddress` (or
@@ -42,33 +41,6 @@ __all__ = ["InterfaceLike", "interface_address", "interface_index"]
 #: Re-exported from :mod:`netimps` for annotations: it names a parameter shape
 #: rather than something a caller constructs.
 InterfaceLike = Optional[Union[Interface, MACAddress, IPAddress, str]]
-
-
-def _without_zone(address: "IPAddress") -> "IPAddress":
-    """Drop an IPv6 ``%zone`` suffix, which enumeration never reports.
-
-    ``ipaddress`` keeps the zone as part of the address, so
-    ``IPv6Address("::1%1") != IPv6Address("::1")`` and a scoped address matches
-    nothing in :func:`netimps.get_interfaces`. The zone identifies the
-    *interface*, not the address, so it is stripped before any lookup and kept
-    only in what is returned to the caller.
-    """
-
-    if not getattr(address, "scope_id", None):
-        return address
-    return parse(str(address).split("%", 1)[0], IPAddress)
-
-
-def _zone_names(iface: "Interface", zone: str) -> bool:
-    """True if ``zone`` identifies ``iface``.
-
-    The one zone matcher behind :func:`interface_index`, :func:`interface_address`
-    and :func:`netimps.get_interface`. Linux and Windows write an IPv6 zone as
-    the numeric interface index, the BSDs as the adapter name; both are read.
-    """
-    if zone.isdigit():
-        return bool(iface.index) and iface.index == int(zone)
-    return iface.name == zone
 
 
 def _family_name(want_ipv6: bool) -> str:
@@ -84,8 +56,6 @@ def _enumeration_is_degraded() -> bool:
     against *that* answers a different question, so the locality rule below
     steps aside rather than rejecting addresses the host really has.
     """
-    from ._ifaddrs import get_interfaces
-
     return any(iface.name == "<unknown>" for iface in get_interfaces())
 
 
@@ -136,9 +106,6 @@ def interface_address(
       IPv6 socket into a v4-mapped one, and rejects the reverse with its own
       message.
     """
-    from ._sockets import get_interface
-    from ._ifaddrs import Interface, get_interfaces
-
     if interface is None:
         return None
 
@@ -242,9 +209,6 @@ def interface_index(interface: "InterfaceLike", strict: bool = True) -> "Optiona
     by the interface the zone names: ``::1%nosuchadapter`` and ``::1%999`` name
     no local interface, exactly as :func:`netimps.get_interface` finds none.
     """
-    from ._sockets import get_interface
-    from ._ifaddrs import Interface, get_interfaces
-
     if interface is None:
         return None
 

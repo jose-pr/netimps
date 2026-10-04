@@ -92,12 +92,18 @@ from ._scheme import (
 from ._ifaddrs import (
     INTERFACE_CACHE_TTL,
     Interface,
+    InterfaceLike,
+    InterfaceQuery,
     clear_interface_cache,
     interface_enumerations,
+    get_interface,
     get_interfaces,
     is_broadcast,
+    is_local_address,
+    is_local_host,
     is_unicast,
     iter_addresses,
+    iter_interfaces,
 )
 from ._dns import (
     RESOLUTION_CACHE_TTL,
@@ -135,10 +141,6 @@ from ._sockets import (
     get_pmtu,
     get_tcp_mss,
     bind_error_hint,
-    get_interface,
-    iter_interfaces,
-    is_local_address,
-    is_local_host,
     Route,
     get_free_port,
     get_source_ip,
@@ -147,9 +149,7 @@ from ._sockets import (
     tcp_check,
     wait_for_port,
 )
-from ._sockets import InterfaceQuery
 from ._scan import PortsLike
-from ._iface_spec import InterfaceLike
 
 __all__ = [
     # Types: the v4/v6 unions you annotate with, plus the stdlib concretes.

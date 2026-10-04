@@ -13,8 +13,7 @@ from typing import (
     cast,
 )
 
-from .._ifaddrs import INTERFACE_CACHE_TTL, Interface
-from .._iface_spec import InterfaceLike
+from .._ifaddrs import INTERFACE_CACHE_TTL, Interface, InterfaceLike
 from .._ip import HostLike, IPAddress, IPv4Address, IPv6Address
 from .._msg import CMSG_SPACE as _cmsg_space
 from .._msg import has_recvmsg as _supports_recvmsg

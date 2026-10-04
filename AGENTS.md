@@ -70,7 +70,16 @@ src/netimps/
 ├── __main__.py    # `python -m netimps`
 ├── _scan.py       # private: concurrent port/host scanning
 ├── _multicast.py  # private: group membership and socket setup
-├── _ifaddrs.py    # private: ctypes getifaddrs/GetAdaptersAddresses bindings
+├── _ifaddrs/      # private package: interface discovery and lookup
+│   ├── _model.py     # Interface and the helpers every enumerator shares
+│   ├── _sockaddr.py  # sockaddr overlays in the host kernel's layout
+│   ├── _posix.py     # getifaddrs(3) bindings
+│   ├── _windows.py   # GetAdaptersAddresses bindings
+│   ├── _fallback.py  # last-resort enumeration through the host name
+│   ├── _cache.py     # enumerator choice, counter, TTL cache, get_interfaces
+│   ├── _addresses.py # is_broadcast, is_unicast, iter_addresses
+│   ├── _lookup.py    # get_interface, iter_interfaces, is_local_address, is_local_host
+│   └── _spec.py      # InterfaceLike and its coercion to an address or index
 ├── _sockets.py    # private: source IP, free port, tcp/wait, route, hops, MTU
 ├── _dns.py        # private: resolve() chaining dnspython/system/nslookup backends
 ├── _ping.py       # private: ping() over the platform binary
@@ -98,7 +107,6 @@ src/netimps/
 │   ├── _sockaddr.py  # sockaddr <-> address tuple
 │   ├── _calls.py     # recvmsg, sendmsg
 │   └── _ioctl.py     # SIO_UDP_CONNRESET
-├── _iface_spec.py # private: shared InterfaceLike coercion (MAC/name/Interface -> address)
 └── py.typed       # PEP 561 marker — the package ships inline type hints
 ```
 
@@ -178,7 +186,7 @@ map:
   loopback only, and **nothing in it may be mocked**. A claim about another
   platform needs a measurement on that platform (a `ci-*` tag runs the matrix),
   not a passing test here.
-- **Don't collapse the per-platform `sockaddr` layouts** in `_ifaddrs.py`.
+- **Don't collapse the per-platform `sockaddr` layouts** in `_ifaddrs/_sockaddr.py`.
   macOS/BSD have a leading `sa_len` byte Linux lacks; using the Linux layout on
   BSD decodes `AF_INET` as `512` and *silently* drops every address instead of
   raising — a Linux-only CI stays green while Mac users lose data.
@@ -251,7 +259,7 @@ map:
 - **IPv6 multicast names an adapter by *index*, IPv4 by *address*.** They are
   not two spellings of one thing: feeding an address to the v6 side does not
   raise, it lands as index `0`, which is "kernel's choice". Use
-  `_iface_spec.interface_index()` for anything v6, `interface_address()` for
+  `_ifaddrs.interface_index()` for anything v6, `interface_address()` for
   v4. Both honour a `%zone` suffix.
 - **POSIX delivers asynchronous ICMP errors only to *connected* UDP sockets.**
   An unconnected probe never sees a port-unreachable and just times out, while

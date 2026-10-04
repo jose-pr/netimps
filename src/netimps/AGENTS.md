@@ -6,7 +6,7 @@ consumed without reading its source.
 
 Everything is imported from `netimps` directly. The `_`-prefixed submodules
 (`_ip`, `_mac`, `_ifaddrs`, `_sockets`, `_dns`, `_ping`, `_scan`, `_multicast`,
-`_scheme`, `_retry`, `_udp`, `_iface_spec`) are implementation detail —
+`_scheme`, `_retry`, `_udp`) are implementation detail —
 **do not import them**.
 
 **This file documents using the library**, and ships inside the package, so it

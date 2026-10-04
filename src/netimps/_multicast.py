@@ -35,9 +35,9 @@ import sys as _sys
 import struct as _struct
 from typing import List, Optional, Union
 
-from ._iface_spec import InterfaceLike, interface_address as _interface_address
-from ._iface_spec import interface_index as _interface_index
-from ._ifaddrs import get_interfaces
+from ._ifaddrs import InterfaceLike, get_interfaces
+from ._ifaddrs import interface_address as _interface_address
+from ._ifaddrs import interface_index as _interface_index
 from ._exceptions import NetimpsValueError
 from ._ip import IPAddress, IPAddressLike
 from ._parse import try_parse

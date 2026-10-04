@@ -27,7 +27,8 @@ from netimps import (
     is_local_address,
     retry,
 )
-from netimps import _iface_spec, _pktinfo, _retry, _udp
+from netimps import _ifaddrs, _pktinfo, _retry, _udp
+from netimps._ifaddrs import _lookup, _spec
 
 # --------------------------------------------------------------------------- #
 # bind                                                                         #
@@ -270,7 +271,7 @@ def _mock_lookup_interfaces(monkeypatch):
         calls.append(True)
         return interfaces
 
-    monkeypatch.setattr(netimps._ifaddrs, "get_interfaces", enumerate_interfaces)
+    monkeypatch.setattr(_lookup, "get_interfaces", enumerate_interfaces)
     return interfaces, calls
 
 
@@ -280,7 +281,7 @@ def test_interfaces_for_interface_does_not_enumerate(monkeypatch):
     def fail_enumeration():
         raise AssertionError("Interface lookup must not enumerate")
 
-    monkeypatch.setattr(netimps._ifaddrs, "get_interfaces", fail_enumeration)
+    monkeypatch.setattr(_lookup, "get_interfaces", fail_enumeration)
     assert list(iter_interfaces(iface)) == [iface]
     assert get_interface(iface) is iface
 
@@ -390,7 +391,7 @@ def test_is_local_address_loopback_does_not_enumerate(monkeypatch):
     def fail_enumeration():
         raise AssertionError("loopback must be answered before discovery")
 
-    monkeypatch.setattr(netimps._ifaddrs, "get_interfaces", fail_enumeration)
+    monkeypatch.setattr(_lookup, "get_interfaces", fail_enumeration)
     assert is_local_address("127.0.0.1")
     assert is_local_address("::1")
 
@@ -418,7 +419,7 @@ def test_is_local_address_malformed_input_raises(monkeypatch):
 
 
 def test_interface_spec_none_is_none():
-    assert _iface_spec.interface_address(None) is None
+    assert _spec.interface_address(None) is None
 
 
 def test_interface_spec_returns_parsed_addresses():
@@ -429,7 +430,7 @@ def test_interface_spec_returns_parsed_addresses():
     ``interface_index`` has always applied. The point of this test is the return
     *type*, so it just needs an address that passes that check.
     """
-    result = _iface_spec.interface_address("127.0.0.1")
+    result = _spec.interface_address("127.0.0.1")
     assert result == netimps.parse("127.0.0.1")
     assert not isinstance(result, str)
 
@@ -442,36 +443,36 @@ def test_interface_spec_rejects_an_address_no_interface_holds():
     depending on which family the caller happened to be using.
     """
     with pytest.raises(ValueError, match="no local interface holds address"):
-        _iface_spec.interface_address("10.0.0.5", strict=True)
+        _spec.interface_address("10.0.0.5", strict=True)
     # strict=False still passes it through: ping(src=) and UDPEndpoint.send()
     # both rely on that, and the OS gives the real error when the bind fails.
-    assert _iface_spec.interface_address("10.0.0.5", strict=False) == netimps.parse(
+    assert _spec.interface_address("10.0.0.5", strict=False) == netimps.parse(
         "10.0.0.5"
     )
 
 
 def test_interface_spec_rejects_a_non_address_string():
     with pytest.raises(ValueError):
-        _iface_spec.interface_address("definitely not an address")
+        _spec.interface_address("definitely not an address")
 
 
 def test_interface_spec_strict_raises_loose_returns_none():
     """The two original callers disagreed; both behaviours are preserved."""
     with pytest.raises(ValueError, match="no interface named"):
-        _iface_spec.interface_address("no-such-nic", strict=True)
-    assert _iface_spec.interface_address("no-such-nic", strict=False) is None
+        _spec.interface_address("no-such-nic", strict=True)
+    assert _spec.interface_address("no-such-nic", strict=False) is None
 
     unknown_mac = netimps.MACAddress("02:00:00:00:00:99")
     with pytest.raises(ValueError, match="no interface with MAC"):
-        _iface_spec.interface_address(unknown_mac, strict=True)
-    assert _iface_spec.interface_address(unknown_mac, strict=False) is None
+        _spec.interface_address(unknown_mac, strict=True)
+    assert _spec.interface_address(unknown_mac, strict=False) is None
 
 
 def test_interface_spec_resolves_interface_object():
     loopback = next((i for i in netimps.get_interfaces() if i.is_loopback), None)
     if loopback is None:  # pragma: no cover - host without a loopback entry
         pytest.skip("no loopback interface enumerated on this host")
-    resolved = _iface_spec.interface_address(loopback)
+    resolved = _spec.interface_address(loopback)
     assert resolved.is_loopback
 
 
@@ -822,10 +823,8 @@ def _force_index_only_spec(monkeypatch):
     names an address or resolves to one -- so the resolver is faked. What is
     being tested is our own branch, not the resolver.
     """
-    from netimps import _iface_spec
-
-    monkeypatch.setattr(_iface_spec, "interface_address", lambda *a, **k: None)
-    monkeypatch.setattr(_iface_spec, "interface_index", lambda *a, **k: 1)
+    monkeypatch.setattr(_ifaddrs, "interface_address", lambda *a, **k: None)
+    monkeypatch.setattr(_ifaddrs, "interface_index", lambda *a, **k: 1)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="the zero-address rule is Windows-only")

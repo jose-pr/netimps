@@ -11,6 +11,7 @@ import pytest
 
 import netimps
 from netimps import PORT_RANGES, IPv4Interface, is_multicast, scan_hosts, scan_ports
+from netimps._ifaddrs import _lookup, _spec
 
 
 @pytest.fixture
@@ -672,9 +673,10 @@ def fake_adapter(monkeypatch):
             netimps.IPv6Interface("2001:db8::10/64"),
         ],
     )
-    # Everything reaches enumeration through `._ifaddrs.get_interfaces` (a
-    # function-local import in each caller), so one patch covers them all.
-    monkeypatch.setattr(netimps._ifaddrs, "get_interfaces", lambda **k: [adapter])
+    # The membership request resolves the adapter through the interface spec
+    # and through `get_interface`; each reads its own `get_interfaces`.
+    monkeypatch.setattr(_lookup, "get_interfaces", lambda **k: [adapter])
+    monkeypatch.setattr(_spec, "get_interfaces", lambda **k: [adapter])
     return adapter
 
 
@@ -789,7 +791,8 @@ def test_ipv6_interface_without_an_index_raises_rather_than_defaulting(monkeypat
     indexless = netimps.Interface(
         name="fake0", index=0, ips=[netimps.IPv6Interface("2001:db8::10/64")]
     )
-    monkeypatch.setattr(netimps._ifaddrs, "get_interfaces", lambda **k: [indexless])
+    monkeypatch.setattr(_lookup, "get_interfaces", lambda **k: [indexless])
+    monkeypatch.setattr(_spec, "get_interfaces", lambda **k: [indexless])
     with pytest.raises(ValueError, match="reports no index"):
         netimps._multicast._membership_request("ff02::fb", "fake0", ipv6=True)
 

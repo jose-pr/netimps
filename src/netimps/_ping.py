@@ -18,7 +18,7 @@ import sys as _sys
 from typing import Any, List, Literal, Optional, Tuple, cast as _cast
 
 from . import _dns, _proc
-from ._iface_spec import InterfaceLike, interface_address as _interface_address
+from ._ifaddrs import InterfaceLike, interface_address as _interface_address
 from ._ip import HostLike, IPAddress, _dst_argument
 from ._parse import try_parse as _try_parse
 

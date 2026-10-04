@@ -16,7 +16,16 @@ import pytest
 
 import netimps
 from netimps import Interface, MACAddress, get_interfaces, iter_addresses
-from netimps import _ifaddrs, _iface_spec
+from netimps import _ifaddrs
+from netimps._ifaddrs import (
+    _cache,
+    _fallback,
+    _lookup,
+    _model,
+    _posix,
+    _spec,
+    _windows,
+)
 
 # --------------------------------------------------------------------------- #
 # Pure helpers                                                                 #
@@ -35,24 +44,24 @@ from netimps import _ifaddrs, _iface_spec
     ],
 )
 def test_prefix_from_netmask_ipv4(mask, expected):
-    assert _ifaddrs._prefix_from_netmask(mask) == expected
+    assert _posix._prefix_from_netmask(mask) == expected
 
 
 def test_prefix_from_netmask_ipv6():
-    assert _ifaddrs._prefix_from_netmask(b"\xff" * 8 + b"\x00" * 8) == 64
-    assert _ifaddrs._prefix_from_netmask(b"\xff" * 16) == 128
+    assert _posix._prefix_from_netmask(b"\xff" * 8 + b"\x00" * 8) == 64
+    assert _posix._prefix_from_netmask(b"\xff" * 16) == 128
 
 
 def test_prefix_stops_at_first_zero_bit():
     """A non-contiguous mask must not over-count trailing set bits."""
     # 0xff 0x0f -> counting stops after the 8 leading ones.
-    assert _ifaddrs._prefix_from_netmask(b"\xff\x0f\xff\xff") == 8
+    assert _posix._prefix_from_netmask(b"\xff\x0f\xff\xff") == 8
 
 
 def test_make_ip_interface_rejects_garbage():
-    assert _ifaddrs._make_ip_interface("not-an-ip", 24) is None
-    assert _ifaddrs._make_ip_interface("10.0.0.1", 99) is None
-    assert _ifaddrs._make_ip_interface("10.0.0.1", 24) is not None
+    assert _model._make_ip_interface("not-an-ip", 24) is None
+    assert _model._make_ip_interface("10.0.0.1", 99) is None
+    assert _model._make_ip_interface("10.0.0.1", 24) is not None
 
 
 # --------------------------------------------------------------------------- #
@@ -254,9 +263,9 @@ def test_enumerated_macs_are_never_all_zero():
     ``iface.mac is None`` has to mean the same thing on every platform, or a
     per-platform branch appears in caller code.
     """
-    assert _ifaddrs._mac(b"\x00" * 6) is None
+    assert _model._mac(b"\x00" * 6) is None
     # A MAC that merely *starts* with zero bytes is still a MAC.
-    assert _ifaddrs._mac(b"\x00\x00\x5e\x00\x53\x01") == MACAddress("00:00:5e:00:53:01")
+    assert _model._mac(b"\x00\x00\x5e\x00\x53\x01") == MACAddress("00:00:5e:00:53:01")
     for iface in get_interfaces():
         assert iface.mac is None or int(iface.mac) != 0
 
@@ -278,7 +287,7 @@ def test_enumeration_is_stable():
 
 
 def test_fallback_reports_host_routes(no_such_host):
-    ifaces = _ifaddrs._fallback_interfaces(False)
+    ifaces = _fallback._fallback_interfaces(False)
     assert len(ifaces) == 1
     iface = ifaces[0]
     assert iface.name == "<unknown>"
@@ -295,8 +304,8 @@ def test_get_interfaces_degrades_instead_of_raising(monkeypatch, no_such_host):
     def boom(_raw):
         raise OSError("native enumeration exploded")
 
-    monkeypatch.setattr(_ifaddrs, "_windows_interfaces", boom)
-    monkeypatch.setattr(_ifaddrs, "_posix_interfaces", boom)
+    monkeypatch.setattr(_cache, "_windows_interfaces", boom)
+    monkeypatch.setattr(_cache, "_posix_interfaces", boom)
 
     ifaces = _ifaddrs.get_interfaces()
     assert ifaces and ifaces[0].name == "<unknown>"
@@ -306,8 +315,8 @@ def test_fallback_raw_flags_degradation(monkeypatch, no_such_host):
     def boom(_raw):
         raise OSError("nope")
 
-    monkeypatch.setattr(_ifaddrs, "_windows_interfaces", boom)
-    monkeypatch.setattr(_ifaddrs, "_posix_interfaces", boom)
+    monkeypatch.setattr(_cache, "_windows_interfaces", boom)
+    monkeypatch.setattr(_cache, "_posix_interfaces", boom)
 
     iface = _ifaddrs.get_interfaces(raw=True)[0]
     assert iface.raw["degraded"] is True
@@ -384,7 +393,7 @@ def _fake_sockaddr_dl(name, mac=_VRRP_MAC, sdl_len=None):
     way the kernel sizes it (header + name + address), which is the whole
     point: it is usually *smaller* than ``sizeof(_SockaddrDl)``.
     """
-    from netimps._ifaddrs import _SockaddrDl
+    from netimps._ifaddrs._posix import _SockaddrDl
 
     offset = _SockaddrDl.sdl_data.offset
     size = offset + len(name) + len(mac)
@@ -407,7 +416,7 @@ def test_sockaddr_dl_matches_the_c_struct():
     extracted MAC was right, but it was undefined behaviour one page boundary
     away from a crash.
     """
-    from netimps._ifaddrs import _SockaddrDl
+    from netimps._ifaddrs._posix import _SockaddrDl
 
     assert ctypes.sizeof(_SockaddrDl) == 20
     assert _SockaddrDl.sdl_data.offset == 8
@@ -426,7 +435,7 @@ def test_sockaddr_dl_mac_extraction():
     than at a fixed offset.
     """
     _buf, sdl = _fake_sockaddr_dl(b"en01")
-    assert _ifaddrs._mac_from_sockaddr_dl(sdl) == MACAddress("00:00:5e:00:53:01")
+    assert _posix._mac_from_sockaddr_dl(sdl) == MACAddress("00:00:5e:00:53:01")
 
 
 def test_sockaddr_dl_mac_past_the_declared_end_of_sdl_data():
@@ -439,24 +448,24 @@ def test_sockaddr_dl_mac_past_the_declared_end_of_sdl_data():
     name = b"bridge-example"  # 14 > sizeof(sdl_data)
     _buf, sdl = _fake_sockaddr_dl(name)
     assert sdl.sdl_len == 8 + len(name) + 6
-    assert _ifaddrs._mac_from_sockaddr_dl(sdl) == MACAddress("00:00:5e:00:53:01")
+    assert _posix._mac_from_sockaddr_dl(sdl) == MACAddress("00:00:5e:00:53:01")
 
 
 def test_sockaddr_dl_refuses_to_read_past_sdl_len():
     """The bound is the kernel's, not the struct declaration's."""
     _buf, sdl = _fake_sockaddr_dl(b"en01", sdl_len=12)  # header + name only
-    assert _ifaddrs._mac_from_sockaddr_dl(sdl) is None
+    assert _posix._mac_from_sockaddr_dl(sdl) is None
 
 
 def test_sockaddr_dl_without_a_six_byte_address():
     """Tunnels and the like report ``sdl_alen`` 0; there is no MAC to read."""
     _buf, sdl = _fake_sockaddr_dl(b"utun0", mac=b"")
-    assert _ifaddrs._mac_from_sockaddr_dl(sdl) is None
+    assert _posix._mac_from_sockaddr_dl(sdl) is None
 
 
 def test_sockaddr_dl_data_is_not_addressable_directly():
     """Pins *why* the offset arithmetic is needed, so it is not 'simplified'."""
-    from netimps._ifaddrs import _SockaddrDl
+    from netimps._ifaddrs._posix import _SockaddrDl
 
     sdl = _SockaddrDl()
     with pytest.raises(TypeError):
@@ -522,8 +531,8 @@ def test_iter_addresses_still_yields_pairs():
 def one_adapter(monkeypatch):
     """A single known adapter, so the assertions are exact, not host-dependent.
 
-    Everything reaches enumeration through ``._ifaddrs.get_interfaces`` (a
-    function-local import in each caller), so one patch covers them all.
+    Each lookup module reads its own ``get_interfaces``, so the two that the
+    interface specs and ``get_interface`` go through are both patched.
     """
     adapter = Interface(
         name="fake0",
@@ -534,18 +543,19 @@ def one_adapter(monkeypatch):
             ipaddress.ip_interface("2001:db8::10/64"),
         ],
     )
-    monkeypatch.setattr(_ifaddrs, "get_interfaces", lambda **k: [adapter])
+    monkeypatch.setattr(_lookup, "get_interfaces", lambda **k: [adapter])
+    monkeypatch.setattr(_spec, "get_interfaces", lambda **k: [adapter])
     return adapter
 
 
 def test_interface_address_honours_the_wanted_family(one_adapter):
     """A wrong-family literal used to reach inet_aton/bind and fail there."""
     with pytest.raises(ValueError, match="IPv4 one was requested"):
-        _iface_spec.interface_address("2001:db8::10", want_ipv6=False)
+        _spec.interface_address("2001:db8::10", want_ipv6=False)
     with pytest.raises(ValueError, match="IPv6 one was requested"):
-        _iface_spec.interface_address("192.0.2.10", want_ipv6=True)
+        _spec.interface_address("192.0.2.10", want_ipv6=True)
     # Either family: no check.
-    assert str(_iface_spec.interface_address("2001:db8::10", want_ipv6=None)) == (
+    assert str(_spec.interface_address("2001:db8::10", want_ipv6=None)) == (
         "2001:db8::10"
     )
 
@@ -557,9 +567,7 @@ def test_interface_address_tolerant_callers_still_see_the_address(one_adapter):
     raises its own message for the reverse, so it must receive the address
     rather than ``None``.
     """
-    resolved = _iface_spec.interface_address(
-        "2001:db8::10", want_ipv6=False, strict=False
-    )
+    resolved = _spec.interface_address("2001:db8::10", want_ipv6=False, strict=False)
     assert str(resolved) == "2001:db8::10"
 
 
@@ -572,19 +580,16 @@ def test_both_resolutions_apply_the_same_locality_rule(one_adapter):
     the identical IPv6 one refused.
     """
     with pytest.raises(ValueError, match="no local interface holds address"):
-        _iface_spec.interface_address("198.51.100.7")
+        _spec.interface_address("198.51.100.7")
     with pytest.raises(ValueError, match="no local interface holds address"):
-        _iface_spec.interface_index("198.51.100.7")
+        _spec.interface_index("198.51.100.7")
 
-    assert str(_iface_spec.interface_address("192.0.2.10")) == "192.0.2.10"
-    assert _iface_spec.interface_index("192.0.2.10") == 37
+    assert str(_spec.interface_address("192.0.2.10")) == "192.0.2.10"
+    assert _spec.interface_index("192.0.2.10") == 37
 
     # Tolerant callers keep the old leniency, which _udp documents and uses.
-    assert (
-        str(_iface_spec.interface_address("198.51.100.7", strict=False))
-        == "198.51.100.7"
-    )
-    assert _iface_spec.interface_index("198.51.100.7", strict=False) is None
+    assert str(_spec.interface_address("198.51.100.7", strict=False)) == "198.51.100.7"
+    assert _spec.interface_index("198.51.100.7", strict=False) is None
 
 
 def test_locality_rule_steps_aside_for_degraded_enumeration(monkeypatch, no_such_host):
@@ -594,10 +599,13 @@ def test_locality_rule_steps_aside_for_degraded_enumeration(monkeypatch, no_such
     ``getaddrinfo(gethostname())`` returned -- never 127.0.0.1 -- so checking
     an address against it would reject addresses the host really has.
     """
-    monkeypatch.setattr(
-        _ifaddrs, "get_interfaces", lambda **k: _ifaddrs._fallback_interfaces(False)
-    )
-    assert str(_iface_spec.interface_address("198.51.100.7")) == "198.51.100.7"
+    for module in (_lookup, _spec):
+        monkeypatch.setattr(
+            module,
+            "get_interfaces",
+            lambda **k: _fallback._fallback_interfaces(False),
+        )
+    assert str(_spec.interface_address("198.51.100.7")) == "198.51.100.7"
 
 
 def test_interface_spec_honours_a_zone_suffix(one_adapter):
@@ -607,11 +615,11 @@ def test_interface_spec_honours_a_zone_suffix(one_adapter):
     address and every scoped literal failed the lookup outright.
     """
     # Numeric zone (Linux, Windows): the index the OS itself wrote.
-    assert _iface_spec.interface_index("2001:db8::10%37") == 37
+    assert _spec.interface_index("2001:db8::10%37") == 37
     # Named zone (macOS, BSD).
-    assert _iface_spec.interface_index("2001:db8::10%fake0") == 37
+    assert _spec.interface_index("2001:db8::10%fake0") == 37
     # The address keeps its zone; only the lookup drops it.
-    resolved = _iface_spec.interface_address("2001:db8::10%fake0", want_ipv6=True)
+    resolved = _spec.interface_address("2001:db8::10%fake0", want_ipv6=True)
     assert str(resolved) == "2001:db8::10%fake0"
 
 
@@ -691,7 +699,7 @@ def test_the_ttl_expires(monkeypatch):
 
     calls = _counting_enumerator(monkeypatch)
     now = [1000.0]
-    monkeypatch.setattr(_ifaddrs._time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(_cache._time, "monotonic", lambda: now[0])
 
     netimps.get_interfaces(cache=1.0)
     now[0] += 0.5
@@ -728,10 +736,10 @@ def test_cache_one_is_a_one_second_ttl_not_the_default(monkeypatch):
     """
     from netimps import _ifaddrs
 
-    monkeypatch.setattr(_ifaddrs, "INTERFACE_CACHE_TTL", 999.0)
+    monkeypatch.setattr(_cache, "INTERFACE_CACHE_TTL", 999.0)
     calls = _counting_enumerator(monkeypatch)
     now = [1000.0]
-    monkeypatch.setattr(_ifaddrs._time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(_cache._time, "monotonic", lambda: now[0])
 
     netimps.get_interfaces(cache=1)
     now[0] += 2.0
@@ -749,7 +757,7 @@ def test_infinite_ttl_never_expires_and_clear_is_the_invalidation(monkeypatch):
 
     calls = _counting_enumerator(monkeypatch)
     now = [1000.0]
-    monkeypatch.setattr(_ifaddrs._time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(_cache._time, "monotonic", lambda: now[0])
 
     netimps.get_interfaces(cache=math.inf)
     now[0] += 10_000.0
@@ -881,7 +889,7 @@ def test_the_uncached_path_passes_no_keyword_to_get_interfaces(monkeypatch):
         seen.append("called")
         return []
 
-    monkeypatch.setattr(_ifaddrs, "get_interfaces", no_kwargs_stub)
+    monkeypatch.setattr(_lookup, "get_interfaces", no_kwargs_stub)
     assert netimps.get_interface("10.9.9.9") is None
     assert seen == ["called"]
 
@@ -1186,7 +1194,7 @@ def test_is_up_is_part_of_the_value():
     ],
 )
 def test_posix_is_up_needs_both_flags(flags, expected):
-    assert _ifaddrs._posix_is_up(flags) is expected
+    assert _posix._posix_is_up(flags) is expected
 
 
 @pytest.mark.parametrize(
@@ -1195,7 +1203,7 @@ def test_posix_is_up_needs_both_flags(flags, expected):
 )
 def test_windows_is_up_reads_the_operational_status(status, expected):
     """IfOperStatusUp is 1; Unknown (4) is "the system did not say"."""
-    assert _ifaddrs._windows_is_up(status) is expected
+    assert _windows._windows_is_up(status) is expected
 
 
 @pytest.mark.parametrize(
@@ -1204,16 +1212,16 @@ def test_windows_is_up_reads_the_operational_status(status, expected):
 )
 def test_a_tentative_or_duplicate_address_is_left_out(state, kept):
     """IpDadStateTentative is 1, Duplicate 2, Deprecated 3, Preferred 4."""
-    assert _ifaddrs._address_is_usable(state) is kept
+    assert _windows._address_is_usable(state) is kept
 
 
 def test_the_windows_index_falls_back_to_the_ipv6_index():
-    assert _ifaddrs._windows_index(0, 12) == 12
-    assert _ifaddrs._windows_index(7, 12) == 7
-    assert _ifaddrs._windows_index(0, 0) == 0
+    assert _windows._windows_index(0, 12) == 12
+    assert _windows._windows_index(7, 12) == 7
+    assert _windows._windows_index(0, 0) == 0
 
 
-@pytest.mark.skipif(not _ifaddrs._IS_WINDOWS, reason="the Windows adapter walk")
+@pytest.mark.skipif(not _cache._IS_WINDOWS, reason="the Windows adapter walk")
 def test_on_windows_no_listed_ipv4_address_is_one_the_system_refuses():
     """Ground truth is a real bind: a media-disconnected adapter's tentative
     169.254 address failed with WSAEADDRNOTAVAIL (10049) yet was listed."""
@@ -1230,7 +1238,7 @@ def test_on_windows_no_listed_ipv4_address_is_one_the_system_refuses():
     assert refused == []
 
 
-@pytest.mark.skipif(not _ifaddrs._IS_WINDOWS, reason="the Windows adapter walk")
+@pytest.mark.skipif(not _cache._IS_WINDOWS, reason="the Windows adapter walk")
 def test_on_windows_a_down_adapter_stays_listed_with_is_up_false():
     for iface in get_interfaces(raw=True):
         status = iface.raw["oper_status"]
@@ -1297,13 +1305,13 @@ def test_the_repr_is_a_constructor_call_that_round_trips():
 
 def test_raw_is_read_only_and_a_cache_hit_shares_nothing_mutable(monkeypatch):
     monkeypatch.setattr(
-        _ifaddrs,
+        _cache,
         "_posix_interfaces",
         lambda raw: [
             Interface("a", 1, raw={"flags": 1, "families": [2, 10]}),
         ],
     )
-    monkeypatch.setattr(_ifaddrs, "_IS_WINDOWS", False)
+    monkeypatch.setattr(_cache, "_IS_WINDOWS", False)
     netimps.clear_interface_cache()
     try:
         first = get_interfaces(raw=True, cache=True)[0]
@@ -1343,7 +1351,7 @@ def test_clearing_the_cache_during_an_enumeration_is_not_lost(monkeypatch):
             return [Interface("stale-before-change", 1)]
         return [Interface("fresh", 1)]
 
-    monkeypatch.setattr(_ifaddrs, "_enumerate_interfaces", enumerate_)
+    monkeypatch.setattr(_cache, "_enumerate_interfaces", enumerate_)
     netimps.clear_interface_cache()
     try:
         worker = threading.Thread(target=lambda: get_interfaces(cache=math.inf))
@@ -1363,8 +1371,8 @@ def test_a_bug_in_the_native_walk_is_not_reported_as_a_degraded_host(monkeypatch
     def broken(_raw):
         raise ValueError("NULL pointer access")
 
-    monkeypatch.setattr(_ifaddrs, "_windows_interfaces", broken)
-    monkeypatch.setattr(_ifaddrs, "_posix_interfaces", broken)
+    monkeypatch.setattr(_cache, "_windows_interfaces", broken)
+    monkeypatch.setattr(_cache, "_posix_interfaces", broken)
     with pytest.raises(ValueError):
         get_interfaces()
 
@@ -1375,9 +1383,9 @@ def test_the_fallback_says_why_and_logs_once(monkeypatch, caplog, no_such_host):
     def refuse(_raw):
         raise OSError("getifaddrs unavailable")
 
-    monkeypatch.setattr(_ifaddrs, "_windows_interfaces", refuse)
-    monkeypatch.setattr(_ifaddrs, "_posix_interfaces", refuse)
-    monkeypatch.setattr(_ifaddrs, "_fallback_logged", False)
+    monkeypatch.setattr(_cache, "_windows_interfaces", refuse)
+    monkeypatch.setattr(_cache, "_posix_interfaces", refuse)
+    monkeypatch.setattr(_cache, "_fallback_logged", False)
     with caplog.at_level(logging.DEBUG, logger="netimps._ifaddrs"):
         first = get_interfaces(raw=True)[0]
         get_interfaces(raw=True)
@@ -1412,12 +1420,12 @@ def test_the_fallback_says_why_and_logs_once(monkeypatch, caplog, no_such_host):
 def test_a_short_bsd_netmask_is_the_zero_filled_mask_it_stands_for(
     sa_len, offset, mask, expected
 ):
-    assert _ifaddrs._bsd_mask_bytes(sa_len, offset, mask) == expected
+    assert _posix._bsd_mask_bytes(sa_len, offset, mask) == expected
 
 
 def test_a_zero_length_netmask_is_prefix_zero():
-    mask = _ifaddrs._bsd_mask_bytes(0, 4, b"\xff\x00\x00\x00")
-    assert _ifaddrs._prefix_from_netmask(mask) == 0
+    mask = _posix._bsd_mask_bytes(0, 4, b"\xff\x00\x00\x00")
+    assert _posix._prefix_from_netmask(mask) == 0
 
 
 # --------------------------------------------------------------------------- #
@@ -1458,22 +1466,22 @@ def test_the_classifiers_read_an_interface_object_as_its_address():
 def test_interface_index_and_get_interface_agree_on_every_spec(one_adapter, spec):
     """Two lookups of one spec must give one answer."""
     found = netimps.get_interface(spec)
-    index = _iface_spec.interface_index(spec, strict=False)
+    index = _spec.interface_index(spec, strict=False)
     assert (found is None) == (index is None)
     if found is not None:
         assert index == found.index
     else:
         with pytest.raises(ValueError):
-            _iface_spec.interface_index(spec)
+            _spec.interface_index(spec)
 
 
 @pytest.mark.parametrize("spec", ["2001:db8::10%nosuchadapter", "2001:db8::10%999"])
 def test_a_zone_that_names_no_adapter_holding_the_address_is_refused(one_adapter, spec):
     with pytest.raises(ValueError, match="no local interface holds address"):
-        _iface_spec.interface_index(spec)
+        _spec.interface_index(spec)
     with pytest.raises(ValueError, match="no local interface holds address"):
-        _iface_spec.interface_address(spec, want_ipv6=True)
-    assert _iface_spec.interface_index(spec, strict=False) is None
+        _spec.interface_address(spec, want_ipv6=True)
+    assert _spec.interface_index(spec, strict=False) is None
     assert netimps.get_interface(spec) is None
     assert list(netimps.iter_interfaces(spec)) == []
 
@@ -1482,9 +1490,9 @@ def test_the_real_loopback_zone_is_refused_when_it_names_nothing():
     """``::1%nosuchadapter`` was the loopback index with the zone ignored."""
     if not any(i.is_loopback and i.ipv6 for i in get_interfaces()):
         pytest.skip("no IPv6 loopback here")
-    assert _iface_spec.interface_index("::1", strict=False)
-    assert _iface_spec.interface_index("::1%nosuchadapter", strict=False) is None
-    assert _iface_spec.interface_index("::1%999999", strict=False) is None
+    assert _spec.interface_index("::1", strict=False)
+    assert _spec.interface_index("::1%nosuchadapter", strict=False) is None
+    assert _spec.interface_index("::1%999999", strict=False) is None
 
 
 def test_get_interface_finds_an_interface_by_name_and_by_index(one_adapter):
