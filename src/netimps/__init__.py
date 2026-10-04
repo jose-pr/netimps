@@ -120,16 +120,9 @@ from ._multicast import (
 )
 from ._fqdn import FQDN, FQDNLike
 from ._retry import Backoff, backoff_delays, retry
-from ._msg import (
-    CMSG_LEN,
-    CMSG_SPACE,
-    patch_socket_module,
-    recvmsg,
-    sendmsg,
-    is_socket_patched,
-    has_recvmsg,
-)
-from ._msg import _patch_requested as _msg_patch_requested
+from ._msg import CMSG_LEN, CMSG_SPACE, has_recvmsg, recvmsg, sendmsg
+from ._msg._patch import is_socket_patched, patch_socket_module
+from ._msg._patch import _patch_requested as _msg_patch_requested
 
 from ._udp import Datagram, UDPEndpoint, has_pktinfo, SocketAddress
 from ._sockets import (

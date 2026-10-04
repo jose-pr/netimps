@@ -79,7 +79,12 @@ src/netimps/
 ├── _udp.py        # private: UDP receive with arrival interface (pktinfo)
 ├── _freebsd.py    # private: IPv4 arrival data and source pinning on FreeBSD
 ├── _fqdn.py       # private: FQDN domain-name value type (label algebra)
-├── _msg.py        # private: cross-platform recvmsg/sendmsg + the socket patch
+├── _pktinfo.py    # private: pktinfo constants, per-platform layouts, decoding (imports neither _udp nor _msg)
+├── _msg/          # private package: cross-platform recvmsg/sendmsg + the socket patch
+│   ├── _dispatch.py  # recvmsg, sendmsg, CMSG_LEN/SPACE: native, or Winsock on Windows
+│   ├── _shape.py     # IPv4 pktinfo re-laid between the Windows and POSIX field orders
+│   ├── _sysconf.py   # the os.sysconf stand-in the patch installs
+│   └── _patch.py     # install/remove the socket patch (only the root imports it)
 ├── _aio.py        # private: add_reader polyfill, so arecv works on a Proactor loop
 ├── _winsock/      # private package: ctypes WSARecvMsg/WSASendMsg (Windows only, never imported elsewhere)
 │   ├── _abi.py       # ws2_32, the structures, argtypes

@@ -14,7 +14,7 @@ import sys
 import pytest
 
 import netimps
-from netimps import _udp as _udp_module
+from netimps import _pktinfo
 
 IS_WINDOWS = os.name == "nt"
 
@@ -212,13 +212,13 @@ def test_a_tiny_control_buffer_truncates_instead_of_reading_out_of_bounds():
     buffer), not the size it wrote, so believing it indexed past the ctypes
     allocation. The flag must be reported and the parse must stay in bounds.
     """
-    # From `_udp`, not from `socket`: `socket.IP_PKTINFO` only exists from
+    # From `_pktinfo`, not from `socket`: `socket.IP_PKTINFO` only exists from
     # CPython 3.12, so probing it here skipped this test on 3.9 -- the same blind
     # spot that let the constant bug reach main in the first place. The literal
-    # table in `_udp` is the platform fact; `socket` is just one source for it.
-    from netimps import _udp
+    # table in `_pktinfo` is the platform fact; `socket` is just one source for it.
+    from netimps import _pktinfo
 
-    ip_pktinfo = _udp._IP_PKTINFO
+    ip_pktinfo = _pktinfo._IP_PKTINFO
     if ip_pktinfo is None:
         pytest.skip("no IP_PKTINFO on this platform")
     server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -251,7 +251,7 @@ def test_two_cmsgs_in_one_buffer_are_both_parsed():
     and skips.
     """
     options = [
-        (socket.IPPROTO_IP, _udp_module._IP_PKTINFO),
+        (socket.IPPROTO_IP, _pktinfo._IP_PKTINFO),
         (socket.IPPROTO_IP, getattr(socket, "IP_RECVDSTADDR", None)),
     ]
     options = [(lvl, opt) for lvl, opt in options if opt is not None]
@@ -396,18 +396,19 @@ def test_the_patch_never_replaces_a_native_name():
     import os as _os
 
     from netimps import _msg
+    from netimps._msg import _patch, _sysconf
 
     # Expressed against what is actually installed, rather than through a
     # `_NATIVE_*` naming convention: that convention only ever covered the four
     # socket names and passed vacuously for anything else, os.sysconf included.
     expected = {
-        "socket.recvmsg": _msg._patched_recvmsg,
-        "socket.sendmsg": _msg._patched_sendmsg,
+        "socket.recvmsg": _patch._patched_recvmsg,
+        "socket.sendmsg": _patch._patched_sendmsg,
         "CMSG_LEN": _msg.CMSG_LEN,
         "CMSG_SPACE": _msg.CMSG_SPACE,
-        "os.sysconf": _msg._shim_sysconf,
+        "os.sysconf": _sysconf._shim_sysconf,
     }
-    for name, (owner, attribute) in _msg._installed.items():
+    for name, (owner, attribute) in _patch._installed.items():
         if name == "os.sysconf_names":
             assert isinstance(getattr(owner, attribute), dict)
             continue
@@ -428,7 +429,7 @@ def test_opt_out_is_readable_from_the_environment(monkeypatch):
     Unset or empty: patch (True). "1", "true", "yes", "on": patch (True).
     "0", "false", "no", "off": do not patch (False). Anything else: ValueError.
     """
-    from netimps._msg import _patch_requested
+    from netimps._msg._patch import _patch_requested
 
     monkeypatch.delenv("NETIMPS_SOCKET_PATCH", raising=False)
     monkeypatch.delenv("NETIMPS_NO_SOCKET_PATCH", raising=False)
@@ -765,9 +766,9 @@ def test_sysconf_is_installed_and_removed_with_the_socket_names():
     if not IS_WINDOWS:
         pytest.skip("nothing to install where the platform has both")
     import os as _os
-    from netimps import _msg
+    from netimps._msg import _patch
 
-    assert "os.sysconf" in _msg._installed
+    assert "os.sysconf" in _patch._installed
     removed = netimps.patch_socket_module(False)
     try:
         assert "os.sysconf" in removed
@@ -810,9 +811,9 @@ def _recv_both_ways(dest="127.0.0.1", bind_to="0.0.0.0"):
     """One datagram, captured through netimps.recvmsg and through sock.recvmsg."""
     import select
 
-    from netimps import _udp
+    from netimps import _pktinfo
 
-    option = _udp._IP_PKTINFO
+    option = _pktinfo._IP_PKTINFO
     if option is None:
         pytest.skip("no IPv4 IP_PKTINFO on this platform")
     out = {}
@@ -917,14 +918,14 @@ def test_netimps_recvmsg_always_reports_the_platforms_own_bytes():
     said; only the impersonation reshapes. `UDPEndpoint` depends on this, since
     it calls `_msg` directly and carries its own per-platform layout table.
     """
-    from netimps import _udp
+    from netimps import _pktinfo
 
     captured = _recv_both_ways()
     native = captured["native"]
-    expected_size = struct.calcsize(_udp._PKTINFO_V4)
+    expected_size = struct.calcsize(_pktinfo._PKTINFO_V4)
     assert (
         len(native) == expected_size
-    ), "netimps.recvmsg must agree with _udp's layout table for this platform"
+    ), "netimps.recvmsg must agree with _pktinfo's layout table for this platform"
 
 
 @pytest.mark.skipif(
@@ -939,9 +940,9 @@ def test_on_posix_the_two_paths_are_identical():
 @pytest.mark.skipif(not IS_WINDOWS, reason="only Windows accepts two layouts")
 def test_the_patched_sendmsg_accepts_either_layout():
     """So a caller can round-trip what the patched recvmsg handed it."""
-    from netimps import _udp
+    from netimps import _pktinfo
 
-    option = _udp._IP_PKTINFO
+    option = _pktinfo._IP_PKTINFO
     peer = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     peer.bind(("127.0.0.1", 0))
     peer.settimeout(5.0)
@@ -974,9 +975,9 @@ def test_the_patched_sendmsg_accepts_either_layout():
 @pytest.mark.skipif(not IS_WINDOWS, reason="only Windows reshapes")
 def test_a_round_trip_through_the_patched_methods():
     """Receive through the patched method, send the same cmsg straight back."""
-    from netimps import _udp
+    from netimps import _pktinfo
 
-    option = _udp._IP_PKTINFO
+    option = _pktinfo._IP_PKTINFO
     captured = _recv_both_ways()
     patched = captured["patched"]
 
