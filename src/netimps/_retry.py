@@ -227,8 +227,8 @@ class Backoff:
     :func:`backoff_delays` is a one-shot schedule for "retry this call a few
     times". A long-lived session needs the other shape -- a current delay that
     advances when a reply does not come and goes back to the base when the peer
-    moves the transfer forward. Every protocol client in this family had
-    written its own::
+    moves the transfer forward. The loop it replaces is hand-written in every
+    protocol client::
 
         timer = Backoff(delay=timeout, max_delay=timeout * 8, jitter=0)
         while not done:

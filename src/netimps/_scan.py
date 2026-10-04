@@ -153,9 +153,9 @@ def _probe_addresses(host: "HostLike") -> "List[str]":
     """Resolve ``host`` to address literals **once**, for a whole scan.
 
     :func:`netimps.tcp_check` resolves its destination on every call, and a
-    scan dispatches one call per port -- so scanning a *name* issued one
-    lookup per port, 65,535 of them for a full sweep. The cost is not only
-    latency: a rate-limited or flaky resolver starts failing those lookups
+    scan dispatches one call per port -- so passing a *name* through would
+    cost one lookup per port, 65,535 of them for a full sweep. The cost is not
+    only latency: a rate-limited or flaky resolver starts failing those lookups
     partway through, ``tcp_check`` reads a failed lookup as unreachable, and
     the affected ports are reported **closed** by the function whose entire
     output is the list of open ones.
@@ -163,10 +163,10 @@ def _probe_addresses(host: "HostLike") -> "List[str]":
     An address literal is returned untouched, without consulting the resolver
     at all. A name that resolves to several addresses keeps all of them, in
     the order the system prefers: probing each in turn is what
-    ``socket.create_connection`` was already doing inside every single probe,
-    so a dual-stack name still reports a port open on either family. A name
-    that does not resolve yields an empty list -- the scan then finds nothing,
-    which is what it found before, after one lookup instead of thousands.
+    ``socket.create_connection`` does inside a single probe, so a dual-stack
+    name still reports a port open on either family. A name that does not
+    resolve yields an empty list, and the scan then finds nothing after one
+    lookup.
     """
 
     dst = _dst_argument(host)
@@ -297,8 +297,8 @@ def scan_ports(
         file descriptors or trip rate limiting.
 
     ``host`` is resolved **once** for the whole scan rather than once per port
-    -- see :func:`_probe_addresses` for why that is a correctness fix and not
-    only a speed one. A name that does not resolve returns ``[]``.
+    -- see :func:`_probe_addresses` for why that matters for correctness and
+    not only speed. A name that does not resolve returns ``[]``.
 
     Open means "the TCP handshake completed" -- not that the service is
     healthy, and not that a filtered port is distinguishable from a closed one

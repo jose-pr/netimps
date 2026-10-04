@@ -9,9 +9,11 @@ Re-exported from :mod:`netimps`; do not import this module path directly.
 
 Privilege boundary
 ------------------
-Everything here works unprivileged **except** :func:`count_hops`, which needs to
-read ICMP TTL-exceeded replies and therefore a raw socket (root/Administrator).
-It raises :class:`PermissionError` rather than silently returning nonsense.
+Everything here works unprivileged **except** :func:`count_hops`'s in-process
+path, which reads ICMP TTL-exceeded replies and therefore needs a raw socket
+(root/Administrator). Without one it drives the system ``traceroute``, or
+raises :class:`PermissionError` rather than silently returning nonsense when
+``allow_traceroute=False``.
 :func:`get_route` deliberately stops at the first hop, which *is* available
 unprivileged on every supported platform.
 """
@@ -132,19 +134,19 @@ _MIN_TIMEOUT = 0.05
 #
 # Measured 2026-09-20: ``socket.IP_MTU``, ``IP_MTU_DISCOVER`` and
 # ``IP_PMTUDISC_DO`` are absent on **every** platform including Linux (3.13
-# and 3.14), which is why ``get_pmtu``'s ``getattr`` guard made its whole body
-# unreachable. ``IPV6_PATHMTU``/``IPV6_DONTFRAG`` *are* exported on Linux.
+# and 3.14), so a ``getattr(socket, "IP_MTU", None)`` guard disables the code
+# that reads or sets them everywhere. ``IPV6_PATHMTU``/``IPV6_DONTFRAG`` *are*
+# exported on Linux.
 _LINUX_IP_MTU = 14  # <linux/in.h>
 _LINUX_IP_MTU_DISCOVER = 10  # <linux/in.h>
 _LINUX_IP_PMTUDISC_DO = 2  # <linux/in.h>
 _LINUX_IPV6_MTU_DISCOVER = 23  # <linux/in6.h>
 _LINUX_IPV6_PMTUDISC_DO = 2  # <linux/in6.h>
 _WINDOWS_IP_DONTFRAGMENT = 14  # <ws2ipdef.h>
-#: The BSDs do not agree with each other here, and using one number for all of
-#: them is how this shipped broken: FreeBSD's `IP_DONTFRAG` is 67, Darwin's is
-#: 28, and a `setsockopt` with the wrong one simply fails -- which, for a DF
-#: option, means the MTU search silently loses its whole point. Caught by CI on
-#: macOS, where `_set_dont_fragment` returned False with the FreeBSD value.
+#: The BSDs do not agree with each other here: FreeBSD's `IP_DONTFRAG` is 67,
+#: Darwin's is 28, and a `setsockopt` with the wrong one simply fails -- which,
+#: for a DF option, means the MTU search silently loses its whole point (on
+#: macOS `_set_dont_fragment` returns False with the FreeBSD value).
 _DARWIN_IP_DONTFRAG = 28  # <netinet/in.h>, Darwin
 _FREEBSD_IP_DONTFRAG = 67  # <netinet/in.h>, FreeBSD
 _BSD_IP_DONTFRAG = (
@@ -157,14 +159,14 @@ _BSD_IPV6_DONTFRAG = 62  # <netinet6/in6.h>
 class SocketOption(NamedTuple):
     """One ``setsockopt`` triple, for :func:`bind`'s ``options=``.
 
-    ``bind`` has always accepted bare ``(level, name, value)`` tuples and still
-    does -- this only gives the triple a name, so a caller building a list of
-    them reads as something other than ``Iterable[Tuple[int, int, Any]]``::
+    ``bind`` accepts bare ``(level, name, value)`` tuples as well -- this only
+    gives the triple a name, so a caller building a list of them reads as
+    something other than ``Iterable[Tuple[int, int, Any]]``::
 
         bind("", 67, options=[SocketOption(SOL_SOCKET, SO_RCVBUF, 1 << 20)])
 
-    A :class:`typing.NamedTuple`, so it *is* a tuple: existing code that passes
-    plain tuples, and code that unpacks these, both keep working.
+    A :class:`typing.NamedTuple`, so it *is* a tuple: plain tuples are
+    accepted and these unpack like any other.
     """
 
     level: int
@@ -203,10 +205,10 @@ def bind(
         ``str``: an :class:`IPv4Address`/:class:`IPv6Address`, an
         :class:`IPv4Interface`/:class:`IPv6Interface` (its ``.ip`` is used, since
         the ``/prefix`` means nothing to ``bind``), a :class:`netimps.Host` or a
-        :class:`netimps.FQDN`. It used to insist on a ``str`` and leak a raw
-        ``TypeError`` from the socket layer -- "str, bytes or bytearray expected,
-        not IPv4Address" -- for a value every other entry point in the package
-        takes. A *network* raises :class:`TypeError`, because it has no single
+        :class:`netimps.FQDN`: the value every other entry point in the package
+        takes, and not the raw ``TypeError`` the socket layer raises for it
+        ("str, bytes or bytearray expected, not IPv4Address"). A *network*
+        raises :class:`TypeError`, because it has no single
         address and guessing one (the network address? the first host?) would be
         worse than refusing.
     :param port: local port; ``0`` lets the OS choose.
@@ -256,11 +258,12 @@ def bind(
        **only for a stream socket**. ``TIME_WAIT`` is a TCP concept, so on a
        UDP socket the option's one remaining effect on Linux is to permit
        duplicate bindings of *live* sockets, which is traffic theft rather
-       than a restart convenience. So this no longer sets it for
+       than a restart convenience. So this does not set it for
        ``SOCK_DGRAM``; use ``reuse_port=True`` or
-       ``allow_address_takeover=True`` to share a UDP port deliberately. On Windows it lets **any
-       process** bind an ``addr:port`` another socket is already listening on,
-       and the later binder can win subsequent connections -- reproduced on
+       ``allow_address_takeover=True`` to share a UDP port deliberately. On
+       Windows it lets **any process** bind an ``addr:port`` another socket is
+       already listening on, and the later binder can win subsequent
+       connections -- reproduced on
        Windows 11, where a plain second bind was refused with ``EACCES`` while
        one through this function succeeded. So ``reuse_address=True`` sets
        ``SO_EXCLUSIVEADDRUSE`` there instead, which is the safe request with
@@ -335,14 +338,13 @@ def bind(
         if takeover_requested:
             sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
         elif exclusive is not None:
-            # Windows, and set for **both** values of `reuse_address` -- which it
-            # was not, and that was an inverted-safety bug. With neither option
-            # set, a *more specific* SO_REUSEADDR bind takes traffic from a
-            # wildcard holder: measured, a thief on 127.0.0.1 received the
-            # datagram while the holder on 0.0.0.0 got nothing and no error. So
-            # `reuse_address=False`, the setting that reads as strictest, was the
-            # least strict thing available here -- the careful caller got the
-            # unsafe behaviour.
+            # Windows, and set for **both** values of `reuse_address`. With
+            # neither option set, a *more specific* SO_REUSEADDR bind takes
+            # traffic from a wildcard holder: measured, a thief on 127.0.0.1
+            # received the datagram while the holder on 0.0.0.0 got nothing and
+            # no error. Tying the option to `reuse_address=True` alone would
+            # make `reuse_address=False`, the setting that reads as strictest,
+            # the least strict one available.
             #
             # Setting it regardless costs nothing: on Windows this option's only
             # effect is denying that takeover. There is no TIME_WAIT restart for
@@ -362,9 +364,8 @@ def bind(
             # under the default call.
             #
             # `socket(7)` is explicit that the exception is an active *listening*
-            # socket, and a UDP socket never listens. So the guarantee the docs
-            # used to claim here -- "two live sockets still cannot hold one
-            # addr:port" -- is true for TCP and false for UDP.
+            # socket, and a UDP socket never listens. So "two live sockets
+            # cannot hold one addr:port" is true for TCP and false for UDP.
             #
             # Sharing a UDP port is still reachable, by the names that say so:
             # `reuse_port=True` (`SO_REUSEPORT`, the option actually designed for
@@ -417,9 +418,9 @@ def _infer_family(address: str, kind: int) -> int:
 
     An empty address is the IPv4 wildcard. A literal decides by its version. A
     name is looked up and takes ``AF_INET`` when it has an IPv4 address, so a
-    name that used to bind as IPv4 still does; a name with only IPv6 addresses
-    gets ``AF_INET6``, and one that does not resolve is left to the socket layer
-    to refuse.
+    dual-stack name binds as IPv4; a name with only IPv6 addresses gets
+    ``AF_INET6``, and one that does not resolve is left to the socket layer to
+    refuse.
     """
     if not address:
         return _socket.AF_INET
@@ -668,10 +669,8 @@ def _interfaces_for_query(
         # mine".
         wanted = _without_zone(wanted)
 
-    # Called with no arguments when uncached, which is not mere tidiness: a test
-    # double for `get_interfaces` may take no keyword arguments, and passing
-    # `cache=False` to one would raise TypeError. The default path therefore
-    # keeps its original call shape.
+    # The uncached path is the plain no-argument call, so a replacement for
+    # `get_interfaces` that takes no `cache=` keyword still answers it.
     enumerated = get_interfaces() if cache is False else get_interfaces(cache=cache)
     for iface in enumerated:
         if kind == "mac":
@@ -734,15 +733,15 @@ def iter_interfaces(
     a valid IP-address representation. Text that is no address, network or MAC
     is an **adapter name**; ``index=`` names an interface by its index instead
     of a ``query`` (an ``int`` query stays an address). Invalid queries and
-    misses yield nothing. Each matching interface is yielded once even if several of its
-    assigned addresses fall within a requested network.
+    misses yield nothing. Each matching interface is yielded once even if
+    several of its assigned addresses fall within a requested network.
 
     A ``%zone``-qualified IPv6 address (``fe80::1%15``, ``fe80::1%eth0``) is
     matched on its bare address and **filtered** by the zone, which names the
     adapter -- the index on Linux/Windows, the adapter name on BSD. That form
-    is what ``getsockname()``, ``getaddrinfo`` and every OS tool emit, and it
-    used to match nothing at all, so the library denied that an address it had
-    just reported was local. A zone naming an adapter that does not hold the
+    is what ``getsockname()``, ``getaddrinfo`` and every OS tool emit, and
+    matching it on the bare address keeps an address the library just reported
+    from being denied as non-local. A zone naming an adapter that does not hold the
     address yields nothing, which is the honest answer to a contradiction.
     """
     kind, wanted = _interface_target(query, index)
@@ -764,16 +763,17 @@ def get_interface(
         get_interface(sock.getsockname()[0])
 
     Accepts the same query forms as :func:`iter_interfaces`, an adapter name and
-    ``index=`` among them (``get_interface(iface.name)``, ``get_interface(index=
-    iface.index)``); singular lookup is exactly the first plural result. Since addresses can appear on more than
-    one adapter (especially unscoped IPv6 link-local addresses), use the plural
-    form when every match matters.
+    ``index=`` among them (``get_interface(iface.name)``,
+    ``get_interface(index=iface.index)``); singular lookup is exactly the first
+    plural result. Since addresses can appear on more than one adapter
+    (especially unscoped IPv6 link-local addresses), use the plural form when
+    every match matters.
 
     :param strict: when True (the default), a miss returns ``None``. When
         False, an address or ``IPInterface`` miss produces a synthetic
-        single-address ``Interface`` so legacy callers can still attribute
-        traffic. Network and MAC misses cannot be synthesized honestly and
-        remain ``None``.
+        single-address ``Interface`` so a caller can still attribute traffic.
+        Network and MAC misses cannot be synthesized honestly and remain
+        ``None``.
     :param cache: reuse a recent enumeration rather than making the syscall --
         ``True`` for :data:`netimps.INTERFACE_CACHE_TTL` seconds, or a number
         for that TTL. **This is the argument a per-packet caller wants.** Each
@@ -908,11 +908,10 @@ def _resolve_targets(
     """``(family, sockaddr)`` pairs for ``dst``, in resolver order.
 
     One shared spelling of "resolve, honouring ``ipv6=``", reusing
-    :func:`netimps._ping._probe_targets` rather than growing a second copy --
-    the IPv4-only ``gethostbyname`` this module used to call is exactly the
-    defect that helper was written to fix, and it had survived here at three
-    more call sites. The import is function-local only to keep the module
-    import order free to change; ``_ping`` does not import this module.
+    :func:`netimps._ping._probe_targets` rather than a second copy:
+    ``gethostbyname`` is IPv4-only, so the family comes from ``getaddrinfo``.
+    The import is function-local only to keep the module import order free to
+    change; ``_ping`` does not import this module.
 
     Returns ``[]`` when nothing resolves, which every caller reads as "no
     answer" rather than raising.
@@ -957,9 +956,9 @@ def get_source_ip(
 
     :param ipv6: which family to probe -- ``True`` for IPv6, ``False`` for
         IPv4, ``None`` (the default) for whatever ``dst`` resolves to. The
-        family used to be guessed with ``":" in dst``, and **a hostname never
-        contains a colon**, so every name was probed as IPv4 and a v6-only one
-        answered ``None``.
+        family is not guessed from ``":" in dst``: **a hostname never contains
+        a colon**, so that test would probe every name as IPv4 and a v6-only
+        one would answer ``None``.
 
     Returns ``None`` if no route exists (e.g. IPv6 probe on an IPv4-only host).
     The returned address carries no ``%zone``: the zone identifies the adapter
@@ -1010,11 +1009,11 @@ def max_udp_payload(mtu: int, *, ipv6: bool = False) -> int:
       an ``Interface``: the ``None`` decision belongs to the caller, who knows
       whether to fall back to 1500 or to refuse.
 
-      ``None`` now means the platform genuinely could not read an MTU. It no
-      longer includes "unbounded" -- the Windows loopback adapter reports ULONG
-      max and used to come back as ``None``, so a caller falling back to 1500
-      capped loopback at 1472 when it delivers 65507. That interface now reports
-      65535, and this returns the 65507 that was measured to actually arrive.
+      ``None`` means the platform genuinely could not read an MTU, and never
+      "unbounded": the Windows loopback adapter reports ULONG max, which
+      ``Interface.mtu`` clamps to 65535, and this returns the 65507 that was
+      measured to actually arrive. A ``None`` there would send a caller falling
+      back to 1500 to cap loopback at 1472.
 
     Returns 0 rather than a negative number for an MTU too small to carry any
     payload.
@@ -1103,11 +1102,11 @@ def tcp_check(dst: "HostLike", port: int, *, timeout: "Optional[float]" = 3.0) -
     (``port + 65536`` silently answered about ``port``).
 
     :param timeout: bounds **the whole call**, across every address ``dst``
-        resolves to. It used to be handed to ``socket.create_connection``,
-        which applies it once *per resolved address* after an unbounded
-        ``getaddrinfo``, so a name with N addresses could take N x ``timeout``.
-        Resolution happens once here and the connects share one monotonic
-        deadline. ``0`` is floored to a small positive value rather than taken
+        resolves to. ``socket.create_connection`` would apply it once *per
+        resolved address* after an unbounded ``getaddrinfo``, so a name with N
+        addresses could take N x ``timeout``; here resolution happens once and
+        the connects share one monotonic deadline. ``0`` is floored to a small
+        positive value rather than taken
         literally -- ``settimeout(0)`` means non-blocking, which reported every
         open port as closed. ``None`` means no timeout at all.
 
@@ -1179,11 +1178,10 @@ def wait_for_port(
         bounded to at least 1s.
 
     Returns ``True`` as soon as the port answers, ``False`` once ``deadline``
-    has passed. The deadline is honoured overall, so this cannot overrun by more than one
-    attempt regardless of how long individual connects block -- which became
-    true only when :func:`tcp_check` started bounding *itself* overall rather
-    than per resolved address. A ``dst`` resolving to N addresses used to
-    overrun by up to N attempts.
+    has passed. The deadline is honoured overall, so this cannot overrun by
+    more than one attempt regardless of how long individual connects block:
+    :func:`tcp_check` bounds *itself* overall rather than per resolved address,
+    so a ``dst`` resolving to N addresses does not stretch an attempt to N.
 
     An out-of-range ``port`` raises :class:`ValueError` (from
     :func:`tcp_check`) rather than being masked to 16 bits.
@@ -1219,12 +1217,12 @@ class Route:
         on_link: ``True`` when no gateway is needed, ``False`` when one is, and
             ``None`` when the next hop could not be looked up at all.
 
-    ``on_link`` is three-state deliberately. It used to be ``gateway is
-    None``, which turned "we never looked" into a confident ``True``: on
-    macOS, where the lookup has no source to read, ``get_route('1.1.1.1')``
-    reported ``on_link=True`` from a ``192.168.64.3/24`` host. ``None`` is
-    falsy, so ``if route.on_link:`` still takes the safe branch, but
-    ``route.on_link is True`` can now be asked and answered.
+    ``on_link`` is three-state deliberately. ``gateway is None`` would turn "we
+    never looked" into a confident ``True``: on macOS, where the lookup has no
+    source to read, ``get_route('1.1.1.1')`` from a ``192.168.64.3/24`` host
+    would report ``on_link=True``. ``None`` is falsy, so ``if route.on_link:``
+    takes the safe branch, and ``route.on_link is True`` asks the exact
+    question.
     """
 
     __slots__ = ("dst", "src", "gateway", "interface_index", "_on_link")
@@ -1496,8 +1494,7 @@ def _parse_ipv6_route_table(text: str, dst: str) -> "Optional[_NextHop]":
     """Longest-prefix match ``dst`` against ``/proc/net/ipv6_route`` text.
 
     Split out from the file read so it is testable offline against a captured
-    table -- the v4 parser's equivalent bug (loopback missing from the file)
-    was only ever found on a real host.
+    table.
 
     Columns, none of them labelled: destination, prefix length, source, source
     prefix length, next hop, metric, refcount, use, flags, device.
@@ -1585,10 +1582,9 @@ def _bsd_next_hop(dst: str, ipv6: bool = False) -> "Optional[_NextHop]":
     """Next hop from ``route -n get``, the BSD unprivileged equivalent.
 
     macOS and the BSDs have no ``/proc``, so :func:`_posix_next_hop` finds
-    nothing there and ``get_route`` used to report ``gateway=None`` -- which,
-    before :attr:`Route.on_link` became three-state, read as a confident
-    "on-link" for every destination. ``route -n get`` answers the same
-    question the kernel answers, unprivileged.
+    nothing there; without this, ``get_route`` would report ``gateway=None``
+    for every destination. ``route -n get`` answers the same question the
+    kernel answers, unprivileged.
 
     ``-n`` keeps the output numeric, so nothing here depends on reverse DNS,
     and ``stdin`` is ``DEVNULL`` because a library must never consume its
@@ -1819,9 +1815,9 @@ def count_hops(
     :param ipv6: which family to resolve ``dst`` to -- ``True`` v6, ``False``
         v4, ``None`` (the default) whichever the resolver answers with. The
         probes follow: ICMPv6 with ``IPV6_UNICAST_HOPS`` for a v6 target, and
-        the platform's v6 traceroute. This used to go through the IPv4-only
-        ``gethostbyname``, so a v6 destination returned ``None`` -- read as
-        "never answered" rather than "never asked".
+        the platform's v6 traceroute. ``gethostbyname`` is IPv4-only: through
+        it a v6 destination would return ``None``, read as "never answered"
+        rather than "never asked".
 
     Returns ``None`` when the destination never responds within ``max_hops``.
     That is common and usually **not** a missing route: host firewalls (Windows
@@ -1936,7 +1932,7 @@ def _dont_fragment_options(family: int) -> "List[Tuple[int, int, int]]":
     ``IP_MTU_DISCOVER = IP_PMTUDISC_DO`` (which also asks the kernel to *learn*
     the path MTU), the BSDs ``IP_DONTFRAG``, Windows ``IP_DONTFRAGMENT``, and
     each has an ``IPV6_`` counterpart at a different level. Setting none of
-    them -- which is what ``_discover_mtu_udp`` did -- does not fail: the stack
+    them does not fail: the stack
     fragments the probe, the peer reassembles it and answers, every size
     "survives", and the binary search confidently returns its own ceiling.
     """
@@ -2551,8 +2547,7 @@ def disable_connreset(sock: "_socket.socket") -> bool:
 
     This is the inverse face of a rule this package documents from the other
     side: an unconnected POSIX probe never *sees* a port-unreachable, which is
-    why :class:`netimps.UDPEndpoint`'s MTU probing connects. The knowledge was
-    here; the switch was not.
+    why :class:`netimps.UDPEndpoint`'s MTU probing connects.
 
     **Not applied to a socket you did not ask for.** The report is occasionally
     what a caller wants -- a client talking to one peer learns the peer is gone

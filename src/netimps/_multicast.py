@@ -109,7 +109,7 @@ def _default_v6_scope(group: str) -> int:
 
     So this supplies a scope only where the kernel refuses to, and only when
     the caller did not name one -- an explicit ``interface=`` always wins, on
-    every platform. Returning ``0`` leaves the behaviour exactly as it was.
+    every platform. Returning ``0`` leaves the choice to the kernel.
 
     The pick mirrors what a kernel would do: the first non-loopback adapter
     that actually carries a link-local address, in enumeration order. That is a
@@ -126,9 +126,9 @@ def _default_v6_scope(group: str) -> int:
     # The scope of a multicast address is the low nibble of its second byte --
     # 1 interface-local, 2 link-local, 5 site-local, e global. It is NOT
     # `is_link_local`, which means the `fe80::/10` **unicast** range and is
-    # False for `ff02::fb`; using it here is why this returned 0 and the join
-    # went on failing on macOS. Only the scopes that cannot be routed need an
-    # interface to be meaningful.
+    # False for `ff02::fb`; testing it would return 0 for a link-local group
+    # and leave the macOS join failing. Only the scopes that cannot be routed
+    # need an interface to be meaningful.
     if parsed.packed[1] & 0x0F > _LINK_LOCAL_SCOPE:
         return 0
 
@@ -255,8 +255,8 @@ def multicast_socket(
             multicast_socket(ttl=32, bind=False, ipv6=True)   # IPv6 sender
 
         It exists for the send-only case above, where there is no group to
-        infer from: that socket used to be IPv4 unconditionally, so an IPv6
-        sender was unreachable through this function. Passing a value that
+        infer from: without it that socket is IPv4, and an IPv6 sender would
+        be unreachable through this function. Passing a value that
         contradicts ``group`` raises rather than quietly winning.
 
     The caller owns the socket and should close it; closing drops membership.
@@ -277,9 +277,8 @@ def multicast_socket(
         )
     if ipv6 is None:
         # No groups at all is the send-only case, and `any()` over an empty list
-        # is False -- so a send-only socket was silently always IPv4, and the
-        # documented `multicast_socket(ttl=32, bind=False)` sender could never
-        # be given an IPv6 hop limit or used to reach an IPv6 group.
+        # is False: the family would silently be IPv4, and a send-only socket
+        # could never be given an IPv6 hop limit or reach an IPv6 group.
         ipv6 = bool(families and families.pop())
     family = _socket.AF_INET6 if ipv6 else _socket.AF_INET
     if groups and any((":" in entry) != ipv6 for entry in groups):
