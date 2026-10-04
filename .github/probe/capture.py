@@ -587,7 +587,7 @@ def pin_capture(label, family, host, src):
         peer.settimeout(5.0)
         endpoint = netimps.UDPEndpoint(netimps.bind(wildcard, 0, family=family))
         info["bound"] = wildcard
-        info["supports_src_pinning"] = endpoint.supports_src_pinning
+        info["supports_src_pinning"] = endpoint.has_src_pinning
         info["has_pktinfo"] = endpoint.has_pktinfo
         sent = endpoint.send(b"pinned", host, peer.getsockname()[1], src=src)
         info["sent"] = sent

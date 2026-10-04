@@ -421,7 +421,7 @@ class UDPEndpoint:
     :ivar has_pktinfo: ``recv`` will report the arrival interface. This
         is ``False`` -- not an optimistic ``True`` -- whenever the option for
         *this socket's family* is missing or refused.
-    :ivar supports_src_pinning: :meth:`send` can honour ``src``. ``False``
+    :ivar has_src_pinning: :meth:`send` can honour ``src``. ``False``
         where the platform exports no pktinfo cmsg for this family; ``src`` is
         then ignored, and the kernel picks the source as it always would.
     """
@@ -429,7 +429,7 @@ class UDPEndpoint:
     __slots__ = (
         "socket",
         "has_pktinfo",
-        "supports_src_pinning",
+        "has_src_pinning",
         "_cmsg_size",
         "_iface_cache",
         "_iface_cache_at",
@@ -439,7 +439,7 @@ class UDPEndpoint:
     def __init__(self, sock: "_socket.socket", pktinfo: bool = True) -> None:
         self.socket = sock
         self.has_pktinfo = False
-        self.supports_src_pinning = False
+        self.has_src_pinning = False
         self._cmsg_size = 0
         self._iface_cache: "Dict[int, Optional[Interface]]" = {}
         self._iface_cache_at = 0.0
@@ -453,7 +453,7 @@ class UDPEndpoint:
         # Sending needs no socket option, only ``sendmsg`` and a cmsg type for
         # the family -- so it is decided independently of ``pktinfo=``, which
         # is about what arrives.
-        self.supports_src_pinning = send_type is not None and _supports_recvmsg()
+        self.has_src_pinning = send_type is not None and _supports_recvmsg()
 
         if not pktinfo or receive_option is None or not _supports_recvmsg():
             return
@@ -628,7 +628,7 @@ class UDPEndpoint:
         only place the interface can be named, which the previous
         hardcoded-zero index never did.
         """
-        if not self.supports_src_pinning:
+        if not self.has_src_pinning:
             return None
 
         from ._iface_spec import interface_address, interface_index
@@ -717,7 +717,7 @@ class UDPEndpoint:
 
         Where a platform genuinely cannot pin -- no pktinfo cmsg for the family
         -- the datagram goes out unpinned and the spec is not resolved. That is
-        the module's usual degrade, and :attr:`supports_src_pinning` is ``False``
+        the module's usual degrade, and :attr:`has_src_pinning` is ``False``
         there, so a caller who cares can check once rather than inferring it
         from a silent success.
 
@@ -1083,7 +1083,7 @@ class UDPEndpoint:
         return "UDPEndpoint(bound=%r, pktinfo=%r, src_pinning=%r)" % (
             bound,
             self.has_pktinfo,
-            self.supports_src_pinning,
+            self.has_src_pinning,
         )
 
 

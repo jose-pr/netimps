@@ -620,7 +620,7 @@ def test_sendmsg_still_routes_ancdata_through_wsasendmsg():
     peer.settimeout(5.0)
     endpoint = UDPEndpoint(bind("0.0.0.0", 0))
     try:
-        if not endpoint.supports_src_pinning:
+        if not endpoint.has_src_pinning:
             pytest.skip("no src pinning on this platform")
         endpoint.send(b"pinned", "127.0.0.1", peer.getsockname()[1], src="127.0.0.1")
         _data, observed = peer.recvfrom(100)

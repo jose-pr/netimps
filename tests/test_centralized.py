@@ -589,7 +589,7 @@ def test_udp_endpoint_pins_the_source_it_is_given(family, host):
             assert sender.send(b"pinned", host, port, src=host) == 6
             # The flag may be False (Windows has no sendmsg; macOS has no
             # IP_PKTINFO), but it must never claim a pin it cannot apply.
-            assert not sender.supports_src_pinning or hasattr(socket.socket, "sendmsg")
+            assert not sender.has_src_pinning or hasattr(socket.socket, "sendmsg")
         packet = receiver.recv(64)
     assert packet.data == b"pinned"
 
@@ -601,7 +601,7 @@ def test_udp_endpoint_send_rejects_a_source_of_the_wrong_family():
     So the mismatch has to be caught here -- the kernel will not report it.
     """
     with UDPEndpoint(bind("127.0.0.1", 0)) as sender:
-        if not sender.supports_src_pinning:
+        if not sender.has_src_pinning:
             pytest.skip("no IPv4 source pinning on this platform")
         with pytest.raises(ValueError, match="IPv6 source"):
             sender.send(b"x", "127.0.0.1", 9, src="::1")
@@ -614,7 +614,7 @@ def test_udp_endpoint_send_rejects_an_unresolvable_source():
     wrong answer ``src`` exists to prevent.
     """
     with UDPEndpoint(bind("127.0.0.1", 0)) as sender:
-        if not sender.supports_src_pinning:
+        if not sender.has_src_pinning:
             pytest.skip("no IPv4 source pinning on this platform")
         with pytest.raises(ValueError, match="cannot resolve src"):
             sender.send(b"x", "127.0.0.1", 9, src="no-such-adapter")
@@ -626,7 +626,7 @@ def test_udp_endpoint_degrades_without_pktinfo(monkeypatch):
     with UDPEndpoint(bind("127.0.0.1", 0)) as endpoint:
         assert endpoint.has_pktinfo is False
         # Same constant serves both directions for IPv4, so neither is claimed.
-        assert endpoint.supports_src_pinning is False
+        assert endpoint.has_src_pinning is False
         endpoint.socket.settimeout(5.0)
         port = endpoint.socket.getsockname()[1]
         sender = bind("127.0.0.1", 0)
