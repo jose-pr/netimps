@@ -1,0 +1,286 @@
+"""Generic ``parse`` / ``try_parse`` / ``is_valid`` (internal).
+
+The one parsing entry point: ``type`` is a result type (the union aliases, a
+concrete class) or any callable. The overloads under ``TYPE_CHECKING`` are the
+signature consumers see; the runtime definitions are permissive.
+
+Re-exported from :mod:`netimps`.
+"""
+
+from __future__ import annotations
+
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Mapping,
+    Optional,
+    TypeVar,
+    Union,
+    cast,
+    overload,
+)
+from typing import get_origin as _typing_get_origin
+
+from ._ip import _BUILDER_DEFAULTS, _BUILDERS, _CONCRETE, IPAddress
+
+if TYPE_CHECKING:
+    # PEP 747's TypeForm preserves the result represented by runtime union
+    # aliases such as IPAddress. Kept out of runtime imports so Python 3.9
+    # gains no typing_extensions dependency.
+    from typing_extensions import TypeForm
+
+__all__ = ["parse", "try_parse", "is_valid"]
+
+_T = TypeVar("_T")
+_D = TypeVar("_D")
+
+#: What every entry in ``_ip``'s dispatch tables is: a callable taking the raw
+#: value plus keyword options and returning the built object.
+_Builder = Callable[..., Any]
+
+# ``_ip`` writes those tables as bare dict literals, so a checker infers their
+# value type as the *join* of three different ``ipaddress.ip_*`` functions --
+# which collapses to the opaque ``function`` type, one it then refuses to call
+# ("Cannot call function of unknown type") and refuses to use as a key. The
+# two names below bind the very same dict objects, so ``netimps._BUILDERS``
+# stays the single table everything reads and mutates; they only write down
+# what has always been in them. The permanent fix is to annotate the literals
+# in ``_ip`` -- a function object *is* a ``Callable[..., Any]``; only the join
+# of several is not -- at which point the cast here can go.
+_BUILDER_TABLE = cast("Mapping[Any, _Builder]", _BUILDERS)
+_BUILDER_DEFAULT_TABLE: Mapping[_Builder, Mapping[str, Any]] = _BUILDER_DEFAULTS
+
+
+def _check_parser(type) -> None:
+    """Raise TypeError unless ``type`` is something :func:`parse` can build with.
+
+    Split out so :func:`try_parse` can validate before entering its
+    ``except (ValueError, TypeError)`` block -- otherwise an unusable type is
+    indistinguishable from a rejected value, and a caller bug returns the
+    default instead of raising.
+    """
+    try:
+        if type in _CONCRETE or type in _BUILDERS:
+            return
+    except TypeError:  # unhashable
+        pass
+
+    # A typing construct we do not build (an input-only ``*Like`` alias, or any
+    # other Union) is a caller mistake, and must be rejected up front: on Python
+    # 3.9 these objects *are* ``callable()`` -- ``Union[...](x)`` reaches
+    # ``_GenericAlias.__call__`` -- so the callable check below would let them
+    # past, to fail later with a far more confusing error.
+    if _typing_get_origin(type) is not None:
+        raise TypeError(
+            "type must be a result type or a callable, got the typing "
+            "construct %r (input-only aliases like IPAddressLike describe "
+            "what is accepted, not what to build)" % (type,)
+        )
+    if not callable(type):
+        raise TypeError("type must be a result type or a callable, got %r" % (type,))
+
+
+if TYPE_CHECKING:
+    # Runtime keeps one permissive implementation; these signatures preserve
+    # the result represented by union type forms and arbitrary builders.
+    #
+    # Checking this file against *itself* raises two structural complaints a
+    # consumer never sees: the overloads have no implementation inside the
+    # ``if TYPE_CHECKING`` block (``no-overload-impl``), and the runtime
+    # ``def`` further down reads as a redefinition of them (``no-redef``).
+    # Both are inherent to declaring overloads this way, so each is silenced
+    # on the exact line that raises it -- never by loosening a signature.
+    #
+    # What consumers actually get is asserted in ``tests/typing/api.py``
+    # (``parse(x, IPNetwork)`` is typed ``IPv4Network | IPv6Network``, and so
+    # on), and was measured from outside the package with ``TypeForm``
+    # disabled and ``python_version = 3.9``. Do not flatten, widen or delete
+    # these overloads to quiet the checker: that trades self-check noise for a
+    # real loss of precision at every call site.
+    @overload  # type: ignore[no-overload-impl]
+    def parse(value: object, type: TypeForm[_T], **kwargs: Any) -> _T: ...
+
+    @overload
+    def parse(value: object, type: Callable[..., _T], **kwargs: Any) -> _T: ...
+
+    @overload
+    def parse(value: object, **kwargs: Any) -> IPAddress: ...
+
+    @overload  # type: ignore[no-overload-impl]
+    def try_parse(
+        value: object, type: TypeForm[_T], default: None = ..., **kwargs: Any
+    ) -> Optional[_T]: ...
+
+    @overload
+    def try_parse(
+        value: object, type: TypeForm[_T], default: _D, **kwargs: Any
+    ) -> Union[_T, _D]: ...
+
+    @overload
+    def try_parse(
+        value: object, type: Callable[..., _T], default: None = ..., **kwargs: Any
+    ) -> Optional[_T]: ...
+
+    @overload
+    def try_parse(
+        value: object, type: Callable[..., _T], default: _D, **kwargs: Any
+    ) -> Union[_T, _D]: ...
+
+    @overload
+    def try_parse(
+        value: object, *, default: None = ..., **kwargs: Any
+    ) -> Optional[IPAddress]: ...
+
+    @overload
+    def try_parse(
+        value: object, *, default: _D, **kwargs: Any
+    ) -> Union[IPAddress, _D]: ...
+
+    @overload  # type: ignore[no-overload-impl]
+    def is_valid(value: object, type: TypeForm[_T], **kwargs: Any) -> bool: ...
+
+    @overload
+    def is_valid(value: object, type: Callable[..., _T], **kwargs: Any) -> bool: ...
+
+    @overload
+    def is_valid(value: object, **kwargs: Any) -> bool: ...
+
+
+def parse(  # type: ignore[no-redef]  # the overloads above are the signature
+    value: object, type: "Any" = IPAddress, **kwargs
+) -> "Any":
+    """Build ``type`` from ``value``, raising on bad input.
+
+    The single parsing entry point. ``type`` is a result type -- one of the
+    :data:`IPAddress`/:data:`IPInterface`/:data:`IPNetwork` unions, a concrete
+    ``IPv4Address`` &co, or any callable::
+
+        parse("10.0.0.5")                        # IPv4Address  (the default)
+        parse("10.0.0.5/24", IPInterface)        # IPv4Interface
+        parse("10.0.0.5/24", IPNetwork)          # IPv4Network('10.0.0.0/24')
+        parse("10.0.0.5/24", IPNetwork, strict=True)   # raises: host bits set
+        parse("aa:bb:cc:dd:ee:ff", MACAddress)   # MACAddress
+
+    Every type accepts the full range of stdlib inputs -- ``str``, ``int``,
+    packed ``bytes``, or an existing object -- because the builders are the
+    ``ipaddress.ip_*`` functions rather than the concrete constructors.
+
+    A **union** accepts either family; a **concrete** type enforces its own, so
+    ``parse("::1", IPv4Address)`` raises rather than quietly returning an
+    ``IPv6Address``.
+
+    Networks are parsed **non-strict** by default (unlike the stdlib), so a host
+    address with a prefix normalises to its network instead of raising. Extra
+    ``kwargs`` pass through to the underlying builder.
+
+    Raises :class:`ValueError` on malformed input or a family mismatch, and
+    :class:`TypeError` for an unusable ``type``. Use :func:`try_parse` for the
+    non-raising form.
+    """
+    # Guarded: an unhashable ``type`` would make these lookups raise TypeError,
+    # which try_parse would then swallow into `default` -- turning a caller bug
+    # into a silent "invalid value". Fall through to the explicit checks below.
+    try:
+        wanted = _CONCRETE.get(type)
+        builder = _BUILDER_TABLE.get(wanted if wanted is not None else type)
+    except TypeError:
+        wanted = builder = None
+
+    if builder is None:
+        _check_parser(type)  # raises for anything unusable
+        return type(value, **kwargs)
+
+    options = dict(_BUILDER_DEFAULT_TABLE.get(builder, {}))
+    options.update(kwargs)
+    result = builder(value, **options)
+
+    if wanted is not None and not isinstance(result, type):
+        raise ValueError("%r is not a %s" % (value, type.__name__))
+    return result
+
+
+#: Sentinel distinguishing "the parse returned None" from "it rejected the
+#: input" -- ``None`` cannot do that job, since it is a legitimate result.
+_MISSING = object()
+
+
+def try_parse(  # type: ignore[no-redef]  # the overloads above are the signature
+    value: object,
+    type: "Any" = IPAddress,
+    default: "Any" = None,
+    **kwargs,
+) -> "Any":
+    """Return ``type(value)``, or ``default`` if it rejects the input. Never raises.
+
+    The one non-raising parse for the whole package. ``type`` is either a
+    **type** -- including the union aliases, which are not themselves callable
+    -- or any callable that signals bad input with ``ValueError``/``TypeError``::
+
+        try_parse("10.0.0.5", IPAddress)     # IPv4Address('10.0.0.5')
+        try_parse("10.0.0.5", IPv4Address)   # concrete: v6 input rejected
+        try_parse("nonsense", IPAddress)     # None
+        try_parse(user_input, MACAddress) or DEFAULT_MAC
+        try_parse(raw, IPAddress, default=LOCALHOST)   # explicit fallback
+
+    The union aliases ``IPAddress``/``IPInterface``/``IPNetwork`` accept either
+    family. A **concrete** type stays strict, so asking for one family and
+    getting the other is impossible::
+
+        try_parse("::1", IPAddress)      # IPv6Address('::1')  -- either family
+        try_parse("::1", IPv4Address)    # None                -- v4 was asked for
+        try_parse("10.0.0.5", IPv4Address)   # IPv4Address('10.0.0.5')
+
+    Prefer this to ``is_valid`` followed by a parse: that pattern does the work
+    twice and leaves a window where the two disagree.
+
+    Generic in the type: ``try_parse(x, MACAddress)`` is typed
+    ``Optional[MACAddress]``, so a checker knows the result without a cast.
+
+    Only ``ValueError`` and ``TypeError`` are swallowed -- the two exceptions
+    that mean "bad input". Anything else (an ``OSError`` from a builder that
+    touches the network, a bug in it) propagates, because turning it
+    into ``None`` would disguise a real failure as a rejected value. A
+    ``type`` that is neither callable nor a known type raises ``TypeError``:
+    that is a caller bug, not a rejected value.
+
+    :param default: returned instead of ``None`` when the input is rejected.
+        Also the seam :func:`is_valid` uses -- passing a sentinel is the only
+        way to tell "the parse returned ``None``" from "it rejected the input".
+    """
+    # Validate the type *before* the try, so the TypeError raised for an
+    # unusable one is not swallowed as if the value had been rejected. Only the
+    # parse itself is guarded.
+    _check_parser(type)
+    try:
+        return parse(value, type, **kwargs)
+    except (ValueError, TypeError):
+        return default
+
+
+def is_valid(  # type: ignore[no-redef]  # the overloads above are the signature
+    value: object,
+    type: "Any" = IPAddress,
+    **kwargs,
+) -> "bool":
+    """Return ``True`` if ``value`` parses as ``type``. Never raises.
+
+    Accepts the same ``type`` forms as :func:`try_parse` -- a type, a union
+    alias, or any callable::
+
+        is_valid("10.0.0.5", IPAddress)      # True  (the type alias)
+        is_valid("10.0.0.0/24", IPNetwork)   # True
+        is_valid("aa:bb:cc:dd:ee:ff", MACAddress)
+        is_valid("nonsense", IPAddress)      # False
+
+    When you want the parsed value too, use :func:`try_parse` instead of
+    calling this first -- one call, no double work. Same exception policy: only
+    ``ValueError``/``TypeError`` count as "invalid".
+
+    .. note::
+       A parser that legitimately returns ``None`` for valid input still counts
+       as valid here -- the parse *succeeded*. That is why this delegates via a
+       sentinel rather than testing ``try_parse(...) is not None``, which cannot
+       tell "returned None" from "rejected the input".
+    """
+    return try_parse(value, type, _MISSING, **kwargs) is not _MISSING

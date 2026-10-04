@@ -19,6 +19,7 @@ from netimps import (
     parse,
     try_parse,
 )
+from netimps import _ip
 from netimps._ip import _dst_argument
 
 
@@ -328,7 +329,7 @@ def test_input_aliases_are_not_parsers():
         netimps.IPNetworkLike,
         netimps.MACLike,
     ):
-        assert alias not in netimps._BUILDERS
+        assert alias not in _ip._BUILDERS
         with pytest.raises(TypeError, match="typing construct"):
             netimps.try_parse("10.0.0.5", alias)
         with pytest.raises(TypeError, match="typing construct"):
@@ -617,3 +618,13 @@ def test_version_is_read_not_restated():
     assert netimps.__version__ == version("netimps")
     source = pathlib.Path(netimps.__file__).read_text(encoding="utf-8")
     assert '__version__ = "' not in source, "__version__ is hardcoded again"
+
+
+def test_the_root_reexports_the_generic_parse_functions_themselves():
+    """The root must hand out the owner's objects, not wrappers: a wrapper
+    would split `netimps.parse` from the one internal code imports."""
+    from netimps import _parse
+
+    assert netimps.parse is _parse.parse
+    assert netimps.try_parse is _parse.try_parse
+    assert netimps.is_valid is _parse.is_valid
