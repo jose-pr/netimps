@@ -144,47 +144,80 @@ class Interface:
             :func:`netimps.max_udp_payload` derives from it, and Linux reports its
             own ``lo`` as 65536 rather than as nothing. This is the **link** MTU;
             for a path see :func:`netimps.discover_mtu`.
-        loopback: The kernel's own loopback flag (``IFF_LOOPBACK`` on POSIX,
-            ``IF_TYPE_SOFTWARE_LOOPBACK`` on Windows), or ``None`` when it was
-            not reported -- the degraded enumeration path, and objects built by
-            hand. Read it through :attr:`is_loopback`, which falls back to the
-            addresses when it is ``None``.
+        is_loopback: The kernel's own loopback flag (``IFF_LOOPBACK`` on POSIX,
+            ``IF_TYPE_SOFTWARE_LOOPBACK`` on Windows) when the enumeration
+            reported one; otherwise derived from the addresses. The constructor
+            argument of the same name is ``None`` for "not reported" -- the
+            degraded enumeration path, and objects built by hand.
         raw: ``None`` unless enumerated with ``get_interfaces(raw=True)``, in
             which case a platform-specific dict of leftovers. **Not portable**
             and explicitly outside the stability guarantee.
     """
 
-    __slots__ = ("name", "index", "mac", "ips", "mtu", "loopback", "raw")
+    __slots__ = ("name", "index", "mac", "ips", "mtu", "_is_loopback", "raw")
+
+    name: str
+    index: int
+    mac: "Optional[MACAddress]"
+    ips: "Tuple[_IPInterface, ...]"
+    mtu: "Optional[int]"
+    _is_loopback: "Optional[bool]"
+    raw: "Optional[Dict[str, Any]]"
 
     def __init__(
         self,
         name: str,
         index: int = 0,
         mac: "Optional[MACAddress]" = None,
-        ips: "Optional[List[_IPInterface]]" = None,
+        ips: "Optional[Iterable[_IPInterface]]" = None,
         mtu: "Optional[int]" = None,
         raw: "Optional[Dict[str, Any]]" = None,
-        loopback: "Optional[bool]" = None,
+        is_loopback: "Optional[bool]" = None,
     ) -> None:
-        self.name = name
-        self.index = index
-        self.mac = mac
-        self.ips = ips if ips is not None else []
-        self.mtu = mtu
-        self.loopback = loopback
-        self.raw = raw
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "index", index)
+        object.__setattr__(self, "mac", mac)
+        object.__setattr__(self, "ips", () if ips is None else tuple(ips))
+        object.__setattr__(self, "mtu", mtu)
+        object.__setattr__(self, "_is_loopback", is_loopback)
+        object.__setattr__(self, "raw", raw)
+
+    def __reduce__(self) -> "Tuple[Any, Tuple[Any, ...]]":
+        """Pickle and copy through the constructor.
+
+        ``__slots__`` plus a blocked ``__setattr__`` defeats the default
+        restore, which assigns the slots back onto a blank instance.
+        """
+        return (
+            Interface,
+            (
+                self.name,
+                self.index,
+                self.mac,
+                self.ips,
+                self.mtu,
+                self.raw,
+                self._is_loopback,
+            ),
+        )
+
+    def __setattr__(self, name: str, value: object) -> None:
+        raise AttributeError("Interface is immutable")
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError("Interface is immutable")
 
     @property
     def is_loopback(self) -> bool:
         """True when this is the loopback interface.
 
         The kernel's own answer when there is one: ``IFF_LOOPBACK`` on POSIX,
-        ``IF_TYPE_SOFTWARE_LOOPBACK`` on Windows, captured into
-        :attr:`loopback` during enumeration. Never the name -- ``lo`` (Linux),
+        ``IF_TYPE_SOFTWARE_LOOPBACK`` on Windows, captured during
+        enumeration. Never the name -- ``lo`` (Linux),
         ``lo0`` (macOS) and ``Loopback Pseudo-Interface 1`` (Windows) share no
         common spelling.
 
-        Falls back to the addresses only when :attr:`loopback` is ``None`` (the
+        Falls back to the addresses only when the flag was not reported (the
         degraded enumeration path reports no flags, and neither do hand-built
         objects). That fallback requires *a* loopback address and **no routable
         one**, which is a guess rather than an answer: WSL2 binds a routable
@@ -195,8 +228,8 @@ class Interface:
         by it, since macOS's ``lo0`` also carries ``fe80::1/64`` and a
         non-routable address cannot make an interface non-loopback.
         """
-        if self.loopback is not None:
-            return self.loopback
+        if self._is_loopback is not None:
+            return self._is_loopback
         if not self.ips:
             return False
         has_loopback = False
@@ -321,14 +354,50 @@ class Interface:
         Defining ``__eq__`` without this sets ``__hash__`` to ``None``, which
         made ``set(get_interfaces())`` -- de-duplicating adapters, the obvious
         operation on the package's flagship return value -- raise
-        ``TypeError``. :attr:`ips` is a list, hence the tuple.
+        ``TypeError``. :attr:`raw` is a dict and is left out of both.
         """
-        return hash((self.name, self.index, self.mac, tuple(self.ips), self.mtu))
+        return hash((self.name, self.index, self.mac, self.ips, self.mtu))
 
 
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
+
+
+class _Pending:
+    """An interface still collecting addresses.
+
+    ``getifaddrs`` reports one list node per address and one for the MAC, so
+    the fields arrive piecemeal; an :class:`Interface` cannot change after
+    construction, so they are gathered here and built once.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        index: int,
+        mtu: "Optional[int]",
+        is_loopback: bool,
+        raw: "Optional[Dict[str, Any]]",
+    ) -> None:
+        self.name = name
+        self.index = index
+        self.mtu = mtu
+        self.is_loopback = is_loopback
+        self.raw = raw
+        self.mac: "Optional[MACAddress]" = None
+        self.ips: "List[_IPInterface]" = []
+
+    def build(self) -> Interface:
+        return Interface(
+            name=self.name,
+            index=self.index,
+            mac=self.mac,
+            ips=self.ips,
+            mtu=self.mtu,
+            raw=self.raw,
+            is_loopback=self.is_loopback,
+        )
 
 
 def _prefix_from_netmask(packed: bytes) -> int:
@@ -562,7 +631,7 @@ def _posix_interfaces(want_raw: bool) -> "List[Interface]":
     # interface (one per address, plus one for the MAC) collapse into a single
     # Interface. dict preserves insertion order, so enumeration order is the
     # order the OS reported.
-    found: "Dict[str, Interface]" = {}
+    found: "Dict[str, _Pending]" = {}
     try:
         node_ptr = head
         while node_ptr:
@@ -580,14 +649,14 @@ def _posix_interfaces(want_raw: bool) -> "List[Interface]":
                 except (OSError, AttributeError, ValueError):
                     index = 0
                 flags = int(node.ifa_flags)
-                iface = Interface(
+                iface = _Pending(
                     name=name,
                     index=index,
                     mtu=_posix_mtu(name),
                     # The kernel's own answer, rather than the address
                     # heuristic that stood in for it. Every node of one
                     # interface carries the same flags, so the first is enough.
-                    loopback=bool(flags & _IFF_LOOPBACK),
+                    is_loopback=bool(flags & _IFF_LOOPBACK),
                     raw={"flags": flags, "families": []} if want_raw else None,
                 )
                 found[name] = iface
@@ -637,7 +706,7 @@ def _posix_interfaces(want_raw: bool) -> "List[Interface]":
         # getifaddrs allocates; skipping this leaks on every call.
         freeifaddrs(head)
 
-    return list(found.values())
+    return [pending.build() for pending in found.values()]
 
 
 # ---------------------------------------------------------------------------
@@ -830,7 +899,7 @@ def _windows_interfaces(want_raw: bool) -> "List[Interface]":
                 ips=ips,
                 mtu=mtu if mtu > 0 else None,
                 # IfType is the Windows spelling of IFF_LOOPBACK.
-                loopback=int(node.IfType) == _IF_TYPE_SOFTWARE_LOOPBACK,
+                is_loopback=int(node.IfType) == _IF_TYPE_SOFTWARE_LOOPBACK,
                 raw=raw,
             )
         )
@@ -991,32 +1060,26 @@ def _enumerate_interfaces(raw: bool) -> "List[Interface]":
 
 
 def _copy_interfaces(found: "List[Interface]") -> "List[Interface]":
-    """Fresh :class:`Interface` objects, so a cached entry cannot be mutated.
+    """The cached interfaces as the caller's own list, with no shared dict.
 
-    ``Interface`` has ``__slots__`` but is **not** frozen, and two of its
-    attributes are mutable containers: ``ips`` is a list and ``raw`` a dict. A
-    cache that handed out the stored objects would let one caller's
-    ``iface.ips.append(...)`` corrupt what every later caller sees, with
-    no plausible trail back to the cache.
-
-    A **shallow** copy of those two containers is enough and ``deepcopy`` is
-    not wanted: everything inside is an immutable value type already
-    (``IPv4Interface``/``IPv6Interface``, :class:`~netimps.MACAddress`, and
-    platform scalars in ``raw``).
-
-    Measured with 7 adapters: **0.004 ms** to copy against **0.969 ms** to
-    enumerate, so the cache keeps its point. Freezing ``Interface`` would be the
-    cleaner fix, but turning ``ips`` into a tuple is a breaking change.
+    An :class:`Interface` cannot change after construction, so the stored
+    objects are handed out as they are. The one exception is ``raw``, a dict a
+    caller could still mutate, so an interface that carries one is rebuilt
+    around a copy of it; those exist only after ``get_interfaces(raw=True)``.
     """
     return [
-        Interface(
-            name=iface.name,
-            index=iface.index,
-            mac=iface.mac,
-            ips=list(iface.ips),
-            mtu=iface.mtu,
-            loopback=iface.loopback,
-            raw=None if iface.raw is None else dict(iface.raw),
+        (
+            iface
+            if iface.raw is None
+            else Interface(
+                name=iface.name,
+                index=iface.index,
+                mac=iface.mac,
+                ips=iface.ips,
+                mtu=iface.mtu,
+                raw=dict(iface.raw),
+                is_loopback=iface._is_loopback,
+            )
         )
         for iface in found
     ]
@@ -1078,13 +1141,9 @@ def get_interfaces(
     Enumerating per datagram is not merely slow: at 35-42 ms it is slow enough
     that a packet flood can deny service on its own.
 
-    **A cached call returns fresh objects, not the stored ones.**
-    ``Interface`` is not frozen and both ``ips`` (a list) and ``raw`` (a dict)
-    are mutable, so handing out the stored objects would let one caller's
-    ``iface.ips.append(...)`` corrupt every later caller's view. Copying costs a
-    measured 0.004 ms against 0.969 ms to enumerate -- 244x less -- so the cache
-    keeps its point and gains no sharp edge. Nothing deeper is copied because
-    nothing deeper is mutable.
+    **A cached call returns the same immutable objects, in a fresh list.**
+    ``Interface`` cannot change after construction and ``ips`` is a tuple, so
+    one caller cannot corrupt another's view; only ``raw``, a dict, is copied.
 
     Never raises for enumeration failure: if the native call is unavailable it
     degrades to a hostname-resolution fallback in which prefixes are *not*

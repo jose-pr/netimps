@@ -62,7 +62,7 @@ def test_make_ip_interface_rejects_garbage():
 def test_is_loopback_uses_the_kernel_flag_not_the_name():
     """The kernel's own answer wins, and the name is never consulted.
 
-    ``loopback=`` is what enumeration fills from ``IFF_LOOPBACK`` (POSIX) or
+    ``is_loopback=`` is what enumeration fills from ``IFF_LOOPBACK`` (POSIX) or
     ``IF_TYPE_SOFTWARE_LOOPBACK`` (Windows). Names differ per OS and are
     meaningless; the flag does not.
     """
@@ -70,13 +70,13 @@ def test_is_loopback_uses_the_kernel_flag_not_the_name():
     win_style = Interface(
         name="Loopback Pseudo-Interface 1",
         ips=[ipaddress.ip_interface("127.0.0.1/8"), ipaddress.ip_interface("::1/128")],
-        loopback=True,
+        is_loopback=True,
     )
     assert win_style.is_loopback
 
     # Named "lo", and the kernel says it is not one. The name loses.
     liar = Interface(
-        name="lo", ips=[ipaddress.ip_interface("127.0.0.1/8")], loopback=False
+        name="lo", ips=[ipaddress.ip_interface("127.0.0.1/8")], is_loopback=False
     )
     assert not liar.is_loopback
 
@@ -98,7 +98,7 @@ def test_is_loopback_flag_wins_over_a_routable_address():
             ipaddress.ip_interface("10.255.255.254/32"),
             ipaddress.ip_interface("::1/128"),
         ],
-        loopback=True,
+        is_loopback=True,
     )
     assert wsl_lo.is_loopback
     # ...and the heuristic alone -- no flag -- is exactly what got it wrong.
@@ -112,7 +112,6 @@ def test_is_loopback_falls_back_to_addresses_without_a_flag():
         name="Loopback Pseudo-Interface 1",
         ips=[ipaddress.ip_interface("127.0.0.1/8"), ipaddress.ip_interface("::1/128")],
     )
-    assert win_style.loopback is None
     assert win_style.is_loopback
 
     # Named "lo" but holding a routable address -- must NOT be loopback.
@@ -770,32 +769,31 @@ def test_raw_is_cached_separately(monkeypatch):
     assert any(i.raw is not None for i in raw) or not raw
 
 
-def test_a_cached_call_returns_objects_the_caller_may_mutate():
-    """**The hazard a cache introduces, and the reason it copies.**
+def test_a_cached_call_cannot_be_corrupted_by_its_caller():
+    """**The hazard a cache introduces.**
 
-    `Interface` has `__slots__` but is not frozen, and `.ips` is a list while
-    `.raw` is a dict. Handing back the stored objects would let one caller's
-    `iface.ips.append(...)` corrupt every later caller's view -- a
-    cross-consumer bug with no plausible trail back to the cache. Copying costs
-    a measured 0.004 ms against 0.969 ms to enumerate, so it is not a trade.
+    A cache that hands the stored objects to every caller lets one caller's
+    change reach the next. `Interface` cannot change after construction and
+    `.ips` is a tuple, so the only thing left to corrupt is the returned list
+    itself, which is the caller's own.
     """
     first = netimps.get_interfaces(cache=math.inf)
     if not first:
         pytest.skip("no interfaces to mutate")
-    first[0].ips.append("poison")
-    first[0].name = "renamed"
-    first.append("appended to the list")
+    with pytest.raises(AttributeError):
+        first[0].name = "renamed"  # type: ignore[misc]
+    with pytest.raises(AttributeError):
+        first[0].ips.append("poison")  # type: ignore[attr-defined]
+    first.append("appended to the list")  # type: ignore[arg-type]
 
     second = netimps.get_interfaces(cache=math.inf)
-    assert "poison" not in second[0].ips
     assert second[0].name != "renamed"
     assert "appended to the list" not in second
-    # Distinct objects, equal values.
-    assert second[0] is not first[0]
+    assert isinstance(second[0].ips, tuple)
 
 
 def test_a_cached_raw_dict_is_also_copied():
-    """`.raw` is a dict, so it needs the same isolation as `.ips`."""
+    """`.raw` is a dict, so it is the one field a caller could still mutate."""
     found = netimps.get_interfaces(raw=True, cache=math.inf)
     with_raw = [i for i in found if i.raw is not None]
     if not with_raw:

@@ -206,6 +206,11 @@ for matched in iter_interfaces(IPv4Network("127.0.0.0/8")):
     assert_type(matched, Interface)
 
 assert_type(is_local_address("127.0.0.1"), bool)
+assert_type(iface.ips, Tuple[Union[IPv4Interface, IPv6Interface], ...])
+assert_type(iface.is_loopback, bool)
+assert_type(
+    Interface("lo", ips=[IPv4Interface("127.0.0.1/8")], is_loopback=True), Interface
+)
 
 # ---------------------------------------------------------------------------
 # FQDN -- the name algebra. The properties that return Optional are the point:

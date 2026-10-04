@@ -72,6 +72,11 @@ net  = parse("10.0.0.5/24", IPNetwork)        # -> IPv4Network('10.0.0.0/24')
 The union aliases are **not callable** — `IPAddress("10.0.0.5")` is a
 `TypeError`. Use `parse`.
 
+**The value types are read-only.** `MACAddress`, `FQDN`, `Host`, `Interface`,
+`PingResult` and `Route` raise `AttributeError` on any assignment or deletion;
+build a new one instead. Each is hashable where equality is defined, and each
+copies (`copy.copy`, `copy.deepcopy`) and pickles.
+
 ## Type aliases
 
 | Name | Meaning |
@@ -217,20 +222,19 @@ is deliberately not used.
 | `.name` | human-usable name (`eth0`, `en0`, Windows *friendly* name — never a GUID) |
 | `.index` | `if_nametoindex` value, `0` if unknown |
 | `.mac` | `MACAddress` or `None`; an all-zero hardware address is reported as `None` |
-| `.ips` | every address with its real prefix |
+| `.ips` | every address with its real prefix, as a **tuple** |
 | `.ipv4` / `.ipv6` | the split views |
 | `.mtu` | link MTU in bytes, or `None` |
-| `.loopback` | the **kernel's** loopback flag, or `None` when it was not reported |
 | `.primary_ip(ipv6=False, loopback_ok=True)` | pick **one** entry from `.ips`, ranked routable → loopback → link-local, or `None` |
-| `.is_loopback` | `.loopback` when known, otherwise derived from the addresses |
+| `.is_loopback` | the **kernel's** loopback flag when it was reported, otherwise derived from the addresses |
 | `.raw` | `None` unless `raw=True`; platform-specific leftovers |
 
 - **`is_loopback` is the kernel's answer, and never the name.** `IFF_LOOPBACK`
-  on POSIX, `IF_TYPE_SOFTWARE_LOOPBACK` on Windows, captured into `.loopback`
-  during enumeration — `lo`, `lo0` and `Loopback Pseudo-Interface 1` share no
+  on POSIX, `IF_TYPE_SOFTWARE_LOOPBACK` on Windows, captured during
+  enumeration — `lo`, `lo0` and `Loopback Pseudo-Interface 1` share no
   spelling, so matching on one is never right. The address heuristic runs
-  **only when `.loopback` is `None`** (the degraded path, and hand-built
-  objects), and it is a guess: it needs a loopback address and no routable one,
+  **only when no flag was reported** (the degraded path, and hand-built
+  objects: `Interface(..., is_loopback=None)`), and it is a guess: it needs a loopback address and no routable one,
   so it reports "no loopback interface at all" on a host that binds a routable
   address to `lo` — WSL2 does exactly that with `10.255.255.254/32`, as does
   any keepalived/anycast/VIP setup. Link-local addresses are ignored by it,
@@ -243,7 +247,7 @@ is deliberately not used.
 - **Never raises for enumeration failure.** If the native call is unavailable it
   degrades to hostname resolution, where **prefixes are fiction** (every address
   becomes `/32` or `/128` under an interface named `"<unknown>"`, with
-  `.loopback` unset). Check `iface.name == "<unknown>"` to detect it.
+  no flag reported). Check `iface.name == "<unknown>"` to detect it.
 - **`primary_ip()` is a selection, not "the" address** — an adapter routinely
   has several. It returns the **same element type as `.ips`** (an
   `ip_interface`, carrying the prefix) and the result *is* one of them; use
@@ -261,7 +265,7 @@ is deliberately not used.
   holding *only* a link-local address still yields it, and `loopback_ok=False`
   skips the loopback rank rather than returning `None`.
 - `__eq__` compares name, index, MAC, addresses and MTU, and the hash covers
-  exactly those; `.loopback` and `.raw` are deliberately outside both.
+  exactly those; the loopback flag and `.raw` are deliberately outside both.
 
 **`iter_addresses(interfaces=None, family=None)`** — the flattened
 `(interface, address)` view, yielded once per address rather than per adapter,
@@ -837,12 +841,9 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
   `clear_interface_cache()` does not advance it — dropping a cache enumerates
   nothing by itself.
 
-  A **cached call returns fresh `Interface` objects**, not the stored ones.
-  `Interface` is not frozen and both `.ips` (a list) and `.raw` (a dict) are
-  mutable, so handing back the stored objects would let one caller's
-  `iface.ips.append(...)` corrupt every later caller's view. The copy costs
-  0.004 ms against 0.969 ms to enumerate, and nothing deeper is copied because
-  nothing deeper is mutable.
+  A **cached call returns the stored `Interface` objects in a fresh list.**
+  An `Interface` cannot change after construction and `.ips` is a tuple, so
+  one caller cannot corrupt another's view. Only `.raw`, a dict, is copied.
 - **`get_interface(query, strict=True) -> Interface | None`** — first matching
   adapter in OS enumeration order. `query` accepts an `Interface`, exact
   `IPAddress`, exact `.ip` from an `IPInterface`, an `IPNetwork` containing at

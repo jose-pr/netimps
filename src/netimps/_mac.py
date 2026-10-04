@@ -12,7 +12,7 @@ Re-exported from :mod:`netimps`.
 from __future__ import annotations
 
 import re as _re
-from typing import Optional, Union
+from typing import Any, Optional, Tuple, Union
 
 from ._exceptions import NetimpsValueError
 
@@ -72,7 +72,7 @@ class MACAddress:
 
     def __init__(self, value: MACAddressLike) -> None:
         if isinstance(value, MACAddress):
-            self._octets = value._octets
+            object.__setattr__(self, "_octets", value._octets)
             return
         if isinstance(value, (bytes, bytearray)):
             octets = bytes(value)
@@ -80,7 +80,7 @@ class MACAddress:
                 raise NetimpsValueError(
                     "MAC address must be 6 bytes, got %d" % len(octets)
                 )
-            self._octets = octets
+            object.__setattr__(self, "_octets", octets)
             return
         if isinstance(value, bool):
             # bool is an int subclass, so an unguarded int branch would turn a
@@ -89,14 +89,14 @@ class MACAddress:
         if isinstance(value, int):
             if value < 0 or value > 0xFFFFFFFFFFFF:
                 raise NetimpsValueError("MAC integer out of range: %r" % (value,))
-            self._octets = value.to_bytes(6, "big")
+            object.__setattr__(self, "_octets", value.to_bytes(6, "big"))
             return
         if isinstance(value, str):
             text = value.strip()
             if not self._VALID_MAC.match(text):
                 raise NetimpsValueError("Invalid MAC address: %r" % (value,))
             hexdigits = _re.sub(r"[.:-]", "", text)
-            self._octets = bytes.fromhex(hexdigits)
+            object.__setattr__(self, "_octets", bytes.fromhex(hexdigits))
             return
         raise TypeError("Cannot build MACAddress from %r" % (type(value).__name__,))
 
@@ -241,6 +241,20 @@ class MACAddress:
     def is_universal(self) -> bool:
         """True if universally administered (vendor-assigned). Inverse of :attr:`is_local`."""
         return not self.is_local
+
+    def __reduce__(self) -> "Tuple[Any, Tuple[bytes]]":
+        """Pickle and copy through the constructor.
+
+        ``__slots__`` plus a blocked ``__setattr__`` defeats the default
+        restore, which assigns the slot back onto a blank instance.
+        """
+        return (MACAddress, (self._octets,))
+
+    def __setattr__(self, name: str, value: object) -> None:
+        raise AttributeError("MACAddress is immutable")
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError("MACAddress is immutable")
 
     def __int__(self) -> int:
         return int.from_bytes(self._octets, "big")

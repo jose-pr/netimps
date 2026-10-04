@@ -989,6 +989,12 @@ class Route:
 
     __slots__ = ("dst", "src", "gateway", "interface_index", "_on_link")
 
+    dst: "Union[str, IPAddress]"
+    src: "Optional[IPAddress]"
+    gateway: "Optional[IPAddress]"
+    interface_index: int
+    _on_link: "Optional[bool]"
+
     def __init__(
         self,
         dst: "Union[str, IPAddress]",
@@ -997,11 +1003,28 @@ class Route:
         interface_index: int = 0,
         on_link: "Optional[bool]" = None,
     ) -> None:
-        self.dst = dst
-        self.src = src
-        self.gateway = gateway
-        self.interface_index = interface_index
-        self._on_link = on_link
+        object.__setattr__(self, "dst", dst)
+        object.__setattr__(self, "src", src)
+        object.__setattr__(self, "gateway", gateway)
+        object.__setattr__(self, "interface_index", interface_index)
+        object.__setattr__(self, "_on_link", on_link)
+
+    def __reduce__(self) -> "Tuple[Any, Tuple[Any, ...]]":
+        """Pickle and copy through the constructor.
+
+        ``__slots__`` plus a blocked ``__setattr__`` defeats the default
+        restore, which assigns the slots back onto a blank instance.
+        """
+        return (
+            Route,
+            (self.dst, self.src, self.gateway, self.interface_index, self._on_link),
+        )
+
+    def __setattr__(self, name: str, value: object) -> None:
+        raise AttributeError("Route is immutable")
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError("Route is immutable")
 
     @property
     def on_link(self) -> "Optional[bool]":

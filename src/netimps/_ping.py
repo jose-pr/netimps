@@ -17,7 +17,7 @@ import sys as _sys
 from subprocess import DEVNULL as _DEVNULL
 from subprocess import TimeoutExpired as _SubprocessTimeout
 from subprocess import run as _run
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 from ._iface_spec import InterfaceLike, interface_address as _interface_address
 from ._ip import HostLike, IPAddress, _dst_argument
@@ -47,6 +47,13 @@ class PingResult:
 
     __slots__ = ("ok", "host", "rtt_ms", "ttl", "src", "attempts")
 
+    ok: bool
+    host: "HostLike"
+    rtt_ms: Optional[float]
+    ttl: Optional[int]
+    src: "Optional[IPAddress]"
+    attempts: int
+
     def __init__(
         self,
         ok: bool,
@@ -56,12 +63,29 @@ class PingResult:
         src: "Optional[IPAddress]" = None,
         attempts: int = 1,
     ) -> None:
-        self.ok = ok
-        self.host = host
-        self.rtt_ms = rtt_ms
-        self.ttl = ttl
-        self.src = src
-        self.attempts = attempts
+        object.__setattr__(self, "ok", ok)
+        object.__setattr__(self, "host", host)
+        object.__setattr__(self, "rtt_ms", rtt_ms)
+        object.__setattr__(self, "ttl", ttl)
+        object.__setattr__(self, "src", src)
+        object.__setattr__(self, "attempts", attempts)
+
+    def __reduce__(self) -> "Tuple[Any, Tuple[Any, ...]]":
+        """Pickle and copy through the constructor.
+
+        ``__slots__`` plus a blocked ``__setattr__`` defeats the default
+        restore, which assigns the slots back onto a blank instance.
+        """
+        return (
+            PingResult,
+            (self.ok, self.host, self.rtt_ms, self.ttl, self.src, self.attempts),
+        )
+
+    def __setattr__(self, name: str, value: object) -> None:
+        raise AttributeError("PingResult is immutable")
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError("PingResult is immutable")
 
     def __bool__(self) -> bool:
         return bool(self.ok)

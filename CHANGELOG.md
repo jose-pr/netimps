@@ -45,9 +45,18 @@ probe says so in its prefix.
 | `APIPA` | `LINK_LOCAL_V4` |
 | `UdpEndpoint.supports_pktinfo` | `UDPEndpoint.has_pktinfo` |
 | `UdpEndpoint.supports_src_pinning` | `UDPEndpoint.has_src_pinning` |
+| `Interface.loopback`, `Interface(loopback=)` | `Interface.is_loopback`, `Interface(is_loopback=)` |
 
 ### Changed
 
+- **`Host`, `MACAddress`, `PingResult`, `Route` and `Interface` are read-only.**
+  Assigning to or deleting any attribute raises `AttributeError`; build a new
+  value instead. All six value types (`FQDN` already was) copy and pickle.
+  `Interface.ips` is a **tuple** rather than a list, so `iface.ips.append(...)`
+  and the other list mutators raise; the constructor still takes any iterable.
+  `Interface.loopback` is gone: read `is_loopback`. A cached
+  `get_interfaces(cache=...)` call now hands back the stored `Interface`
+  objects in a fresh list, copying only `raw`.
 - **`HOST_DN` is replaced by `get_hostname(*, fqdn=False)`.** A constant
   computed from `platform.node()` made every `import netimps` ask for the host
   name, a WMI query on Windows; the function asks when called. `fqdn=True`

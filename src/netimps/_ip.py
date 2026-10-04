@@ -522,9 +522,23 @@ class Host:
     def __init__(self, value: "Optional[Union[str, Host]]") -> None:
         if isinstance(value, Host):
             value = value.value
-        self.value = "" if value is None else str(value).strip()
-        self._resolved = None
-        self._attempted = False
+        object.__setattr__(self, "value", "" if value is None else str(value).strip())
+        object.__setattr__(self, "_resolved", None)
+        object.__setattr__(self, "_attempted", False)
+
+    def __reduce__(self) -> "Tuple[Any, Tuple[str]]":
+        """Pickle and copy through the constructor; the memo is not carried.
+
+        ``__slots__`` plus a blocked ``__setattr__`` defeats the default
+        restore, which assigns the slots back onto a blank instance.
+        """
+        return (Host, (self.value,))
+
+    def __setattr__(self, name: str, value: object) -> None:
+        raise AttributeError("Host is immutable")
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError("Host is immutable")
 
     @property
     def is_address(self) -> bool:
@@ -561,20 +575,24 @@ class Host:
         a name that failed once may resolve later.
         """
         if refresh:
-            self._attempted = False
-            self._resolved = None
+            object.__setattr__(self, "_attempted", False)
+            object.__setattr__(self, "_resolved", None)
         if self._attempted:
             return self._resolved
 
-        self._attempted = True
+        object.__setattr__(self, "_attempted", True)
         if not self.value:
-            self._resolved = None
+            object.__setattr__(self, "_resolved", None)
             return None
 
         from ._parse import try_parse
 
         literal = try_parse(self.value, IPAddress)
-        self._resolved = literal if literal is not None else get_ip(self.value)
+        object.__setattr__(
+            self,
+            "_resolved",
+            literal if literal is not None else get_ip(self.value),
+        )
         return self._resolved
 
     def __str__(self) -> str:
