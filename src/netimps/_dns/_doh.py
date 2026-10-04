@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import socket as _socket
 from typing import Any, Callable, List, Literal, Optional, Type, overload
-from .. import _dnswire
+from . import _dnswire
 from .._exceptions import DNSDecodeError, ResolutionError, ResolutionTimeoutError
 from .._ip import HostLike, IPv4Address, IPv6Address, _dst_argument
 from ._wire import _question

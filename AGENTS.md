@@ -104,7 +104,8 @@ src/netimps/
 │   ├── _doh.py       # resolve_doh
 │   ├── _cache.py     # the cache= answer cache
 │   ├── _chain.py     # resolve: the backend chain, deadline and cache
-│   └── _lookup.py    # lookup_ip, lookup_fqdn: the Host and FQDN adapters
+│   ├── _lookup.py    # lookup_ip, lookup_fqdn, resolver_keywords: the Host and FQDN adapters
+│   └── _dnswire.py   # the DNS message codec (RFC 1035)
 ├── _ping/         # private package: ping() over the platform binary
 │   ├── _result.py    # PingResult
 │   ├── _command.py   # the argv per platform grammar, supports_dont_fragment
@@ -123,7 +124,10 @@ src/netimps/
 │   ├── _timeout.py   # socket.timeout -> TimeoutError on 3.9
 │   ├── _notifier.py  # add_reader polyfill, so arecv works on a Proactor loop
 │   └── _freebsd.py   # IPv4 arrival data and source pinning on FreeBSD
-├── _fqdn.py       # private: FQDN domain-name value type (label algebra)
+├── _fqdn/         # private package: FQDN domain-name value type
+│   ├── _text.py      # label limits, IDNA, the label rule
+│   ├── _wire.py      # encode_name, read_labels: the name codec
+│   └── _name.py      # FQDN: the label algebra
 ├── _msg/          # private package: cross-platform recvmsg/sendmsg + the socket patch
 │   ├── _dispatch.py  # recvmsg, sendmsg, CMSG_LEN/SPACE: native, or Winsock on Windows
 │   ├── _shape.py     # IPv4 pktinfo re-laid between the Windows and POSIX field orders

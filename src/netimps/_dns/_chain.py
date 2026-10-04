@@ -5,7 +5,7 @@ from __future__ import annotations
 import time as _time
 from functools import partial as _partial
 from typing import Any, Callable, List, Literal, Optional, Tuple, Union, overload
-from .. import _dnswire
+from . import _dnswire
 from .._exceptions import ResolutionError
 from .._ip import HostLike, IPv4Address, IPv6Address, _dst_argument
 from ._cache import RESOLUTION_CACHE_TTL, _cache_get, _cache_key, _cache_put

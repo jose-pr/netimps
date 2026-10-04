@@ -7,7 +7,8 @@ at all. The three orders are observable, so they are pinned here.
 
 import pytest
 
-from netimps import ResolutionError, _dns, _dnswire
+from netimps import ResolutionError, _dns
+from netimps._dns import _dnswire
 
 SYSTEM_DOMAINS = ["sys.test", "other.test."]
 

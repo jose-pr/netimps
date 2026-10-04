@@ -14,7 +14,9 @@ import pytest
 
 import netimps
 from fakedns import reply_for
-from netimps import DNSDecodeError, _dns, _dnswire
+from netimps import DNSDecodeError, _dns
+from netimps._dns import _dnswire
+from netimps._fqdn import _wire as _namewire
 
 
 def ns(server):
@@ -35,13 +37,13 @@ def test_unknown_types_and_bad_names_are_refused():
     with pytest.raises(DNSDecodeError):
         _dnswire.build_query("example.com", "hinfo", 1)
     with pytest.raises(DNSDecodeError):
-        _dnswire.encode_name("a..b")
+        _namewire.encode_name("a..b")
 
 
 def test_compressed_names_and_loops():
     reply = (
         struct.pack("!HHHHHH", 1, 0x8180, 1, 1, 0, 0)
-        + _dnswire.encode_name("a.test")
+        + _namewire.encode_name("a.test")
         + b"\x00\x01\x00\x01"
     )
     reply += b"\xc0\x0c" + struct.pack("!HHIH", 1, 1, 60, 4) + bytes([1, 2, 3, 4])

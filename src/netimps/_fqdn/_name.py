@@ -1,65 +1,7 @@
-"""A domain name as a value type, with path-like algebra (internal).
-
-Re-exported from :mod:`netimps`.
-
-**Read this first: the algebra is inverted from :mod:`pathlib`.** DNS label
-order is the reverse of a filesystem path -- in ``www.example.com`` the *most*
-significant label is last, not first. Every borrowed name therefore points the
-other way::
-
-    f = FQDN("www.example.com")
-    f.hostname          # 'www'               -- the LEFTmost label
-    f.domain            # FQDN('example.com') -- strips the LEFTmost label
-    f.tld               # 'com'
-    FQDN("example.com") / "www"   # FQDN('www.example.com')  -- PREPENDS
-
-``PurePath`` would give you the rightmost component for ``.name`` and append on
-``/``. If you assume pathlib semantics here you will get all of it backwards,
-which is why the DNS spelling is the primary name and the pathlib one is an
-alias on the same value: ``.domain``/``.parent``, ``.hostname``/``.name``,
-``.labels``/``.parts``, ``.is_fully_qualified()``/``.is_absolute()``.
-
-The trailing dot is absoluteness
---------------------------------
-``example.com.`` is **fully qualified**; bare ``example.com`` is relative to
-the resolver's search list and can resolve differently on different hosts.
-:mod:`netimps._dns` already depends on the difference -- it appends a trailing
-dot precisely to stop OS-level search expansion. So, exactly as
-``Path("a") != Path("/a")``::
-
-    FQDN("example.com") != FQDN("example.com.")
-
-They are different queries. Compare ``.labels`` if you mean "the same labels
-regardless of qualification".
-
-Names, not addresses
---------------------
-An address literal is **rejected**::
-
-    FQDN("10.0.0.1")   # ValueError
-    FQDN("::1")        # ValueError
-
-:class:`netimps.Host` is the type for "an address *or* a name"; this one is a
-name algebra, and labels, a parent domain and a TLD are things an IP does not
-have. ``Host.fqdn()`` bridges the two.
-
-What this deliberately does not do
-----------------------------------
-There is **no ``registrable_domain``**. ``FQDN("example.com").domain`` is
-``FQDN('com')`` -- a public suffix, not a registrant. Telling
-``example.co.uk`` (registrable) from ``co.uk`` (not) requires the Public Suffix
-List, a sizeable data file with its own update cadence, and this package has no
-hard runtime dependencies. A heuristic that handles ``.com`` and mishandles
-``.co.uk`` is worse than an honest gap, so the gap is documented instead.
-
-There is also no ``reverse_pointer``: that is built from an address, and this
-type has none. :meth:`FQDN.reverse` flips *label order*, which is a different
-operation with a similar name.
-"""
+"""``FQDN``: a domain name with label algebra, immutable, hashable and ordered."""
 
 from __future__ import annotations
 
-import sys as _sys
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -74,62 +16,35 @@ from typing import (
     overload,
 )
 from ipaddress import IPv4Address, IPv6Address
-
-from ._dnswire import is_label
-from ._exceptions import DNSDecodeError, NetimpsValueError
+from .._exceptions import DNSDecodeError, NetimpsValueError
+from .._ip._types import ip_literal
+from ._text import (
+    MAX_LABEL_LENGTH,
+    MAX_NAME_LENGTH,
+    _IDEOGRAPHIC_DOTS,
+    _URI_DELIMITERS,
+    _idna_encode,
+    is_label,
+)
+from ._wire import encode_name, read_labels
 
 _IPAddress = Union[IPv4Address, IPv6Address]
 
-__all__ = ["FQDN", "FQDNLike"]
 
 #: What :class:`FQDN` accepts wherever it accepts "another name": the parsed
 #: type or a string. The constructor and the label operators also take an
 #: iterable of labels, spelled out in their own signatures.
 FQDNLike = Union["FQDN", str]
 
-#: RFC 1035 2.3.4. 253 rather than 255: the wire form spends one octet on each
-#: label's length prefix and one on the root, so the printable form caps lower
-#: than the oft-quoted 255.
-MAX_NAME_LENGTH = 253
-
-#: RFC 1035 2.3.4, per label.
-MAX_LABEL_LENGTH = 63
-
-#: The characters IDNA reads as a dot besides ``.`` (U+3002, U+FF0E, U+FF61).
-_IDEOGRAPHIC_DOTS = {0x3002: ".", 0xFF0E: ".", 0xFF61: "."}
-
-#: RFC 3986 section 2.2 general delimiters. The wire carries any printable
-#: byte in a label, but text holding one of these is a URL or an address, not
-#: a name, so `FQDN("http://example.com")` is refused rather than kept.
-_URI_DELIMITERS = frozenset(":/?#[]@")
 
 if TYPE_CHECKING:
-    from ._ping import PingResult
+    from .._ping import PingResult
+
 
 _D = TypeVar("_D")
+
+
 _F = TypeVar("_F", bound="FQDN")
-
-
-def _idna_encode(label: str) -> str:
-    """ASCII-encode one label, via IDNA where it is not already ASCII.
-
-    Uses the standard library's ``str.encode("idna")``, which is **IDNA 2003**
-    -- not the newer IDNA 2008 that the third-party ``idna`` package
-    implements. The difference matters for a handful of names (notably the
-    handling of ``ß`` and final sigma), and taking a dependency to fix that is
-    not a trade this package makes. Documented rather than hidden.
-    """
-    if not label:
-        return label
-    try:
-        label.encode("ascii")
-        return label
-    except UnicodeEncodeError:
-        pass
-    try:
-        return label.encode("idna").decode("ascii")
-    except UnicodeError as exc:
-        raise NetimpsValueError("label %r is not encodable as IDNA: %s" % (label, exc))
 
 
 class FQDN:
@@ -241,11 +156,11 @@ class FQDN:
         # real problem: "10.0.0.1" would otherwise pass every label check and
         # produce a nonsense "name". Routed through the package's own parser
         # rather than a second address detector.
-        from ._ip import IPAddress
-        from ._parse import is_valid
-
         candidate = ".".join(encoded)
-        if is_valid(candidate, IPAddress) or is_valid(candidate.strip("[]"), IPAddress):
+        if (
+            ip_literal(candidate) is not None
+            or ip_literal(candidate.strip("[]")) is not None
+        ):
             raise NetimpsValueError(
                 "%r is an IP address, not a domain name -- use netimps.Host for "
                 "a value that may be either" % (candidate,)
@@ -554,26 +469,14 @@ class FQDN:
         ``backends`` only the OS resolver answers. DNS records of any type come
         from :func:`netimps.resolve`.
         """
-        return (
-            self,
-            self.ip(
-                check=check,
-                ipv6=ipv6,
-                ns=ns,
-                timeout=timeout,
-                port=port,
-                tcp=tcp,
-                search=search,
-                backends=backends,
-                source=source,
-                cache=cache,
-                deadline=deadline,
-            ),
-        )
+        from .._dns import resolver_keywords
+
+        keywords = resolver_keywords(locals())
+        return (self, self.ip(ipv6=ipv6, **keywords))
 
     def ping(self, **kwargs: "Any") -> "PingResult":
         """Ping this name. Straight through to :func:`netimps.ping`."""
-        from ._ping import ping
+        from .._ping import ping
 
         return ping(str(self), **kwargs)
 
@@ -598,22 +501,9 @@ class FQDN:
         immutable, and a cache on it would be a lie about freshness.
         :meth:`netimps.Host.ip` documents the options.
         """
-        from ._dns import lookup_ip
+        from .._dns import lookup_ip, resolver_keywords
 
-        return lookup_ip(
-            str(self),
-            check=check,
-            ipv6=ipv6,
-            ns=ns,
-            timeout=timeout,
-            port=port,
-            tcp=tcp,
-            search=search,
-            backends=backends,
-            source=source,
-            cache=cache,
-            deadline=deadline,
-        )
+        return lookup_ip(str(self), **resolver_keywords(locals(), ipv6=True))
 
     # -- presentation and classification -----------------------------------
 
@@ -720,8 +610,6 @@ class FQDN:
         So :meth:`decode` of the result equals :meth:`fully_qualified`, which is
         this name only when it already is.
         """
-        from ._dnswire import encode_name
-
         return encode_name(".".join(self._labels))
 
     def __bytes__(self) -> bytes:
@@ -756,8 +644,6 @@ class FQDN:
             loop, the root alone, or a label no :class:`FQDN` can hold (a
             non-printable byte or a dot). It is a ``ValueError``.
         """
-        from ._dnswire import read_labels
-
         buffer = bytes(data)
         if not 0 <= offset <= len(buffer):
             raise DNSDecodeError("offset %d is outside the message" % (offset,))

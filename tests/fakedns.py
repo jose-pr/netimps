@@ -10,21 +10,22 @@ import socket
 import struct
 import threading
 
-from netimps import _dnswire
+from netimps._dns import _dnswire
+from netimps._fqdn import _wire as _namewire
 
 ZONE = {
     ("host.test", 1): [("host.test", 1, bytes([10, 0, 0, 5]))],
     ("host.test", 28): [("host.test", 28, ipaddress.IPv6Address("fd00::5").packed)],
     ("alias.test", 1): [
-        ("alias.test", 5, _dnswire.encode_name("host.test")),
+        ("alias.test", 5, _namewire.encode_name("host.test")),
         ("host.test", 1, bytes([10, 0, 0, 5])),
     ],
     ("mail.test", 15): [
-        ("mail.test", 15, struct.pack("!H", 10) + _dnswire.encode_name("mx.mail.test"))
+        ("mail.test", 15, struct.pack("!H", 10) + _namewire.encode_name("mx.mail.test"))
     ],
     ("note.test", 16): [("note.test", 16, b"\x05hello\x06 world")],
     ("5.0.0.10.in-addr.arpa", 12): [
-        ("5.0.0.10.in-addr.arpa", 12, _dnswire.encode_name("host.test"))
+        ("5.0.0.10.in-addr.arpa", 12, _namewire.encode_name("host.test"))
     ],
     ("big.test", 1): [
         ("big.test", 1, bytes([10, 1, i // 256, i % 256])) for i in range(200)
@@ -46,7 +47,7 @@ def reply_for(query, tcp=False):
         return struct.pack("!HHHHHH", ident, 0x8182, 1, 0, 0, 0) + question
     records = ZONE.get((name, qtype), [])
     answers = b"".join(
-        _dnswire.encode_name(owner)
+        _namewire.encode_name(owner)
         + struct.pack("!HHIH", rtype, 1, 60, len(data))
         + data
         for owner, rtype, data in records

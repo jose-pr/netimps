@@ -8,7 +8,7 @@ import socket as _socket
 import struct as _struct
 import time as _time
 from typing import Any, List, Literal, Optional, Tuple, Union, overload
-from .. import _dnswire
+from . import _dnswire
 from .._exceptions import DNSDecodeError, ResolutionError, ResolutionTimeoutError
 from .._ip import HostLike, IPv4Address, IPv6Address, _dst_argument
 from ._common import _auto_rdtype, _budget, _nameservers, search_candidates

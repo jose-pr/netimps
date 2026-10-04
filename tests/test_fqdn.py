@@ -744,10 +744,10 @@ def test_common_ancestor_is_symmetric_in_labels():
 
 def test_wire_encoding_delegates_to_the_packages_own_encoder():
     """So it cannot drift from what ``resolve_wire`` actually sends."""
-    from netimps import _dnswire
+    from netimps._fqdn import _wire as _namewire
 
     assert FQDN("www.example.com").encode() == b"\x03www\x07example\x03com\x00"
-    assert FQDN("www.example.com").encode() == _dnswire.encode_name("www.example.com")
+    assert FQDN("www.example.com").encode() == _namewire.encode_name("www.example.com")
 
 
 def test_wire_is_always_absolute():

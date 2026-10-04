@@ -22,8 +22,8 @@ from netimps import (
     ResolutionError,
     ResolutionTimeoutError,
     _dns,
-    _dnswire,
 )
+from netimps._fqdn import _wire as _namewire
 
 #: Each class with its direct bases, in declaration order.
 _BASES = [
@@ -80,7 +80,7 @@ def test_a_decode_error_is_a_value_error_and_a_package_error():
     """Every ``except ValueError`` written against the old private class."""
     for catches in (ValueError, NetimpsValueError, NetimpsError):
         with pytest.raises(catches):
-            _dnswire.encode_name("a..b")
+            _namewire.encode_name("a..b")
 
 
 def test_the_address_in_use_error_keeps_its_errno():
@@ -187,7 +187,7 @@ def test_wire_chains_an_unreadable_reply_as_the_cause():
     def _answer():
         try:
             data, peer = junk.recvfrom(4096)
-            end = _dnswire.read_labels(data, 12)[1] + 4
+            end = _namewire.read_labels(data, 12)[1] + 4
             # A reply to this query (its id and question) that stops inside
             # the first record.
             unreadable = (

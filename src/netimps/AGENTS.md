@@ -1528,7 +1528,7 @@ ordered. Built from a dotted string or from separate labels, **leftmost first**:
   `.is_subdomain_of()` (a name is **not** a subdomain of itself; qualification
   ignored), `.relative_to()` (raises `ValueError` if not under, and the result is
   never qualified), `.reverse()` (flips label order — **not** a reverse DNS
-  pointer, which is built from an address; `netimps._dnswire.reverse_name()` is
+  pointer, which is built from an address; `netimps._dns._dnswire.reverse_name()` is
   that), and `parse`/`try_parse`/`is_valid` classmethods matching
   `MACAddress`'s: `FQDN.parse(text)` raises `NetimpsValueError` for bad text and
   `TypeError` for a non-`str`; `FQDN.try_parse(text, default=None)` answers

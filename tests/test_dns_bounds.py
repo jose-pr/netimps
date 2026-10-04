@@ -18,13 +18,15 @@ import pytest
 import netimps
 from fakedns import reply_for
 from netimps import DNSDecodeError, ResolutionError, ResolutionTimeoutError
-from netimps import _dns, _dnswire
+from netimps import _dns
+from netimps._dns import _dnswire
+from netimps._fqdn import _wire as _namewire
 
 
 def message(answers, ident=7, qname="host.test", qtype=1):
     """A reply with one question and the given raw answer records."""
     header = struct.pack("!HHHHHH", ident, 0x8180, 1, len(answers), 0, 0)
-    question = _dnswire.encode_name(qname) + struct.pack("!HH", qtype, 1)
+    question = _namewire.encode_name(qname) + struct.pack("!HH", qtype, 1)
     return header + question + b"".join(answers)
 
 
@@ -81,17 +83,17 @@ def _chain(hops):
 
 def test_a_name_follows_at_most_32_pointers():
     ok, start = _chain(32)
-    assert _dnswire.read_labels(ok, start)[0] == []
+    assert _namewire.read_labels(ok, start)[0] == []
     too_long, start = _chain(33)
     with pytest.raises(DNSDecodeError, match="pointers"):
-        _dnswire.read_labels(too_long, start)
+        _namewire.read_labels(too_long, start)
 
 
 def test_a_long_pointer_chain_walked_by_many_records_is_cheap():
     """Measured on ec35558: 9.64 s for one 65,000-byte reply."""
     base = (
         struct.pack("!HHHHHH", 7, 0x8180, 1, 0, 0, 0)
-        + _dnswire.encode_name("host.test")
+        + _namewire.encode_name("host.test")
         + struct.pack("!HH", 1, 1)
     )
     first_name = len(base) + len(b"\xc0\x0c") + 10
@@ -135,7 +137,11 @@ def test_bytes_outside_letters_digits_and_hyphen_are_escaped_in_a_name():
 
 def test_ordinary_names_are_untouched():
     reply = message(
-        [record(b"\xc0\x0c", 12, _dnswire.encode_name("_sip._tcp.Mail-1.example.com"))],
+        [
+            record(
+                b"\xc0\x0c", 12, _namewire.encode_name("_sip._tcp.Mail-1.example.com")
+            )
+        ],
         qname="9.0.0.127.in-addr.arpa",
         qtype=12,
     )
