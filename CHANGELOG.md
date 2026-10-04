@@ -96,8 +96,8 @@ probe says so in its prefix.
   objects in a fresh list, copying only `raw`.
 - **`Host.fqdn` is a method, and `Host.ip` takes keyword-only options.**
   `host.fqdn` becomes `host.fqdn()`; `host.ip(True)` becomes
-  `host.ip(refresh=True)`, and a refresh no longer rewrites the memo. A call
-  that passes any option neither reads nor writes it. `FQDN.resolve()` no
+  `host.ip(refresh=True)`, which asks again and replaces the memo as before.
+  A call that passes any other option neither reads nor writes it. `FQDN.resolve()` no
   longer returns DNS records: call `netimps.resolve(name, rdtype)` for those.
 - **`MACAddress.try_parse` and `FQDN.try_parse` take text only.** They answer
   `None` (or the new `default=`) for text that does not parse, and raise

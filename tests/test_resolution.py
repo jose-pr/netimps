@@ -322,7 +322,10 @@ def test_a_plain_call_memoises_and_an_option_does_not(monkeypatch):
     assert len(lookup.calls) == 4, "nor have overwritten it"
 
 
-def test_refresh_asks_again_and_leaves_the_memo_alone(monkeypatch):
+def test_refresh_asks_again_and_replaces_the_memo(monkeypatch):
+    """A name that failed, or moved, has to be re-askable on the same object;
+    a refresh that left the old answer in the memo would hand it straight back
+    on the next plain call."""
     first = _answer(DB)
     monkeypatch.setattr(socket, "getaddrinfo", first)
     host = Host("db.internal")
@@ -331,8 +334,8 @@ def test_refresh_asks_again_and_leaves_the_memo_alone(monkeypatch):
     second = _answer(netimps.parse("192.0.2.77"))
     monkeypatch.setattr(socket, "getaddrinfo", second)
     assert host.ip(refresh=True) == netimps.parse("192.0.2.77")
-    assert host.ip() == DB, "refresh must not write the memo"
-    assert second.calls and len(first.calls) == 1
+    assert host.ip() == netimps.parse("192.0.2.77"), "refresh replaces the memo"
+    assert len(second.calls) == 1 and len(first.calls) == 1
 
 
 def test_fqdn_has_no_memo(monkeypatch):

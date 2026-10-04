@@ -538,7 +538,6 @@ class Host:
         self,
         *,
         check: bool = False,
-        ipv6: "Optional[bool]" = None,
         ns: "Optional[Union[str, List[str]]]" = None,
         timeout: "Optional[float]" = 5.0,
         port: int = 53,
@@ -567,9 +566,9 @@ class Host:
         With ``check=True`` the first raises :class:`ResolutionError` and the
         second :class:`NetimpsValueError`.
 
-        The resolver options mean what they do for :meth:`ip`. ``ipv6`` is
-        accepted so one options dict serves :meth:`ip`, :meth:`fqdn` and
-        :meth:`resolve`, and is not used here. Nothing is memoised.
+        The resolver options mean what they do for :meth:`ip`. There is no
+        ``ipv6``: the address decides which reverse zone is asked. Nothing is
+        memoised.
         """
         text = self.value
         if self.is_address:
@@ -621,7 +620,8 @@ class Host:
         :param backends: which of ``"dnspython"``, ``"wire"``, ``"system"``,
             ``"nslookup"``, and in what order; see :func:`netimps.resolve`.
         :param source: the local address the query is sent from.
-        :param refresh: ignore the memo and ask again.
+        :param refresh: ask again, and replace the memo with the new answer --
+            a name that failed once may resolve later.
 
         **With none of ``ns``, ``port``, ``tcp``, ``source`` or ``backends`` the
         OS resolver alone answers**, as the standard library's lookups do. A
@@ -631,8 +631,7 @@ class Host:
 
         **A call that passes no option memoises its answer, a miss included**,
         because the common use is several lookups in a row on the same object.
-        A call that passes any option, or ``refresh=True``, neither reads nor
-        writes the memo.
+        A call that passes any option neither reads nor writes the memo.
         """
         text = self.value
         if not text:
@@ -648,7 +647,6 @@ class Host:
 
         plain = not (
             check
-            or refresh
             or ipv6 is not None
             or ns
             or timeout != 5.0
@@ -658,7 +656,7 @@ class Host:
             or backends is not None
             or source
         )
-        if plain and self._attempted:
+        if plain and self._attempted and not refresh:
             return self._resolved
 
         from ._dns import lookup_ip
@@ -707,19 +705,28 @@ class Host:
         raises :class:`ResolutionError` instead. The options are
         :meth:`ip`'s, and a name does its one lookup only.
         """
-        options = dict(
-            check=check,
-            ns=ns,
-            timeout=timeout,
-            port=port,
-            tcp=tcp,
-            search=search,
-            backends=backends,
-            source=source,
-        )
         return (
-            self.fqdn(ipv6=ipv6, **options),  # type: ignore[arg-type]
-            self.ip(ipv6=ipv6, **options),  # type: ignore[arg-type]
+            self.fqdn(
+                check=check,
+                ns=ns,
+                timeout=timeout,
+                port=port,
+                tcp=tcp,
+                search=search,
+                backends=backends,
+                source=source,
+            ),
+            self.ip(
+                check=check,
+                ipv6=ipv6,
+                ns=ns,
+                timeout=timeout,
+                port=port,
+                tcp=tcp,
+                search=search,
+                backends=backends,
+                source=source,
+            ),
         )
 
     def __str__(self) -> str:

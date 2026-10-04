@@ -1783,7 +1783,7 @@ Which call looks anything up:
   `NetimpsValueError`. The constructor is the lenient entry: it takes `None`,
   `""` and any object, and keeps its text.
 - `.is_address` — already a literal, no DNS needed.
-- **`.fqdn(*, check=False, ipv6=None, <resolver options>) -> FQDN | None`** —
+- **`.fqdn(*, check=False, <resolver options>) -> FQDN | None`** —
   this host as an **`FQDN`**: the name itself, or the name an address reverses
   to (without its root dot). The bridge between the two types: `Host` is the
   union "address *or* name", while `FQDN` is the name algebra that refuses an
@@ -1806,7 +1806,8 @@ Which call looks anything up:
   and `search` apply either way. Every option is keyword-only.
 - **A call that passes no option memoises its answer, a miss included**, since
   the common use is several lookups on one object. A call that passes any
-  option, or `refresh=True`, neither reads nor writes the memo.
+  option neither reads nor writes the memo; `refresh=True` asks again and
+  replaces it, since a name that failed once may resolve later.
 - **`.resolve(*, check=False, ipv6=None, <resolver options>) -> (FQDN | None,
   IPAddress | None)`** — the pair `(fqdn, ip)`, always a pair, so
   `fqdn, ip = host.resolve()` never fails to unpack; a half that was not found
