@@ -33,10 +33,10 @@ concurrency:
 
 jobs:
   lint:
-    # The gate the repo has always claimed to have. Formatting, the package's own
-    # type contract, and the typing-conformance file that nothing used to run --
-    # all three were opt-in config with no job behind them, so mypy silently drifted
-    # to 27 errors while `py.typed` promised consumers a checked surface.
+    # The gate behind the shipped type promise: formatting, the package's own
+    # type contract, and the typing-conformance file. Each is opt-in config
+    # that drifts silently without a job behind it, while `py.typed` promises
+    # callers a checked surface.
     name: Lint and type-check
     runs-on: ubuntu-latest
     steps:
@@ -57,8 +57,8 @@ jobs:
         # them whatever host it runs on -- but it resolves names like
         # `ctypes.WinDLL`, `socket.SIO_RCVALL` and `socket.ioctl` against the
         # platform it thinks it is targeting. So a clean run on a Windows laptop
-        # says nothing about the Linux runner, which is exactly how five
-        # attr-defined errors reached CI after a local check came back green.
+        # says nothing about the Linux runner: `attr-defined` errors reach CI
+        # past a green local check.
         #
         # Three runs, one per platform the matrix below tests.
         run: |
@@ -67,8 +67,8 @@ jobs:
           python -m mypy --platform win32 src/netimps
       - name: Type-check the public typing contract
         # tests/typing/api.py exists to prove the shipped header's static-typing
-        # promises. It is not a pytest module and pytest never collected it, so
-        # until this step it was executed by nothing at all.
+        # promises. It is not a pytest module, so pytest never collects it and
+        # this step is the only thing that runs it.
         #
         # Deliberately checked with a CONSUMER's config, not the package's own:
         # the package enables the experimental TypeForm feature so mypy will
@@ -120,8 +120,8 @@ jobs:
         # tests/test_platform_smoke.py is collected here on purpose. The rest of
         # the suite fakes subprocess.run throughout, so it asserts the argv the
         # library BUILDS and never that the platform's binary accepts it -- which
-        # is exactly how macOS shipped broken for every IPv6 ping while CI stayed
-        # green (`ping -6` is not a flag there). The smoke file is the one place
+        # is how every IPv6 ping on macOS can break while CI stays green
+        # (`ping -6` is not a flag there). The smoke file is the one place
         # that runs the real binary, loopback only, and it must gate the matrix.
         # -rs prints the reason for every skip. A skip is not a pass, and this
         # suite has guards that step aside on a host without IPv6 or without

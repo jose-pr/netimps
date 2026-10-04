@@ -64,7 +64,7 @@ else:
 # ``_introspect.get_clsargs``, which reads CLASS-level fields and never a
 # method signature. Measured on 3.9.13: the whole parser tree builds and
 # commands run. The class-level fields are the ones that must stay
-# ``_ty.Optional[...]`` -- and they are.
+# ``_ty.Optional[...]``.
 
 from ._exceptions import ResolutionError
 from . import (
@@ -102,9 +102,9 @@ _NEEDS_EXTRA = "netimps: the CLI needs the 'cli' extra -- pip install 'netimps[c
 def _error(text: str) -> None:
     """Print a diagnostic on stderr, keeping stdout for the answer alone.
 
-    Errors used to go to stdout, which made ``--json`` unparseable exactly
-    where a script needs it most: prose landed in the pipe instead of (or
-    ahead of) the payload. Anything that is not the answer belongs on stderr.
+    Prose on stdout would make ``--json`` unparseable exactly where a script
+    needs it most: it would land in the pipe instead of (or ahead of) the
+    payload. Anything that is not the answer belongs on stderr.
     """
     print(text, file=_sys.stderr)
 

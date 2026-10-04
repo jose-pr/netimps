@@ -1,9 +1,9 @@
 name: Docs
 
 # This workflow owns EVERY Pages deploy, so there is exactly one path to the
-# published site. Previously these jobs lived inside release.yml, which meant the
-# site could only change by cutting a PyPI release -- a wrong sentence on the
-# landing page stayed wrong until the next version.
+# published site. Deploying is deliberately not part of release.yml, so the site
+# can change without cutting a PyPI release -- a wrong sentence on the landing
+# page can be corrected on its own.
 #
 # Three ways in:
 #   - the Release workflow finishing successfully, so a v* release ships its
@@ -11,8 +11,8 @@ name: Docs
 #     trigger and never fires: the release is created by the release workflow
 #     using GITHUB_TOKEN, and GitHub deliberately does not start new workflow
 #     runs from token-created events (it would recurse). Measured on v0.3.0 --
-#     the release was published at 13:08:53 by github-actions[bot] and no docs
-#     run followed. `workflow_run` keys off the workflow completing rather than
+#     the release was published by github-actions[bot] and no docs run
+#     followed. `workflow_run` keys off the workflow completing rather than
 #     off the event it emitted, so it is not subject to that rule.
 #   - a docs-affecting push to main, so a correction ships on its own, and the
 #     site stays current between releases;
@@ -61,8 +61,8 @@ jobs:
           python-version: "3.x"
       - uses: actions/configure-pages@v5
         with:
-          # Self-enabling, as release.yml already was -- a fresh fork should not
-          # need the Pages switch flipped by hand before its first docs run.
+          # Self-enabling: a fresh fork should not need the Pages switch
+          # flipped by hand before its first docs run.
           enablement: true
       - name: Install package with docs tooling
         run: python -m pip install -e ".[dev,docs]"

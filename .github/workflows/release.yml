@@ -51,9 +51,8 @@ jobs:
   docs-gate:
     # Gate, do not deploy. A broken docs site must block a release, but the
     # release must not own deployment -- otherwise the site can only change by
-    # cutting a version, which is exactly how a wrong sentence on the landing
-    # page survived several releases. docs.yml deploys on `release: published`,
-    # which this workflow triggers by creating the release below.
+    # cutting a version. docs.yml deploys when this workflow completes
+    # successfully (`workflow_run`), after the release below is created.
     name: Build documentation (gate only)
     needs: test
     runs-on: ubuntu-latest

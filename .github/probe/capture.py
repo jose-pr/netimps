@@ -1,8 +1,8 @@
 """Capture real platform behaviour that unit tests cannot assert.
 
-Throwaway CI instrumentation: it answers questions the repo's findings queue
-has open ("what does macOS ping6 actually print?") with captured bytes rather
-than with a guess. Prints a human-readable transcript and writes the same
+Throwaway CI instrumentation: it answers platform questions ("what does macOS
+ping6 actually print?") with captured bytes rather than with a guess. Prints a
+human-readable transcript and writes the same
 content as JSON for download.
 
 Never raises -- every probe records its own failure and the run continues, so
@@ -45,7 +45,7 @@ _V4_RE = re.compile(r"\b(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\b")
 def redact(text):
     """Mask host identity while keeping everything a platform question needs.
 
-    The transcript is uploaded as a CI artifact and pasted into findings, and
+    The transcript is uploaded as a CI artifact and may be pasted into an issue, and
     none of the questions it answers -- which flag does this ping take, is this
     socket option exported, what punctuation does a reply line use -- needs the
     runner's real MAC or LAN layout. So the *shape* is kept and the identity is

@@ -156,9 +156,8 @@ map:
   Nearly every test that touches `ping`, `traceroute` or `nslookup` puts a
   fake program on `PATH` (the `fake_program` fixture) and then asserts the argv
   the library *builds* — which can never catch a flag the platform does not
-  have. That is not hypothetical: CI
-  happily confirmed that `ping(ipv6=True)` puts `-6` in the argv for months
-  while macOS `ping` answered `invalid option -- 6` and exited 64.
+  have: an argv test passes for `ping(ipv6=True)` putting `-6` in the argv
+  while macOS `ping` answers `invalid option -- 6` and exits 64.
   `tests/test_platform_smoke.py` is the one file that runs the real binaries,
   loopback only, and **nothing in it may be mocked**. A claim about another
   platform needs a measurement on that platform (a `ci-*` tag runs the matrix),
@@ -170,11 +169,11 @@ map:
 - **`is_loopback` comes from the interface *flags*, never the name**, with the
   address heuristic only as a fallback when the OS reported no flag.
   `IFF_LOOPBACK` (POSIX) and `IfType == IF_TYPE_SOFTWARE_LOOPBACK` (Windows)
-  were already being read into `raw`. Names (`lo` / `lo0` / `Loopback
+  are read into `raw`. Names (`lo` / `lo0` / `Loopback
   Pseudo-Interface 1`) share no spelling, and addresses are not authoritative
   either: WSL2 binds a routable `10.255.255.254/32` to `lo`, so the address
-  heuristic found **no** loopback interface at all there — and two tests
-  silently took a skip branch marked `# pragma: no cover`.
+  heuristic finds **no** loopback interface at all there, and a test that
+  looks for one silently takes its skip branch.
 - **`_ping._PLATFORM` is a three-way split** — `windows` / `linux` / `bsd` —
   not `os.name == "nt"`. Of the six flags the module emits, *five* mean
   something different or nothing at all on BSD: `-W` is milliseconds rather
@@ -186,9 +185,8 @@ map:
   neither Windows nor Linux is treated as BSD deliberately: a flag we fail to
   emit is a missing feature, a flag that means something else is a wrong
   answer.
-- **BSD `ping` does have a DF flag: `-D`.** A long-standing comment here said
-  it did not, which is why `discover_mtu(method="icmp")` was reported as
-  unfixable there. `ping6` is the one combination with no verified flag, so
+- **BSD `ping` has a DF flag: `-D`.** `ping6` is the one combination with no
+  verified flag, so
   `dont_fragment=True` is rejected for it rather than silently sent without DF.
 - The ctypes paths can't be asserted against fixed values, so
   `tests/test_interfaces.py` checks invariants plus the pure helpers and the
@@ -198,12 +196,12 @@ map:
   no-extra install gets a message rather than an `ImportError` traceback.
   `tests/test_cli.py` skips itself when the extra is absent, and asserts the
   library still imports with duho blocked.
-- **Tests must never hit the network, and `tests/conftest.py` now enforces
+- **Tests must never hit the network, and `tests/conftest.py` enforces
   it** rather than trusting it. An autouse fixture fails any off-host name
-  resolution at the point of the call, naming the test; eleven such lookups
-  existed when it was added, and simulating a wildcard resolver (the kind many
-  ISP and corporate networks run) turned the suite red, because several tests
-  assert that a name does *not* resolve. Two escape hatches, both
+  resolution at the point of the call, naming the test. A wildcard resolver
+  (the kind many ISP and corporate networks run) turns a suite red when it
+  trusts the resolver, because several tests assert that a name does *not*
+  resolve. Two escape hatches, both
   self-documenting:
   - `no_such_host` — makes every off-host name fail deterministically. Use it
     whenever the precondition is "given a name that does not resolve"; picking
@@ -222,14 +220,13 @@ map:
   argument, and defaults evaluate at definition time.
 - **Windows `ping` exits 0 for "TTL expired in transit."** Anything inferring
   success from the exit code alone is wrong; match the reply address instead,
-  never the localised prose. Windows `ping -?` also exits 0, which is how
-  `ping("-?")` used to come back truthy for a host that was never contacted.
+  never the localised prose. Windows `ping -?` also exits 0, so `ping("-?")`
+  would come back truthy for a host that was never contacted.
 - **Check for silent platform gaps before adding a socket option — and check
   *every* platform, not just Windows.** Measured on Windows and Linux (3.9
   through 3.14): `IP_MTU`, `IP_MTU_DISCOVER` and `IP_DONTFRAG` are exported by
   CPython on **neither**, so a `getattr(socket, "IP_MTU", None)` guard disables
-  the code everywhere — which is exactly what silently killed `get_pmtu` for
-  the life of the project. `SO_REUSEPORT`, `IPV6_PATHMTU`, `IPV6_RECVPATHMTU`
+  the code everywhere. `SO_REUSEPORT`, `IPV6_PATHMTU`, `IPV6_RECVPATHMTU`
   and `IPV6_RECVPKTINFO` are missing on Windows but present on Linux; Windows
   has `IPV6_DONTFRAG` (14) and no `IP_DONTFRAGMENT`. Binding a multicast socket
   to the group address fails there too. Where the constant is documented and
@@ -265,9 +262,9 @@ map:
 - **`GetBestRoute2`, not `GetIpForwardTable`.** It asks Windows which route it
   would pick, so the kernel does longest-prefix matching, and unlike
   `GetBestRoute` it serves both families. The POSIX side has no equivalent and
-  parses `/proc/net/route` and `/proc/net/ipv6_route` by hand — which is where
-  the loopback bug came from, since the v4 file omits loopback entirely, and
-  where the v6 parser has to honour `RTF_UP`/`RTF_REJECT`, since WSL2 carries a
+  parses `/proc/net/route` and `/proc/net/ipv6_route` by hand — the v4 file
+  omits loopback entirely, and the v6 parser has to honour
+  `RTF_UP`/`RTF_REJECT`, since WSL2 carries a
   `::/0` reject route on `lo` that would otherwise make every global IPv6
   address "on-link via loopback". BSD has neither file and shells out to
   `route -n get`.
@@ -291,19 +288,19 @@ map:
   contract regression before re-running it from a cold cache.
 - **`.github/probe/` answers platform questions with captured bytes.** Push a
   `probe-*` tag (not `ci-*` — that is test.yml's) or dispatch it, then read the
-  uploaded artifact. It has already settled several things it would be a waste
-  to re-derive: macOS `ping` has no `-4`/`-6`, BSD `-W` is milliseconds,
+  uploaded artifact. It records facts not worth re-deriving: macOS `ping` has
+  no `-4`/`-6`, BSD `-W` is milliseconds,
   `IP_DONTFRAG` is 28 on Darwin and 67 on FreeBSD, and CPython exports
   `socket.IP_MTU` on no platform at all. Output is redacted by default
   (`--raw` to keep MACs and addresses for local diagnosis) because the
-  transcript is uploaded and pasted into findings.
+  transcript is uploaded and may be pasted into an issue.
 - **Type-check for every platform, not just yours.** `mypy` checks every
   per-platform branch whatever host it runs on, but resolves names against the
   platform it *thinks* it is targeting — so `ctypes.WinDLL`,
   `socket.SIO_RCVALL` and `socket.ioctl` type fine on Windows and fail on the
   Linux runner. Run `mypy --platform linux`, `--platform darwin` and
-  `--platform win32`; CI runs all three. A clean local run on one platform
-  proved nothing and let five `attr-defined` errors reach CI.
+  `--platform win32`; CI runs all three. A clean run on one platform says
+  nothing about `attr-defined` errors on another.
 - **Constants differ between the BSDs, not just between BSD and Linux.**
   `IP_DONTFRAG` is 67 on FreeBSD and **28 on Darwin**; one number for "BSD"
   made `_set_dont_fragment` fail silently on macOS, which for a DF option means

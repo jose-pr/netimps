@@ -69,9 +69,8 @@ Two groups behave very differently, and conflating them is the usual mistake:
 ## Baseline
 
 `results/windows-py3.14.6-arm64.json` is the **pre-optimization baseline**,
-captured immediately after the 2026-09-20 review fixes landed and before any
-performance work. Nothing in that campaign was a perf change: it fixed
-correctness, so these numbers are a starting point, not an improvement.
+captured before any performance work, so these numbers are a starting point,
+not an improvement.
 
 Two figures from it are worth knowing before optimising anything:
 
