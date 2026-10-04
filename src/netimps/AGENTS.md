@@ -164,7 +164,9 @@ only in the case or separator they were parsed from are equal.
 
 | Member | Meaning |
 | --- | --- |
-| `.as_str(sep=":", upper=False)` | render with any separator; `sep=""` for bare form |
+| `.format(sep=":", *, upper=False)` | render with any separator; `sep=""` for bare form |
+| `format(mac, spec)`, `f"{mac:spec}"` | empty spec is `str(mac)`; otherwise the spec is the separator, with a trailing `X` for upper case: `f"{mac:-X}"` is `mac.format("-", upper=True)` |
+| `bytes(mac)` | the six raw octets, the same as `.packed` |
 | `.hex(sep=None, bytes_per_sep=1)` | exactly `bytes.hex` — `'aabbccddeeff'`, `hex(":")`, `hex("-", 2)` → `'aabb-ccdd-eeff'` |
 | `.packed` | the 6 raw bytes |
 | `.oui` | the first three octets, **verbatim** (see below) |
@@ -206,7 +208,7 @@ only in the case or separator they were parsed from are equal.
 - **Not a `bytes` subclass** — deliberately, matching how `ipaddress` models
   addresses. Use `.packed` at wire boundaries.
 - Case is presentational only: `upper=True` never affects equality or hashing.
-  `as_str(".")` emits `aa.bb.cc.dd.ee.ff` (one dot per octet) and round-trips
+  `format(".")` emits `aa.bb.cc.dd.ee.ff` (one dot per octet) and round-trips
   through the constructor; the Cisco triplet form is accepted on input and
   never produced. `":"`, `"-"`, `"."` and `""` all round-trip; any other
   separator renders but does not.
@@ -425,7 +427,8 @@ subclass **`ResolutionTimeoutError`**, so `except ResolutionError` and
 
 **`DNSDecodeError`** reaches a caller directly from `resolve_doh` (a `query`
 with an empty or over-long label, raised before anything is sent) and from
-`FQDN.wire` (a name whose labels cannot be encoded). Inside `resolve_wire`
+`FQDN.encode()` (a name whose labels cannot be encoded) and from
+`FQDN.decode()` / `FQDN.decode_at()` (bytes that are not a name). Inside `resolve_wire`
 and `resolve_doh` an unreadable *reply* is not raised as such: it becomes a
 `ResolutionError` whose `__cause__` is the `DNSDecodeError`.
 
@@ -1141,7 +1144,7 @@ ordered. Built from a dotted string or from separate labels, **leftmost first**:
   resolver's search list and can mean different things on different hosts — so
   `FQDN("example.com") != FQDN("example.com.")`, exactly as
   `Path("a") != Path("/a")`. Compare `.labels` when qualification is not what
-  you mean. `as_fully_qualified()` and `relative()` convert.
+  you mean. `fully_qualified()` and `relative()` convert.
 - **An address literal is refused**: `FQDN("10.0.0.1")` and `FQDN("::1")` raise
   `ValueError`. This is a *name* algebra — labels, a parent domain, a TLD are
   things an IP does not have. Use **`Host`** for a value that may be either, and
@@ -1183,16 +1186,27 @@ ordered. Built from a dotted string or from separate labels, **leftmost first**:
   line without reaching for `str()` first. `FQDN + FQDN` raises and points at
   `/`, since concatenating two names as text yields
   `'www.example.comexample.com'`.
-- **`.unicode`** — the display form, decoding punycode back:
-  `FQDN("münchen.de").unicode` is `'münchen.de'` while `str()` is
+- **`.to_unicode()`** — the display form, decoding punycode back:
+  `FQDN("münchen.de").to_unicode()` is `'münchen.de'` while `str()` is
   `'xn--mnchen-3ya.de'`. Labels are stored ASCII because that is what goes on the
   wire and what comparisons use. An undecodable label passes through unchanged.
-- **`.wire`** / **`.wire_length`** — the DNS wire encoding
-  (`b'\x03www\x07example\x03com\x00'`), delegated to the package's own encoder so
-  it cannot drift from what `resolve_wire()` sends. Always absolute; there is no
-  relative wire form. `.wire_length` is the figure the **255**-octet protocol
-  limit applies to, as against the 253 printable limit checked at construction —
-  the gap being one length prefix per label plus the root.
+- **`.encode() -> bytes`** / `bytes(name)` / **`.wire_length`** — the DNS wire
+  encoding (`b'\x03www\x07example\x03com\x00'`), uncompressed, delegated to the
+  package's own encoder so it cannot drift from what `resolve_wire()` sends.
+  Always absolute; there is no relative wire form. `.wire_length` is the figure
+  the **255**-octet protocol limit applies to, as against the 253 printable limit
+  checked at construction — the gap being one length prefix per label plus the
+  root.
+- **`FQDN.decode(data) -> FQDN`** — a buffer holding exactly one name in wire
+  form; **`FQDN.decode_at(data, offset) -> (FQDN, end)`** — a name inside a DNS
+  message, following compression pointers with loop detection. `end` is the
+  first byte after the name *in the record* (just past the two-byte pointer when
+  the name was compressed), so parsing carries on from it. Both raise
+  `DNSDecodeError` for a malformed name, a loop, a label over 63 or a name over
+  255 octets, a label holding a byte an `FQDN` label cannot (a dot, a control or
+  non-ASCII byte), or the root alone; `decode` also for trailing bytes. Wire
+  names are absolute, so `FQDN.decode(v.encode()) == v` holds for a fully
+  qualified `v`, and for a relative one the result is `v.fully_qualified()`.
 - **`.is_hostname()`** — whether every label is legal RFC 1123 LDH (letters,
   digits, hyphens; no leading or trailing hyphen). **Narrower than what the type
   accepts, on purpose**: `_dmarc.example.com`, `_sip._tcp.example.com` and

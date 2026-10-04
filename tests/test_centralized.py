@@ -1089,7 +1089,7 @@ class _WireMAC(netimps.MACAddress):
     """A subclass overriding only __str__, as a caller would."""
 
     def __str__(self):
-        return self.as_str("-", upper=True)
+        return self.format("-", upper=True)
 
     def hex(self, *args):
         return self.packed.hex(*args)
@@ -1100,7 +1100,7 @@ def test_mac_subclass_can_change_str_only():
     assert str(mac) == "AA-BB-CC-DD-EE-FF"
     # Everything else is inherited unchanged.
     assert mac.packed == bytes.fromhex("aabbccddeeff")
-    assert mac.as_str() == "aa:bb:cc:dd:ee:ff"
+    assert mac.format() == "aa:bb:cc:dd:ee:ff"
     assert mac.oui == b"\xaa\xbb\xcc"
 
 

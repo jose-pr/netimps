@@ -253,9 +253,9 @@ def test_reverse_is_not_a_reverse_dns_pointer():
 
 def test_qualification_conversions():
     rel, absolute = FQDN("example.com"), FQDN("example.com.")
-    assert rel.as_fully_qualified() == absolute
+    assert rel.fully_qualified() == absolute
     assert absolute.relative() == rel
-    assert absolute.as_fully_qualified() is absolute
+    assert absolute.fully_qualified() is absolute
     assert rel.relative() is rel
 
 
@@ -664,18 +664,18 @@ def test_adding_a_non_string_is_a_type_error():
 
 def test_unicode_decodes_punycode_for_display():
     """Labels are stored ASCII; this is the other direction, for humans."""
-    assert FQDN("münchen.de").unicode == "münchen.de"
+    assert FQDN("münchen.de").to_unicode() == "münchen.de"
     assert str(FQDN("münchen.de")) == "xn--mnchen-3ya.de"
     # Either spelling in gives the same pair out.
-    assert FQDN("xn--mnchen-3ya.de").unicode == "münchen.de"
-    assert FQDN("example.com").unicode == "example.com"
-    assert FQDN("münchen.de.").unicode == "münchen.de."
+    assert FQDN("xn--mnchen-3ya.de").to_unicode() == "münchen.de"
+    assert FQDN("example.com").to_unicode() == "example.com"
+    assert FQDN("münchen.de.").to_unicode() == "münchen.de."
 
 
 def test_unicode_passes_through_undecodable_punycode():
     """A display helper that raises is worse than one showing the stored form."""
     name = FQDN._from_labels(("xn--", "com"), False)
-    assert name.unicode == "xn--.com"
+    assert name.to_unicode() == "xn--.com"
 
 
 @pytest.mark.parametrize(
@@ -741,14 +741,14 @@ def test_wire_encoding_delegates_to_the_packages_own_encoder():
     """So it cannot drift from what ``resolve_wire`` actually sends."""
     from netimps import _dnswire
 
-    assert FQDN("www.example.com").wire == b"\x03www\x07example\x03com\x00"
-    assert FQDN("www.example.com").wire == _dnswire.encode_name("www.example.com")
+    assert FQDN("www.example.com").encode() == b"\x03www\x07example\x03com\x00"
+    assert FQDN("www.example.com").encode() == _dnswire.encode_name("www.example.com")
 
 
 def test_wire_is_always_absolute():
     """There is no relative wire form, so the root terminator is unconditional."""
-    assert FQDN("example.com").wire == FQDN("example.com.").wire
-    assert FQDN("example.com").wire.endswith(b"\x00")
+    assert FQDN("example.com").encode() == FQDN("example.com.").encode()
+    assert FQDN("example.com").encode().endswith(b"\x00")
 
 
 def test_wire_length_explains_the_253_vs_255_gap():

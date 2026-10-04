@@ -30,7 +30,7 @@ netimps.ping("8.8.8.8").rtt_ms             # 9.0
   the v4/v6 unions you annotate with *and* the types you parse into.
 - **`MACAddress`** — colon/hyphen/dot/bare plus `int`/`bytes`, hashable and
   ordered, with `.packed`, `.oui`, `.is_multicast`, `.is_local`,
-  `.as_str(sep, upper=)` and `is_valid`/`try_parse` classmethods.
+  `.format(sep, upper=)` and `is_valid`/`try_parse` classmethods.
 - **Socket helpers** — `get_source_ip`, `get_free_port`, `tcp_check`,
   `wait_for_port`: the four every network tool rewrites.
 - **Routing and MTU** — `get_route` (first hop, unprivileged), `count_hops`

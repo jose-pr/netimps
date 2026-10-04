@@ -46,9 +46,10 @@ class MACAddress:
 
         MACAddress.try_parse(text) == mac
 
-    ``as_str(sep)`` renders the address with an arbitrary separator between
+    ``format(sep)`` renders the address with an arbitrary separator between
     octets; ``sep=""`` produces the bare form, and every separator the
-    constructor accepts round-trips through it.
+    constructor accepts round-trips through it. ``f"{mac:-X}"`` is the same
+    call spelled as a format spec, and ``bytes(mac)`` is the six raw octets.
     """
 
     #: Compiled pattern matching the accepted textual MAC forms. Exposed as a
@@ -191,7 +192,7 @@ class MACAddress:
         subclassing the type to add it back.
 
         For the conventional colon- or hyphen-separated forms prefer
-        :meth:`as_str`, which also offers the uppercase rendering; this is the
+        :meth:`format`, which also offers the uppercase rendering; this is the
         one to reach for when the target wants ``bytes.hex`` semantics
         specifically, such as ``bytes_per_sep`` grouping.
         """
@@ -199,15 +200,15 @@ class MACAddress:
             return self.packed.hex()
         return self.packed.hex(sep, bytes_per_sep)  # type: ignore[arg-type]
 
-    def as_str(self, sep: str = ":", upper: bool = False) -> str:
+    def format(self, sep: str = ":", *, upper: bool = False) -> str:
         """Return the MAC as a string with ``sep`` between octets.
 
         Lowercase by default (the canonical form used by ``str(mac)`` and by
         equality/hashing); pass ``upper=True`` for the uppercase rendering
         favoured by Windows tooling and much vendor output::
 
-            mac.as_str("-")               # 'aa-bb-cc-dd-ee-ff'
-            mac.as_str("-", upper=True)   # 'AA-BB-CC-DD-EE-FF'
+            mac.format("-")               # 'aa-bb-cc-dd-ee-ff'
+            mac.format("-", upper=True)   # 'AA-BB-CC-DD-EE-FF'
 
         ``sep`` always goes between *octets*, ``"."`` included: the Cisco
         triplet spelling ``aabb.ccdd.eeff`` is accepted on input but never
@@ -311,11 +312,27 @@ class MACAddress:
             return self._octets >= other._octets
         return NotImplemented
 
+    def __format__(self, format_spec: str) -> str:
+        """``f"{mac}"`` is ``str(mac)``; otherwise the spec is the separator.
+
+        A trailing ``X`` asks for upper case and is not part of the separator,
+        so ``format(mac, "-X")`` is ``mac.format("-", upper=True)``. The
+        separator may be empty: ``format(mac, "X")`` is the bare upper-case form.
+        """
+        if not format_spec:
+            return str(self)
+        if format_spec.endswith("X"):
+            return self.format(format_spec[:-1], upper=True)
+        return self.format(format_spec)
+
+    def __bytes__(self) -> bytes:
+        return self._octets
+
     def __str__(self) -> str:
-        return self.as_str(":")
+        return self.format(":")
 
     def __repr__(self) -> str:
-        return "MACAddress(%r)" % (self.as_str(":"),)
+        return "MACAddress(%r)" % (self.format(":"),)
 
     def __eq__(self, other: object) -> bool:
         """Equal only to another :class:`MACAddress` -- never to text.

@@ -12,7 +12,7 @@ fullest one.
     import netimps
 
     netimps.parse("10.0.0.5")                           # -> IPv4Address
-    netimps.MACAddress("AA:BB:CC:DD:EE:FF").as_str("-")
+    netimps.MACAddress("AA:BB:CC:DD:EE:FF").format("-")
     netimps.resolve("example.com", "aaaa")
     for iface in netimps.get_interfaces():
         print(iface.name, iface.mac, iface.ips)

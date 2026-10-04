@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `DNSDecodeError(NetimpsValueError)` is the DNS codec's error, formerly the
   private `WireError(ValueError)`.
 
+- **`MACAddress.__format__` and `__bytes__`**: `f"{mac:-X}"` is `mac.format("-", upper=True)` and `bytes(mac)` is the six octets.
+  **`FQDN.encode()`, `bytes(name)`, `FQDN.decode(data)` and `FQDN.decode_at(data, offset)`**
+  write and read the RFC 1035 wire form; `decode_at` follows compression
+  pointers with loop detection and returns `(name, end)` for use inside a
+  message. Malformed data raises `DNSDecodeError`. The package's own reply
+  reader shares the same label reader, and now also refuses a label over 63
+  octets and a name over 255.
+
 - **`MACAddress.parse`, `FQDN.parse` and `Host.parse`** build the type from
   text, raising `NetimpsValueError` for bad text and `TypeError` for a
   non-`str`; `Host.try_parse(text, default=None)` joins the other two, whose
@@ -51,6 +59,10 @@ probe says so in its prefix.
 | `UdpEndpoint.supports_pktinfo` | `UDPEndpoint.has_pktinfo` |
 | `UdpEndpoint.supports_src_pinning` | `UDPEndpoint.has_src_pinning` |
 | `Interface.loopback`, `Interface(loopback=)` | `Interface.is_loopback`, `Interface(is_loopback=)` |
+| `MACAddress.as_str(sep, upper)` | `MACAddress.format(sep, *, upper=)`, `format(mac, "-X")` |
+| `Fqdn.wire` (property) | `FQDN.encode()`, `bytes(name)` |
+| `Fqdn.unicode` (property) | `FQDN.to_unicode()` |
+| `Fqdn.as_fully_qualified()` | `FQDN.fully_qualified()` |
 
 ### Changed
 

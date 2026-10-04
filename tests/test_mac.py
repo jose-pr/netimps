@@ -20,7 +20,7 @@ from netimps import MACAddress, MACAddressLike
 )
 def test_accepts_all_separator_forms(text):
     mac = MACAddress(text)
-    assert mac.as_str(":") == "aa:bb:cc:dd:ee:ff"
+    assert mac.format(":") == "aa:bb:cc:dd:ee:ff"
 
 
 def test_valid_mac_is_compiled_pattern():
@@ -50,31 +50,31 @@ def test_mixed_separators_are_rejected(text):
         MACAddress(text)
 
 
-def test_as_str_default_and_custom_separator():
+def test_format_default_and_custom_separator():
     mac = MACAddress("AA:BB:CC:DD:EE:FF")
-    assert mac.as_str() == "aa:bb:cc:dd:ee:ff"
-    assert mac.as_str("-") == "aa-bb-cc-dd-ee-ff"
-    assert mac.as_str("") == "aabbccddeeff"
+    assert mac.format() == "aa:bb:cc:dd:ee:ff"
+    assert mac.format("-") == "aa-bb-cc-dd-ee-ff"
+    assert mac.format("") == "aabbccddeeff"
     # "." separates octets like every other separator; the Cisco triplet form
     # is an accepted *input* spelling, never an output one.
-    assert mac.as_str(".") == "aa.bb.cc.dd.ee.ff"
+    assert mac.format(".") == "aa.bb.cc.dd.ee.ff"
 
 
 @pytest.mark.parametrize("sep", [":", "-", ".", ""])
 def test_every_rendered_separator_parses_back(sep):
-    """What as_str prints, the constructor accepts -- in both cases."""
+    """What format prints, the constructor accepts -- in both cases."""
     mac = MACAddress("aa:bb:cc:dd:ee:ff")
-    assert MACAddress(mac.as_str(sep)) == mac
-    assert MACAddress(mac.as_str(sep, upper=True)) == mac
+    assert MACAddress(mac.format(sep)) == mac
+    assert MACAddress(mac.format(sep, upper=True)) == mac
 
 
-def test_as_str_upper():
+def test_format_upper():
     mac = MACAddress("aa:bb:cc:dd:ee:ff")
-    assert mac.as_str(upper=True) == "AA:BB:CC:DD:EE:FF"
-    assert mac.as_str("-", upper=True) == "AA-BB-CC-DD-EE-FF"
-    assert mac.as_str("", upper=True) == "AABBCCDDEEFF"
+    assert mac.format(upper=True) == "AA:BB:CC:DD:EE:FF"
+    assert mac.format("-", upper=True) == "AA-BB-CC-DD-EE-FF"
+    assert mac.format("", upper=True) == "AABBCCDDEEFF"
     # Explicit upper=False is the documented default.
-    assert mac.as_str("-", upper=False) == "aa-bb-cc-dd-ee-ff"
+    assert mac.format("-", upper=False) == "aa-bb-cc-dd-ee-ff"
 
 
 def test_case_does_not_affect_identity():
@@ -84,7 +84,7 @@ def test_case_does_not_affect_identity():
     assert lower == upper
     assert hash(lower) == hash(upper)
     assert str(lower) == str(upper) == "aa:bb:cc:dd:ee:ff"
-    assert lower.as_str(upper=True) == upper.as_str(upper=True)
+    assert lower.format(upper=True) == upper.format(upper=True)
 
 
 def test_str_and_repr():
@@ -153,8 +153,8 @@ def test_hashable_as_dict_key():
 
 
 def test_construct_from_int_bytes_and_instance():
-    assert MACAddress(0xAABBCCDDEEFF).as_str() == "aa:bb:cc:dd:ee:ff"
-    assert MACAddress(bytes.fromhex("aabbccddeeff")).as_str() == "aa:bb:cc:dd:ee:ff"
+    assert MACAddress(0xAABBCCDDEEFF).format() == "aa:bb:cc:dd:ee:ff"
+    assert MACAddress(bytes.fromhex("aabbccddeeff")).format() == "aa:bb:cc:dd:ee:ff"
     original = MACAddress("aa:bb:cc:dd:ee:ff")
     assert MACAddress(original) == original
 
@@ -182,8 +182,8 @@ def test_maclike_lists_what_the_constructor_accepts():
 
 
 def test_int_boundaries_accepted():
-    assert MACAddress(0).as_str() == "00:00:00:00:00:00"
-    assert MACAddress(0xFFFFFFFFFFFF).as_str() == "ff:ff:ff:ff:ff:ff"
+    assert MACAddress(0).format() == "00:00:00:00:00:00"
+    assert MACAddress(0xFFFFFFFFFFFF).format() == "ff:ff:ff:ff:ff:ff"
 
 
 @pytest.mark.parametrize("value", [-1, -0xAABBCCDDEEFF, 0x1000000000000, 2**64])

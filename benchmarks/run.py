@@ -92,7 +92,7 @@ BENCHMARKS = {
         "MAC parsing, the most common spelling",
     ),
     "mac_as_str": (
-        lambda: netimps.MACAddress("00:11:22:33:44:55").as_str("-", upper=True),
+        lambda: netimps.MACAddress("00:11:22:33:44:55").format("-", upper=True),
         "render back out, as a CLI or log line would",
     ),
     "normalize_host_v6_bracketed": (

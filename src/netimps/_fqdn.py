@@ -71,7 +71,7 @@ from typing import (
     Union,
     overload,
 )
-from ._exceptions import NetimpsValueError
+from ._exceptions import DNSDecodeError, NetimpsValueError
 
 __all__ = ["FQDN", "FQDNLike"]
 
@@ -384,7 +384,7 @@ class FQDN:
         """Alias of :meth:`is_fully_qualified`."""
         return self._absolute
 
-    def as_fully_qualified(self) -> "FQDN":
+    def fully_qualified(self) -> "FQDN":
         """This name with the root dot, unchanged if it already has one."""
         if self._absolute:
             return self
@@ -509,16 +509,15 @@ class FQDN:
 
     # -- presentation and classification -----------------------------------
 
-    @property
-    def unicode(self) -> str:
+    def to_unicode(self) -> str:
         """The name in its display form, decoding punycode back to Unicode.
 
         Labels are stored ASCII-encoded, because that is what goes on the wire
         and what comparisons must use. This is the other direction, for showing
         a name to a person::
 
-            FQDN("münchen.de").unicode     # 'münchen.de'
-            str(FQDN("münchen.de"))        # 'xn--mnchen-3ya.de'
+            FQDN("münchen.de").to_unicode()     # 'münchen.de'
+            str(FQDN("münchen.de"))             # 'xn--mnchen-3ya.de'
 
         A label that is not valid punycode is passed through unchanged rather
         than raising -- ``xn--`` on its own is undecodable, and a display helper
@@ -600,21 +599,71 @@ class FQDN:
 
     # -- wire form ---------------------------------------------------------
 
-    @property
-    def wire(self) -> bytes:
+    def encode(self) -> bytes:
         """The DNS wire encoding: each label length-prefixed, root terminated.
 
-        ``FQDN("www.example.com").wire`` is
-        ``b'\\x03www\\x07example\\x03com\\x00'``. Delegates to the package's own
-        encoder, so it cannot drift from what :func:`netimps.resolve_wire`
-        actually sends.
+        ``FQDN("www.example.com").encode()`` is
+        ``b'\\x03www\\x07example\\x03com\\x00'``, uncompressed. Delegates to
+        the package's own encoder, so it cannot drift from what
+        :func:`netimps.resolve_wire` actually sends.
 
         Always absolute -- the root terminator is present whether or not this
         name carries a trailing dot, because there is no relative wire form.
+        So :meth:`decode` of the result equals :meth:`fully_qualified`, which is
+        this name only when it already is.
         """
         from ._dnswire import encode_name
 
         return encode_name(".".join(self._labels))
+
+    def __bytes__(self) -> bytes:
+        return self.encode()
+
+    @classmethod
+    def decode(cls, data: "Union[bytes, bytearray, memoryview]") -> "FQDN":
+        """The name in a buffer that holds exactly one, in wire form.
+
+        :raises DNSDecodeError: for a malformed name, a compression loop, or
+            bytes left over after the name. It is a ``ValueError``.
+        """
+        buffer = bytes(data)
+        name, end = cls.decode_at(buffer, 0)
+        if end != len(buffer):
+            raise DNSDecodeError("%d byte(s) follow the name" % (len(buffer) - end,))
+        return name
+
+    @classmethod
+    def decode_at(
+        cls, data: "Union[bytes, bytearray, memoryview]", offset: int
+    ) -> "Tuple[FQDN, int]":
+        """The name starting at ``offset`` in a DNS message, and where it ends.
+
+        Follows compression pointers, with loop detection. The returned offset
+        is the first byte after the name *in the record* -- just past the
+        two-byte pointer when the name was compressed -- so the caller can
+        carry on parsing from it. The name is always fully qualified.
+
+        :raises DNSDecodeError: for an offset outside the message, a name that
+            runs past it, a label over 63 octets, a name over 255, a compression
+            loop, the root alone, or a label no :class:`FQDN` can hold (a
+            non-printable byte or a dot). It is a ``ValueError``.
+        """
+        from ._dnswire import read_labels
+
+        buffer = bytes(data)
+        if not 0 <= offset <= len(buffer):
+            raise DNSDecodeError("offset %d is outside the message" % (offset,))
+        raw, end = read_labels(buffer, offset)
+        if not raw:
+            raise DNSDecodeError("the root has no labels, so it is not an FQDN")
+        labels = []
+        for label in raw:
+            if any(byte < 0x21 or byte > 0x7E or byte == 0x2E for byte in label):
+                raise DNSDecodeError(
+                    "label %r holds a byte an FQDN label cannot" % (label,)
+                )
+            labels.append(label.decode("ascii"))
+        return cls._from_labels(tuple(labels), True), end
 
     @property
     def wire_length(self) -> int:
@@ -625,7 +674,7 @@ class FQDN:
         difference being one length prefix per label plus the root. Worth
         reaching for when a name is going into a packet you are sizing.
         """
-        return len(self.wire)
+        return len(self.encode())
 
     # -- plumbing ----------------------------------------------------------
 

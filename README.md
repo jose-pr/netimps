@@ -128,7 +128,7 @@ netimps.split_host("::1")            # ('::1', None)  -- not port 1
 
 # MAC addresses
 mac = MACAddress("AA-BB-CC-DD-EE-FF")
-mac.as_str("-", upper=True)              # 'AA-BB-CC-DD-EE-FF'
+mac.format("-", upper=True)              # 'AA-BB-CC-DD-EE-FF'
 mac.is_local, mac.oui.hex()              # (True, 'aabbcc') -- AA has the U/L bit
 
 # DNS returns native types

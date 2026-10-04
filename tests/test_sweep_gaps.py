@@ -421,10 +421,10 @@ def test_mac_hex_matches_bytes_hex():
     assert mac.hex("-", 2) == mac.packed.hex("-", 2) == "aabb-ccdd-eeff"
 
 
-def test_mac_hex_is_lowercase_like_str_and_unlike_as_str_upper():
+def test_mac_hex_is_lowercase_like_str_and_unlike_format_upper():
     mac = MACAddress("AA:BB:CC:DD:EE:FF")
     assert mac.hex(":") == "aa:bb:cc:dd:ee:ff"
-    assert mac.as_str(":", upper=True) == "AA:BB:CC:DD:EE:FF"
+    assert mac.format(":", upper=True) == "AA:BB:CC:DD:EE:FF"
 
 
 def test_socket_option_is_a_tuple_and_bind_takes_either_form():
