@@ -400,6 +400,14 @@ probe says so in its prefix.
   `.ip()` was `None` and the resolver was asked for it; a network is a
   `TypeError`.
 
+- **Copy and pickle of a `MACAddress`, `Host` or `FQDN` subclass return the
+  subclass** (they returned the base class), and the `parse`, `try_parse`,
+  `FQDN.decode` and `FQDN.decode_at` classmethods are typed to return the class
+  they were called on. The comparison methods of `MACAddress`, `FQDN.ping` and
+  `FQDN.__getitem__` are annotated (`bool`, `PingResult`, `str` or a tuple of
+  labels, where a checker saw `Any`), and the named networks are typed with their
+  concrete classes, not `IPv4Network | IPv6Network`.
+
 ## [0.3.4] - 2026-10-03
 
 ### Fixed

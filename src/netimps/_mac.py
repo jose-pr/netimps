@@ -12,7 +12,7 @@ Re-exported from :mod:`netimps`.
 from __future__ import annotations
 
 import re as _re
-from typing import Any, Optional, Tuple, TypeVar, Union, overload
+from typing import Any, Optional, Tuple, Type, TypeVar, Union, overload
 
 from ._exceptions import NetimpsValueError
 
@@ -24,6 +24,7 @@ __all__ = ["MACAddress", "MACAddressLike"]
 MACAddressLike = Union[str, int, bytes, bytearray, "MACAddress"]
 
 _D = TypeVar("_D")
+_M = TypeVar("_M", bound="MACAddress")
 
 #: The accepted textual MAC forms. Each separated form is spelled out on its own
 #: rather than as a shared ``[:.-]`` class, so one address cannot mix separators.
@@ -126,7 +127,7 @@ class MACAddress:
             return False
 
     @classmethod
-    def parse(cls, text: str) -> "MACAddress":
+    def parse(cls: "Type[_M]", text: str) -> "_M":
         """Build a ``MACAddress`` from text, in any spelling the class accepts.
 
         :raises NetimpsValueError: for text that is not a MAC address. It is a
@@ -142,11 +143,11 @@ class MACAddress:
 
     @overload
     @classmethod
-    def try_parse(cls, text: str) -> "Optional[MACAddress]": ...
+    def try_parse(cls: "Type[_M]", text: str) -> "Optional[_M]": ...
 
     @overload
     @classmethod
-    def try_parse(cls, text: str, default: _D) -> "Union[MACAddress, _D]": ...
+    def try_parse(cls: "Type[_M]", text: str, default: _D) -> "Union[_M, _D]": ...
 
     @classmethod
     def try_parse(cls, text: str, default: Any = None) -> Any:
@@ -278,7 +279,7 @@ class MACAddress:
         ``__slots__`` plus a blocked ``__setattr__`` defeats the default
         restore, which assigns the slot back onto a blank instance.
         """
-        return (MACAddress, (self._octets,))
+        return (type(self), (self._octets,))
 
     def __setattr__(self, name: str, value: object) -> None:
         raise AttributeError("MACAddress is immutable")
@@ -289,22 +290,22 @@ class MACAddress:
     def __int__(self) -> int:
         return int.from_bytes(self._octets, "big")
 
-    def __lt__(self, other: object):
+    def __lt__(self, other: object) -> bool:
         if isinstance(other, MACAddress):
             return self._octets < other._octets
         return NotImplemented
 
-    def __le__(self, other: object):
+    def __le__(self, other: object) -> bool:
         if isinstance(other, MACAddress):
             return self._octets <= other._octets
         return NotImplemented
 
-    def __gt__(self, other: object):
+    def __gt__(self, other: object) -> bool:
         if isinstance(other, MACAddress):
             return self._octets > other._octets
         return NotImplemented
 
-    def __ge__(self, other: object):
+    def __ge__(self, other: object) -> bool:
         if isinstance(other, MACAddress):
             return self._octets >= other._octets
         return NotImplemented

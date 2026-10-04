@@ -133,3 +133,56 @@ def test_enumerated_interfaces_are_read_only():
         assert isinstance(iface.ips, tuple)
         with pytest.raises(AttributeError):
             iface.mac = None  # type: ignore[misc]
+
+
+# --------------------------------------------------------------------------- #
+# A subclass comes back as itself                                              #
+# --------------------------------------------------------------------------- #
+
+
+class _SubMAC(MACAddress):
+    pass
+
+
+class _SubHost(Host):
+    pass
+
+
+class _SubFQDN(FQDN):
+    pass
+
+
+_SUBCLASSES = {
+    "MACAddress": lambda: _SubMAC("aa:bb:cc:dd:ee:ff"),
+    "Host": lambda: _SubHost("db.internal"),
+    "FQDN": lambda: _SubFQDN("www.example.com"),
+    "FQDN derived": lambda: _SubFQDN("1.2.3.4.sub").reverse(),
+}
+
+
+@pytest.mark.parametrize("kind", sorted(_SUBCLASSES))
+@pytest.mark.parametrize(
+    "roundtrip",
+    [
+        copy.copy,
+        copy.deepcopy,
+        lambda v: pickle.loads(pickle.dumps(v)),
+        lambda v: pickle.loads(pickle.dumps(v, protocol=0)),
+    ],
+    ids=["copy", "deepcopy", "pickle", "pickle0"],
+)
+def test_copy_and_pickle_keep_the_subclass(kind, roundtrip):
+    """`__reduce__` named the base class, so a subclass came back as its parent
+    and lost every method it added."""
+    value = _SUBCLASSES[kind]()
+    again = roundtrip(value)
+    assert type(again) is type(value)
+    assert again == value
+
+
+def test_an_fqdn_pickled_before_the_class_was_recorded_still_loads():
+    """The unpickle function keeps its two-argument form, so a pickle written
+    without the class loads as an `FQDN`."""
+    from netimps._fqdn import _rebuild_fqdn
+
+    assert _rebuild_fqdn(("a", "b"), True) == FQDN("a.b.")

@@ -92,7 +92,11 @@ The union aliases are **not callable** — `IPAddress("10.0.0.5")` is a
 **The value types are read-only.** `MACAddress`, `FQDN`, `Host`, `Interface`,
 `PingResult` and `Route` raise `AttributeError` on any assignment or deletion;
 build a new one instead. Each is hashable where equality is defined, and each
-copies (`copy.copy`, `copy.deepcopy`) and pickles.
+copies (`copy.copy`, `copy.deepcopy`) and pickles; a subclass of `MACAddress`,
+`FQDN` or `Host` comes back as itself, and its `parse`, `try_parse` (and, for
+`FQDN`, `decode` and `decode_at`) return the class they were called on, typed so
+too. The named networks `LOOPBACK_V4`, `LINK_LOCAL_V4` (`IPv4Network`) and
+`LOOPBACK_V6`, `LINK_LOCAL_V6` (`IPv6Network`) carry their concrete classes.
 
 ## Type aliases
 

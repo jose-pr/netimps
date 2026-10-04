@@ -65,6 +65,12 @@ from netimps import (
     get_interface,
     iter_interfaces,
     is_broadcast,
+    is_link_scoped,
+    is_multicast,
+    LINK_LOCAL_V4,
+    LINK_LOCAL_V6,
+    LOOPBACK_V4,
+    LOOPBACK_V6,
     is_local_address,
     is_valid,
     is_wildcard,
@@ -489,3 +495,50 @@ assert_type(Host("h").ip(cache=True), Optional[IPAddress])
 assert_type(Host("h").resolve(cache=5), Tuple[Optional[FQDN], Optional[IPAddress]])
 assert_type(FQDN("h.example").ip(cache=True), Optional[IPAddress])
 assert_type(clear_resolution_cache(), None)
+
+
+# Classifiers take `IPAddressLike`, and `unmap` too.
+assert_type(is_link_scoped("127.0.0.1"), bool)
+assert_type(is_link_scoped(2130706433), bool)
+assert_type(is_multicast(b"\xe0\x00\x00\xfb"), bool)
+assert_type(unmap(2130706433), IPAddress)
+
+# The comparison methods are bool, not Any; `FQDN.ping` and indexing are typed.
+assert_type(MACAddress("02:00:00:00:00:01") < MACAddress("02:00:00:00:00:02"), bool)
+assert_type(MACAddress("02:00:00:00:00:01") >= MACAddress("02:00:00:00:00:02"), bool)
+assert_type(FQDN("a.example") < FQDN("b.example"), bool)
+assert_type(FQDN("a.example").ping(), PingResult)
+assert_type(FQDN("a.example")[0], str)
+assert_type(FQDN("a.example")[0:1], Tuple[str, ...])
+
+# The named networks are the concrete classes.
+assert_type(LOOPBACK_V4, IPv4Network)
+assert_type(LINK_LOCAL_V4, IPv4Network)
+assert_type(LOOPBACK_V6, IPv6Network)
+assert_type(LINK_LOCAL_V6, IPv6Network)
+
+
+# A `parse` classmethod returns the class it was called on.
+class SubMAC(MACAddress):
+    pass
+
+
+class SubFQDN(FQDN):
+    pass
+
+
+class SubHost(Host):
+    pass
+
+
+assert_type(SubMAC.parse("02:00:00:00:00:01"), SubMAC)
+assert_type(SubMAC.try_parse("02:00:00:00:00:01"), Optional[SubMAC])
+assert_type(SubMAC.try_parse("nope", fallback), Union[SubMAC, Fallback])
+assert_type(SubFQDN.parse("example.com"), SubFQDN)
+assert_type(SubFQDN.try_parse("example.com"), Optional[SubFQDN])
+assert_type(SubFQDN.try_parse("nope..", fallback), Union[SubFQDN, Fallback])
+assert_type(SubFQDN.decode(b"\x01a\x00"), SubFQDN)
+assert_type(SubFQDN.decode_at(b"\x01a\x00", 0), Tuple[SubFQDN, int])
+assert_type(SubHost.parse("db.internal"), SubHost)
+assert_type(SubHost.try_parse("db.internal"), Optional[SubHost])
+assert_type(SubHost.try_parse("", fallback), Union[SubHost, Fallback])

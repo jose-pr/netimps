@@ -18,6 +18,7 @@ from typing import (
     List,
     Optional,
     Tuple,
+    Type,
     TypeVar,
     Union,
     overload,
@@ -41,6 +42,7 @@ from ipaddress import (
 )
 
 _D = TypeVar("_D")
+_H = TypeVar("_H", bound="Host")
 
 __all__ = [
     "Host",
@@ -539,16 +541,16 @@ def is_link_scoped(ip: "IPAddressLike") -> bool:
 
 #: RFC 3927 link-local ("Automatic Private IP Addressing") -- what a host gives
 #: itself when DHCP fails, so its presence usually means "no lease".
-LINK_LOCAL_V4 = _ipaddress.ip_network("169.254.0.0/16")
+LINK_LOCAL_V4 = IPv4Network("169.254.0.0/16")
 
 #: RFC 1122 loopback. Note this is the whole /8, not just 127.0.0.1.
-LOOPBACK_V4 = _ipaddress.ip_network("127.0.0.0/8")
+LOOPBACK_V4 = IPv4Network("127.0.0.0/8")
 
 #: The single IPv6 loopback address, as a network for symmetry.
-LOOPBACK_V6 = _ipaddress.ip_network("::1/128")
+LOOPBACK_V6 = IPv6Network("::1/128")
 
 #: RFC 4291 IPv6 link-local.
-LINK_LOCAL_V6 = _ipaddress.ip_network("fe80::/10")
+LINK_LOCAL_V6 = IPv6Network("fe80::/10")
 
 
 class Host:
@@ -592,7 +594,7 @@ class Host:
         ``__slots__`` plus a blocked ``__setattr__`` defeats the default
         restore, which assigns the slots back onto a blank instance.
         """
-        return (Host, (self.value,))
+        return (type(self), (self.value,))
 
     def __setattr__(self, name: str, value: object) -> None:
         raise AttributeError("Host is immutable")
@@ -601,7 +603,7 @@ class Host:
         raise AttributeError("Host is immutable")
 
     @classmethod
-    def parse(cls, text: str) -> "Host":
+    def parse(cls: "Type[_H]", text: str) -> "_H":
         """Build a ``Host`` from text naming an address or a hostname.
 
         A ``Host`` keeps what it was given, so no spelling is rejected for its
@@ -620,11 +622,11 @@ class Host:
 
     @overload
     @classmethod
-    def try_parse(cls, text: str) -> "Optional[Host]": ...
+    def try_parse(cls: "Type[_H]", text: str) -> "Optional[_H]": ...
 
     @overload
     @classmethod
-    def try_parse(cls, text: str, default: _D) -> "Union[Host, _D]": ...
+    def try_parse(cls: "Type[_H]", text: str, default: _D) -> "Union[_H, _D]": ...
 
     @classmethod
     def try_parse(cls, text: str, default: Any = None) -> Any:

@@ -61,12 +61,14 @@ from __future__ import annotations
 
 import sys as _sys
 from typing import (
+    TYPE_CHECKING,
     Any,
     Iterable,
     Iterator,
     List,
     Optional,
     Tuple,
+    Type,
     TypeVar,
     Union,
     overload,
@@ -100,7 +102,11 @@ _IDEOGRAPHIC_DOTS = {0x3002: ".", 0xFF0E: ".", 0xFF61: "."}
 #: a name, so `FQDN("http://example.com")` is refused rather than kept.
 _URI_DELIMITERS = frozenset(":/?#[]@")
 
+if TYPE_CHECKING:
+    from ._ping import PingResult
+
 _D = TypeVar("_D")
+_F = TypeVar("_F", bound="FQDN")
 
 
 def _idna_encode(label: str) -> str:
@@ -280,7 +286,7 @@ class FQDN:
             return False
 
     @classmethod
-    def parse(cls, text: str) -> "FQDN":
+    def parse(cls: "Type[_F]", text: str) -> "_F":
         """Build an :class:`FQDN` from dotted text.
 
         :raises NetimpsValueError: for text that is not a domain name: an
@@ -295,11 +301,11 @@ class FQDN:
 
     @overload
     @classmethod
-    def try_parse(cls, text: str) -> "Optional[FQDN]": ...
+    def try_parse(cls: "Type[_F]", text: str) -> "Optional[_F]": ...
 
     @overload
     @classmethod
-    def try_parse(cls, text: str, default: _D) -> "Union[FQDN, _D]": ...
+    def try_parse(cls: "Type[_F]", text: str, default: _D) -> "Union[_F, _D]": ...
 
     @classmethod
     def try_parse(cls, text: str, default: Any = None) -> Any:
@@ -564,7 +570,7 @@ class FQDN:
             ),
         )
 
-    def ping(self, **kwargs: "Any") -> "Any":
+    def ping(self, **kwargs: "Any") -> "PingResult":
         """Ping this name. Straight through to :func:`netimps.ping`."""
         from ._ping import ping
 
@@ -721,7 +727,7 @@ class FQDN:
         return self.encode()
 
     @classmethod
-    def decode(cls, data: "Union[bytes, bytearray, memoryview]") -> "FQDN":
+    def decode(cls: "Type[_F]", data: "Union[bytes, bytearray, memoryview]") -> "_F":
         """The name in a buffer that holds exactly one, in wire form.
 
         :raises DNSDecodeError: for a malformed name, a compression loop, or
@@ -735,8 +741,8 @@ class FQDN:
 
     @classmethod
     def decode_at(
-        cls, data: "Union[bytes, bytearray, memoryview]", offset: int
-    ) -> "Tuple[FQDN, int]":
+        cls: "Type[_F]", data: "Union[bytes, bytearray, memoryview]", offset: int
+    ) -> "Tuple[_F, int]":
         """The name starting at ``offset`` in a DNS message, and where it ends.
 
         Follows compression pointers, with loop detection. The returned offset
@@ -780,7 +786,9 @@ class FQDN:
     # -- plumbing ----------------------------------------------------------
 
     @classmethod
-    def _from_labels(cls, labels: "Tuple[str, ...]", absolute: bool) -> "FQDN":
+    def _from_labels(
+        cls: "Type[_F]", labels: "Tuple[str, ...]", absolute: bool
+    ) -> "_F":
         """Build without re-validating: the labels came from a valid name.
 
         Bypasses ``__init__`` deliberately. Every caller is slicing,
@@ -814,7 +822,7 @@ class FQDN:
         name such as ``FQDN("1.2.3.4.sub").reverse()``, so the same
         validation-free path the algebra uses is the right one here.
         """
-        return (_rebuild_fqdn, (self._labels, self._absolute))
+        return (_rebuild_fqdn, (self._labels, self._absolute, type(self)))
 
     def __setattr__(self, name: str, value: object) -> None:
         raise AttributeError("FQDN is immutable")
@@ -912,7 +920,13 @@ class FQDN:
             return False
         return candidate._key()[-len(self._labels) :] == self._key()
 
-    def __getitem__(self, index: "Any") -> "Any":
+    @overload
+    def __getitem__(self, index: int) -> str: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> "Tuple[str, ...]": ...
+
+    def __getitem__(self, index: "Union[int, slice]") -> "Union[str, Tuple[str, ...]]":
         """Index or slice the labels, leftmost first.
 
         A slice returns a plain tuple of labels rather than an ``FQDN``,
@@ -978,6 +992,9 @@ class FQDN:
         return self._order_key() >= other._order_key()
 
 
-def _rebuild_fqdn(labels: "Tuple[str, ...]", absolute: bool) -> "FQDN":
-    """Unpickle an :class:`FQDN`. Module-level so pickle can find it by name."""
-    return FQDN._from_labels(labels, absolute)
+def _rebuild_fqdn(
+    labels: "Tuple[str, ...]", absolute: bool, cls: "Optional[Type[FQDN]]" = None
+) -> "FQDN":
+    """Unpickle an :class:`FQDN`, as ``cls`` when it is given. Module-level so
+    pickle can find it by name."""
+    return (cls or FQDN)._from_labels(labels, absolute)
