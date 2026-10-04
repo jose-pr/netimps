@@ -273,6 +273,15 @@ probe says so in its prefix.
 
 ### Fixed
 
+- **`scan_hosts` bounds the work, not one factor of it, and does not build it
+  up front.** The guard counted hosts only and every host-port pair was built
+  and queued before the first probe: a /22 with the common ports peaked at
+  63 MiB (about 1.7 kB a pair), and a /16 over all ports was 4.3 billion
+  tuples. A sweep of more than 4,194,304 probes now raises `ValueError` before
+  any probe (a /16 with the common ports is still allowed), and `scan_hosts`
+  and `scan_ports` feed their pool as they run: a /22 with the common ports
+  peaks near 0.1 MiB.
+
 - **A destination of `None` raises `TypeError`.** `tcp_check(None, 80)`,
   `get_source_ip(None)` and every other `dst` parameter asked the resolver for
   the host named `"None"` and answered `False` or `None`; `dst` takes the same

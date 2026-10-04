@@ -20,9 +20,24 @@ Use it on hosts you are responsible for.
 
 from __future__ import annotations
 
+import itertools as _itertools
 import socket as _socket
+from concurrent.futures import FIRST_COMPLETED as _FIRST_COMPLETED
 from concurrent.futures import ThreadPoolExecutor as _ThreadPool
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
+from concurrent.futures import wait as _wait
+from typing import (
+    Callable,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+    TypeVar,
+    Union,
+    cast as _cast,
+)
 
 from ._ip import HostLike, IPAddress, IPNetwork, IPNetworkLike, _dst_argument
 from ._parse import parse, try_parse
@@ -87,6 +102,38 @@ PORT_RANGES = {
 #: threads sit in connect() -- so the useful ceiling is far above the CPU count.
 #: Above ~200 the OS starts refusing sockets on some platforms.
 _DEFAULT_WORKERS = 100
+
+
+#: The most host-port probes one :func:`scan_hosts` call will make. A /16 with
+#: the ``"common"`` ports (2.36 million) fits; a /16 with ``"well-known"`` (67
+#: million) or ``"all"`` (4.3 billion) is a mistake rather than an intention.
+_MAX_PROBES = 1 << 22
+
+_T = TypeVar("_T")
+_R = TypeVar("_R")
+
+
+def _map_lazily(
+    function: "Callable[[_T], _R]", items: "Iterable[_T]", workers: int
+) -> "Iterator[_R]":
+    """``function`` over ``items`` on a pool, with a bounded amount in flight.
+
+    ``ThreadPoolExecutor.map`` submits every item before it returns the first
+    result, so memory grows with the whole sweep: about 1.7 kB for each queued
+    probe. Here only a window of ``2 * workers`` futures exists at a time and
+    ``items`` is read as it is consumed. Results come back in completion order.
+    """
+    window = max(2, 2 * workers)
+    with _ThreadPool(max_workers=workers) as pool:
+        pending: set = set()
+        for item in items:
+            pending.add(pool.submit(function, item))
+            if len(pending) >= window:
+                done, pending = _wait(pending, return_when=_FIRST_COMPLETED)
+                for future in done:
+                    yield future.result()
+        for future in pending:
+            yield future.result()
 
 
 def _checked_timeout(timeout: float) -> float:
@@ -269,10 +316,12 @@ def scan_ports(
     if not addresses:
         return []
 
-    with _ThreadPool(max_workers=min(workers, len(targets))) as pool:
-        results = pool.map(lambda p: (p, _probe(addresses, p, timeout)), targets)
-        open_ports = [port for port, is_open in results if is_open]
-    return sorted(open_ports)
+    results = _map_lazily(
+        lambda p: (p, _probe(addresses, p, timeout)),
+        targets,
+        min(workers, len(targets)),
+    )
+    return sorted(port for port, is_open in results if is_open)
 
 
 def scan_hosts(
@@ -316,8 +365,11 @@ def scan_hosts(
        is indistinguishable from an absent one. Widen ``ports`` if you need
        better coverage.
 
-    Refuses networks larger than /16 (or IPv6 /112): a /8 sweep is 16 million
-    hosts, which is a mistake rather than an intention.
+    Refuses networks larger than /16 (or IPv6 /112), and any sweep of more than
+    4,194,304 probes (hosts times ports): a /8 sweep is 16 million hosts, and a
+    /16 over every port 4.3 billion probes, which is a mistake rather than an
+    intention. Both raise :class:`ValueError` before the first probe. The work is
+    fed to the pool as it runs, so memory does not grow with the sweep.
     """
 
     net = parse(network, IPNetwork)
@@ -343,22 +395,35 @@ def scan_hosts(
         return []
     timeout = _checked_timeout(timeout)
 
+    probes = net.num_addresses * len(targets)
+    if probes > _MAX_PROBES:
+        raise ValueError(
+            "%s with %d ports is %d probes; the most one call makes is %d"
+            % (net, len(targets), probes, _MAX_PROBES)
+        )
+
     # A /31 or /32 has no separate network/broadcast address, and .hosts()
     # already accounts for that.
-    addresses = list(net.hosts()) or [net.network_address]
-    work = [(address, probe) for address in addresses for probe in targets]
+    hosts = _cast("Iterator[IPAddress]", iter(net.hosts()))
+    first = next(hosts, None)
+    addresses: "Iterator[IPAddress]" = (
+        iter([net.network_address])
+        if first is None
+        else _itertools.chain([first], hosts)
+    )
+    work = ((address, probe) for address in addresses for probe in targets)
 
     found: "Dict[IPAddress, List[int]]" = {}
-    with _ThreadPool(max_workers=min(workers, len(work))) as pool:
-        results = pool.map(
-            # Every address here is already a literal from the network, so the
-            # workers never consult the resolver -- same property scan_ports
-            # gets from _probe_addresses.
-            lambda item: (item[0], item[1], _probe([str(item[0])], item[1], timeout)),
-            work,
-        )
-        for address, probe, is_open in results:
-            if is_open:
-                found.setdefault(address, []).append(probe)
+    results = _map_lazily(
+        # Every address here is already a literal from the network, so the
+        # workers never consult the resolver -- same property scan_ports
+        # gets from _probe_addresses.
+        lambda item: (item[0], item[1], _probe([str(item[0])], item[1], timeout)),
+        work,
+        min(workers, probes),
+    )
+    for address, probe, is_open in results:
+        if is_open:
+            found.setdefault(address, []).append(probe)
 
     return [(address, sorted(found[address])) for address in sorted(found)]

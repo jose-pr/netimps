@@ -1294,9 +1294,14 @@ accepts a scheme name too; passing both raises `ValueError`.
   correctness fix, not only a speed one: a rate-limited resolver turned open
   ports into "closed". A name that does not resolve returns `[]` after a single
   lookup; a name with several addresses is still probed on each.
-- **`scan_hosts` refuses anything larger than /16** (IPv6 /112): a /8 sweep is
-  16M addresses, a mistake rather than an intention. Only usable host addresses
-  are probed — network and broadcast addresses are skipped.
+- **`scan_hosts` refuses anything larger than /16** (IPv6 /112) **and any sweep
+  of more than 4,194,304 probes** (hosts × ports): a /8 sweep is 16M addresses
+  and a /16 over `"all"` ports 4.3 billion probes, a mistake rather than an
+  intention. Both raise `ValueError` before the first probe; a /16 with the
+  `"common"` ports (2.36M) is within the bound. The pool is fed as it runs, so
+  memory does not grow with the sweep (a /22 with `"common"` peaks near 0.1 MiB).
+  Only usable host addresses are probed — network and broadcast addresses are
+  skipped.
 - A **TCP** sweep, so a host answering on none of the probed ports does not
   appear — it is not ARP/ICMP discovery, and a firewalled host is
   indistinguishable from an absent one.

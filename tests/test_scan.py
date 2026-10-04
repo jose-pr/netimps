@@ -948,3 +948,85 @@ def test_is_multicast_does_not_depend_on_the_interpreter_version():
     mapped = ipaddress.IPv6Address("::ffff:224.0.0.1")
     assert is_multicast(mapped) is True
     assert is_multicast(mapped) == is_multicast("224.0.0.1")
+
+
+# --------------------------------------------------------------------------- #
+# scan_hosts bounds its work, and holds only a window of it                    #
+# --------------------------------------------------------------------------- #
+
+
+def test_scan_hosts_memory_does_not_grow_with_the_work(monkeypatch):
+    """Every host-port pair used to be built, queued and kept before the first probe.
+
+    A /22 with the common ports (36,792 pairs) peaked at 63 MiB, about 1.7 kB
+    a pair.
+    """
+    import tracemalloc
+
+    from netimps import _scan
+
+    calls = []
+    monkeypatch.setattr(
+        _scan, "_probe", lambda addresses, port, timeout: calls.append(1)
+    )
+    tracemalloc.start()
+    try:
+        assert netimps.scan_hosts("10.0.0.0/22", timeout=0.05, workers=20) == []
+        _current, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert len(calls) == 1022 * len(netimps.PORT_RANGES["common"])
+    assert peak < 8 * 1024 * 1024, peak
+
+
+def test_scan_hosts_bounds_hosts_times_ports_before_any_probe(monkeypatch):
+    from netimps import _scan
+
+    calls = []
+    monkeypatch.setattr(_scan, "_probe", lambda *a: calls.append(a))
+    for ports in ("all", "well-known"):
+        with pytest.raises(ValueError, match="probes"):
+            netimps.scan_hosts("10.0.0.0/16", ports=ports)
+    with pytest.raises(ValueError, match="probes"):
+        netimps.scan_hosts("10.0.0.0/20", ports=range(1, 65536))
+    assert calls == []
+
+
+def test_scan_hosts_bound_still_admits_a_sixteen_with_the_common_ports():
+    from netimps import _scan
+
+    assert 65536 * len(netimps.PORT_RANGES["common"]) <= _scan._MAX_PROBES
+    assert 65536 * len(netimps.PORT_RANGES["well-known"]) > _scan._MAX_PROBES
+
+
+def test_scan_hosts_keeps_the_results_of_a_lazily_fed_pool(monkeypatch):
+    """A window of work in flight still reports every open port, in order."""
+    from netimps import _scan
+
+    def probe(addresses, port, timeout):
+        return port == 80 and addresses[0].endswith((".3", ".7"))
+
+    monkeypatch.setattr(_scan, "_probe", probe)
+    found = netimps.scan_hosts("10.0.0.0/28", ports=[22, 80], workers=3)
+    assert [(str(a), p) for a, p in found] == [
+        ("10.0.0.3", [80]),
+        ("10.0.0.7", [80]),
+    ]
+
+
+def test_scan_ports_all_ports_is_fed_lazily(monkeypatch):
+    import tracemalloc
+
+    from netimps import _scan
+
+    monkeypatch.setattr(
+        _scan, "_probe", lambda addresses, port, timeout: port % 10000 == 0
+    )
+    tracemalloc.start()
+    try:
+        found = netimps.scan_ports("127.0.0.1", "all", timeout=0.05, workers=20)
+        _current, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert found == [10000, 20000, 30000, 40000, 50000, 60000]
+    assert peak < 8 * 1024 * 1024, peak
