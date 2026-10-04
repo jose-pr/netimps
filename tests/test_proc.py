@@ -171,7 +171,7 @@ def test_ping_finds_and_runs_a_fake_ping_with_the_argv_it_built(fake_program):
         "ping", stdout="Reply from 127.0.0.1: bytes=32 time=1ms TTL=128\n"
     )
     result = netimps.ping("127.0.0.1", timeout=1.0)
-    argv, _ = _ping._ping_command(
+    argv, _ = _ping._command._ping_command(
         "127.0.0.1", None, 1.0, None, None, None, False, [netimps.parse("127.0.0.1")]
     )
     assert bool(result) is True and result.ttl == 128

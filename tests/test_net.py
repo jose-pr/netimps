@@ -1210,7 +1210,7 @@ def test_ping_accepts_ipv6_interface_object(monkeypatch, fake_program):
 
 def test_ping_unusable_src_is_falsy_not_a_crash(monkeypatch):
     """A src with no usable address must yield a falsy result, not NameError."""
-    monkeypatch.setattr(netimps._ping, "_interface_address", lambda *a, **k: None)
+    monkeypatch.setattr(netimps._ping._run, "_interface_address", lambda *a, **k: None)
     result = ping("8.8.8.8", src="nonexistent-adapter")
     assert bool(result) is False
     assert result.dst == "8.8.8.8"
@@ -1384,7 +1384,7 @@ def _capture_ping(fake_program, monkeypatch, returncode=0, stdout=_REPLY_LINE):
 
     # The reply-address expectation is resolved with getaddrinfo (gethostbyname
     # is IPv4-only); blocking it keeps these option tests off the network.
-    monkeypatch.setattr(netimps._ping._socket, "getaddrinfo", no_dns)
+    monkeypatch.setattr(netimps._ping._probe._socket, "getaddrinfo", no_dns)
     return fake
 
 
@@ -1393,7 +1393,7 @@ def test_ping_timeout_never_rounds_down_to_zero(fake_program, monkeypatch):
     fake = _capture_ping(fake_program, monkeypatch)
     netimps.ping("host", timeout=0.2)
     cmd = fake.calls[0]
-    flag = "-w" if _ping._os.name == "nt" else "-W"
+    flag = "-w" if _ping._command._os.name == "nt" else "-W"
     value = int(cmd[cmd.index(flag) + 1])
     assert value >= 1
 
@@ -1449,7 +1449,7 @@ def _fake_ping_getaddrinfo(records):
         wanted = [
             (fam, addr)
             for fam, addr in records
-            if family in (netimps._ping._socket.AF_UNSPEC, fam)
+            if family in (netimps._ping._probe._socket.AF_UNSPEC, fam)
         ]
         if not wanted:
             raise OSError("no records for family %r" % (family,))
@@ -1459,7 +1459,11 @@ def _fake_ping_getaddrinfo(records):
                 type,
                 0,
                 "",
-                (addr, 0) if fam == netimps._ping._socket.AF_INET else (addr, 0, 0, 0),
+                (
+                    (addr, 0)
+                    if fam == netimps._ping._probe._socket.AF_INET
+                    else (addr, 0, 0, 0)
+                ),
             )
             for fam, addr in wanted
         ]
@@ -1475,12 +1479,12 @@ def test_ping_ipv6_hostname_verifies_against_the_v6_reply(monkeypatch, fake_prog
     never matched, `answered` stayed False, and a healthy ping was reported
     falsy on every platform.
     """
-    v6 = netimps._ping._socket.AF_INET6
-    v4 = netimps._ping._socket.AF_INET
+    v6 = netimps._ping._probe._socket.AF_INET6
+    v4 = netimps._ping._probe._socket.AF_INET
     resolver, _calls = _fake_ping_getaddrinfo(
         [(v4, "93.184.216.34"), (v6, "2606:2800::1")]
     )
-    monkeypatch.setattr(netimps._ping._socket, "getaddrinfo", resolver)
+    monkeypatch.setattr(netimps._ping._probe._socket, "getaddrinfo", resolver)
     _fake_ping(
         fake_program,
         stdout=b"64 bytes from 2606:2800::1: icmp_seq=1 ttl=54 time=8.1 ms\n",
@@ -1494,14 +1498,14 @@ def test_ping_ipv6_hostname_verifies_against_the_v6_reply(monkeypatch, fake_prog
 
 def test_ping_expectation_family_follows_the_ipv6_flag(monkeypatch, fake_program):
     """AF_INET6 / AF_INET / AF_UNSPEC, matching ipv6=True / False / None."""
-    v4 = netimps._ping._socket.AF_INET
+    v4 = netimps._ping._probe._socket.AF_INET
     resolver, calls = _fake_ping_getaddrinfo([(v4, "93.184.216.34")])
-    monkeypatch.setattr(netimps._ping._socket, "getaddrinfo", resolver)
+    monkeypatch.setattr(netimps._ping._probe._socket, "getaddrinfo", resolver)
     _fake_ping(fake_program, stdout=b"", returncode=1)
     for flag, expected_family in (
-        (True, netimps._ping._socket.AF_INET6),
+        (True, netimps._ping._probe._socket.AF_INET6),
         (False, v4),
-        (None, netimps._ping._socket.AF_UNSPEC),
+        (None, netimps._ping._probe._socket.AF_UNSPEC),
     ):
         calls.clear()
         ping("example.com", ipv6=flag)
@@ -1512,9 +1516,9 @@ def test_ping_hostname_with_several_addresses_accepts_any_of_them(
     monkeypatch, fake_program
 ):
     """A round-robin name answers from whichever address the binary picked."""
-    v4 = netimps._ping._socket.AF_INET
+    v4 = netimps._ping._probe._socket.AF_INET
     resolver, _calls = _fake_ping_getaddrinfo([(v4, "1.2.3.4"), (v4, "5.6.7.8")])
-    monkeypatch.setattr(netimps._ping._socket, "getaddrinfo", resolver)
+    monkeypatch.setattr(netimps._ping._probe._socket, "getaddrinfo", resolver)
     _fake_ping(fake_program, stdout=b"Reply from 5.6.7.8: bytes=32 time=1ms TTL=128\n")
     result = ping("example.com")
     assert bool(result) is True
@@ -1535,7 +1539,7 @@ def test_ping_unresolvable_hostname_needs_evidence_of_an_actual_reply(
     def no_dns(*args, **kwargs):
         raise OSError("DNS disabled in tests")
 
-    monkeypatch.setattr(netimps._ping._socket, "getaddrinfo", no_dns)
+    monkeypatch.setattr(netimps._ping._probe._socket, "getaddrinfo", no_dns)
 
     def exits_zero_saying(text):
         _fake_ping(fake_program, stdout=text)
@@ -1658,7 +1662,7 @@ def test_ping_size_is_the_payload_not_the_wire_packet(monkeypatch, fake_program)
     fake = _fake_ping(fake_program, stdout=_REPLY, returncode=0)
     ping("127.0.0.1", size=1472)
     cmd = fake.calls[0]
-    flag = "-l" if netimps._ping._os.name == "nt" else "-s"
+    flag = "-l" if netimps._ping._command._os.name == "nt" else "-s"
     assert flag in cmd
     # Passed straight through -- no header arithmetic applied here.
     assert cmd[cmd.index(flag) + 1] == "1472"
@@ -1693,7 +1697,7 @@ def test_ping_size_is_the_payload_not_the_wire_packet(monkeypatch, fake_program)
 def _argv_for(fake_program, monkeypatch, platform, dst="127.0.0.1", **kwargs):
     """Return the argv netimps would emit for `dst` on `platform`."""
     fake = _capture_ping(fake_program, monkeypatch)
-    monkeypatch.setattr(netimps._ping, "_PLATFORM", platform)
+    monkeypatch.setattr(netimps._ping._command, "_PLATFORM", platform)
     netimps.ping(dst, **kwargs)
     return fake.calls[-1]
 
@@ -1809,7 +1813,7 @@ def test_ping_refuses_dont_fragment_where_it_cannot_be_set(monkeypatch):
     replies, every size "survives", and discover_mtu returns its own ceiling.
     Returning None is honest; returning 9000 is not.
     """
-    monkeypatch.setattr(netimps._ping, "_PLATFORM", "bsd")
+    monkeypatch.setattr(netimps._ping._command, "_PLATFORM", "bsd")
     with pytest.raises(ValueError, match="dont_fragment"):
         netimps.ping("::1", ipv6=True, dont_fragment=True)
     # The v4 binary on the same platform does have -D, so it is accepted.
@@ -1819,14 +1823,18 @@ def test_ping_refuses_dont_fragment_where_it_cannot_be_set(monkeypatch):
 def test_reply_needle_matches_bsd_comma_and_hlim():
     """The captured BSD ping6 reply line, verbatim from a macOS runner."""
     line = "16 bytes from ::1, icmp_seq=0 hlim=64 time=0.520 ms"
-    rtt, ttl, src = netimps._ping._parse_ping_output(line, [netimps.parse("::1")])
+    rtt, ttl, src = netimps._ping._output._parse_ping_output(
+        line, [netimps.parse("::1")]
+    )
     assert (rtt, ttl, str(src)) == (pytest.approx(0.00052), 64, "::1")
 
 
 def test_reply_needle_does_not_match_an_address_inside_a_longer_one():
     """`::1` must not be found inside `2001:db8::1` -- the point is WHO replied."""
     line = "16 bytes from 2001:db8::1, icmp_seq=0 hlim=64 time=1.0 ms"
-    _rtt, _ttl, src = netimps._ping._parse_ping_output(line, [netimps.parse("::1")])
+    _rtt, _ttl, src = netimps._ping._output._parse_ping_output(
+        line, [netimps.parse("::1")]
+    )
     assert src is None
 
 
@@ -1838,7 +1846,7 @@ def test_sub_millisecond_reply_is_recorded_as_zero():
     contract has always said 0.0.
     """
     line = "Reply from 127.0.0.1: bytes=32 time<1ms TTL=128"
-    rtt, ttl, _src = netimps._ping._parse_ping_output(
+    rtt, ttl, _src = netimps._ping._output._parse_ping_output(
         line, [netimps.parse("127.0.0.1")]
     )
     assert rtt == 0.0 and ttl == 128

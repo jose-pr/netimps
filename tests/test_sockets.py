@@ -320,7 +320,7 @@ def test_hop_count_unresolvable_is_none(monkeypatch):
     def fail(*a, **k):
         raise OSError("no such host")
 
-    monkeypatch.setattr(netimps._ping._socket, "getaddrinfo", fail)
+    monkeypatch.setattr(netimps._ping._probe._socket, "getaddrinfo", fail)
     assert netimps.count_hops("nope.invalid") is None
 
 
@@ -333,7 +333,7 @@ def test_hop_count_accepts_interface_object(monkeypatch):
         seen.append(host)
         return real(host, port, family, kind, *a, **k)
 
-    monkeypatch.setattr(netimps._ping._socket, "getaddrinfo", recording)
+    monkeypatch.setattr(netimps._ping._probe._socket, "getaddrinfo", recording)
     monkeypatch.setattr(_hops._socket, "socket", _no_raw)
     monkeypatch.setattr(
         _hops, "_hop_count_traceroute", lambda target, hops, timeout, ipv6=False: 1
@@ -754,7 +754,7 @@ def test_tcp_check_and_ping_tcp_ask_different_questions():
     platforms that surface the RST as ConnectionRefusedError they disagree
     here, which is the whole reason both exist.
     """
-    from netimps._ping import _tcp_ping
+    from netimps._ping._probe import _tcp_ping
 
     port = netimps.get_free_port()
     assert netimps.tcp_check("127.0.0.1", port, timeout=1.0) is False
@@ -805,7 +805,7 @@ def test_ping_tcp_probe_family_follows_the_destination(monkeypatch, v6_loopback)
         families.append(family)
         return real_socket(family, *args, **kwargs)
 
-    monkeypatch.setattr(netimps._ping._socket, "socket", recording)
+    monkeypatch.setattr(netimps._ping._probe._socket, "socket", recording)
     netimps.ping("::1", method="tcp", port=v6_loopback, timeout=2.0)
     assert families == [socket.AF_INET6]
 
@@ -818,7 +818,7 @@ def test_ping_tcp_honours_ipv6_flag_for_a_hostname(monkeypatch):
         seen["family"] = family
         raise OSError("resolution blocked in tests")
 
-    monkeypatch.setattr(netimps._ping._socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(netimps._ping._probe._socket, "getaddrinfo", fake_getaddrinfo)
     netimps.ping("host.invalid", method="tcp", port=80, ipv6=True)
     assert seen["family"] == socket.AF_INET6
     netimps.ping("host.invalid", method="tcp", port=80, ipv6=False)
@@ -836,7 +836,7 @@ def test_udp_ping_connects_before_sending(monkeypatch):
     out, making `method="udp"` under-report on Linux/macOS while looking
     correct on Windows.
     """
-    from netimps._ping import _udp_ping
+    from netimps._ping._probe import _udp_ping
 
     order = []
 
@@ -861,7 +861,9 @@ def test_udp_ping_connects_before_sending(monkeypatch):
         def close(self):
             pass
 
-    monkeypatch.setattr(netimps._ping._socket, "socket", lambda *a, **k: Recording())
+    monkeypatch.setattr(
+        netimps._ping._probe._socket, "socket", lambda *a, **k: Recording()
+    )
     ok, rtt, note = _udp_ping("127.0.0.1", 9, 1.0)
     assert order == ["connect", "send", "recv"]
     assert ok and note == "port-unreachable"
@@ -869,7 +871,7 @@ def test_udp_ping_connects_before_sending(monkeypatch):
 
 def test_udp_ping_treats_connection_reset_as_liveness_too(monkeypatch):
     """Windows spells the same ICMP error ECONNRESET; both must count."""
-    from netimps._ping import _udp_ping
+    from netimps._ping._probe import _udp_ping
 
     class Resetting:
         def settimeout(self, timeout):
@@ -887,7 +889,9 @@ def test_udp_ping_treats_connection_reset_as_liveness_too(monkeypatch):
         def close(self):
             pass
 
-    monkeypatch.setattr(netimps._ping._socket, "socket", lambda *a, **k: Resetting())
+    monkeypatch.setattr(
+        netimps._ping._probe._socket, "socket", lambda *a, **k: Resetting()
+    )
     ok, _rtt, note = _udp_ping("127.0.0.1", 9, 1.0)
     assert ok and note == "port-unreachable"
 
@@ -1143,7 +1147,7 @@ def test_get_source_ip_family_follows_the_resolver(monkeypatch):
 
     monkeypatch.setattr(_connect._socket, "socket", recording)
     monkeypatch.setattr(
-        netimps._ping._socket,
+        netimps._ping._probe._socket,
         "getaddrinfo",
         lambda *a, **k: [
             (socket.AF_INET6, socket.SOCK_DGRAM, 17, "", ("::1", 80, 0, 0))
@@ -1161,7 +1165,7 @@ def test_get_source_ip_honours_an_explicit_ipv6_flag(monkeypatch):
         seen["family"] = family
         return []
 
-    monkeypatch.setattr(netimps._ping._socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(netimps._ping._probe._socket, "getaddrinfo", fake_getaddrinfo)
     assert get_source_ip("host.invalid", ipv6=True) is None
     assert seen["family"] == socket.AF_INET6
     assert get_source_ip("host.invalid", ipv6=False) is None
@@ -1405,7 +1409,7 @@ def test_discover_mtu_udp_probe_family_follows_the_destination(monkeypatch):
 
 def test_discover_mtu_icmp_declines_when_df_is_unavailable(monkeypatch):
     """BSD's ping6 has no DF flag, so the honest answer is None, not a number."""
-    monkeypatch.setattr(netimps._ping, "supports_dont_fragment", lambda *a, **k: False)
+    monkeypatch.setattr(_mtu, "supports_dont_fragment", lambda *a, **k: False)
     monkeypatch.setattr(
         netimps, "ping", lambda *a, **k: pytest.fail("must not probe without DF")
     )

@@ -16,7 +16,7 @@ from .._ifaddrs import (
 )
 from .._ip import HostLike, IPAddress, _dst_argument
 from .._parse import try_parse
-from .._ping import ping
+from .._ping import ping, supports_dont_fragment
 from .._scheme import coerce_port as _coerce_port
 from ._connect import _resolve_targets, get_source_ip
 from ._nexthop import _ROUTE_TIMEOUT_SECONDS
@@ -199,8 +199,6 @@ def discover_mtu(
         return _discover_mtu_udp(
             address, port, low, high, timeout, wants_six, src=src, sockaddr=sockaddr
         )
-
-    from .._ping import supports_dont_fragment
 
     if not supports_dont_fragment(address, wants_six):
         # The binary search is only meaningful when the probe cannot be

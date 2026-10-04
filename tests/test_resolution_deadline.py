@@ -192,7 +192,7 @@ def test_ping_bounds_its_own_name_lookup_by_timeout(monkeypatch):
         time.sleep(2.0)
         return real("127.0.0.1", *args[1:], **kwargs)
 
-    monkeypatch.setattr(_ping._socket, "getaddrinfo", slow)
+    monkeypatch.setattr(_ping._probe._socket, "getaddrinfo", slow)
     started = time.perf_counter()
     result = netimps.ping("localhost", method="tcp", port=_closed_port(), timeout=0.5)
     assert time.perf_counter() - started < 1.0
@@ -207,7 +207,7 @@ def test_the_icmp_lookup_is_bounded_too(monkeypatch, fake_program):
         time.sleep(6.0)
         return real("127.0.0.1", *args[1:], **kwargs)
 
-    monkeypatch.setattr(_ping._socket, "getaddrinfo", slow)
+    monkeypatch.setattr(_ping._probe._socket, "getaddrinfo", slow)
     started = time.perf_counter()
     netimps.ping("localhost", timeout=0.5)
     # The lookup's 0.5 s, plus a fake program's start: well short of the 6 s
@@ -240,9 +240,9 @@ def test_the_family_of_src_follows_the_destination(
         asked.append(want_ipv6)
         return None  # no usable address: ping returns before it spawns anything
 
-    monkeypatch.setattr(_ping, "_interface_address", fake_source)
+    monkeypatch.setattr(_ping._run, "_interface_address", fake_source)
     monkeypatch.setattr(
-        _ping._socket,
+        _ping._probe._socket,
         "getaddrinfo",
         lambda host, *a, **k: [
             (

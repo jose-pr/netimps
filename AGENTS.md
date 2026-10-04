@@ -100,7 +100,12 @@ src/netimps/
 │   ├── _cache.py     # the cache= answer cache
 │   ├── _chain.py     # resolve: the backend chain, deadline and cache
 │   └── _lookup.py    # lookup_ip, lookup_fqdn: the Host and FQDN adapters
-├── _ping.py       # private: ping() over the platform binary
+├── _ping/         # private package: ping() over the platform binary
+│   ├── _result.py    # PingResult
+│   ├── _command.py   # the argv per platform grammar, supports_dont_fragment
+│   ├── _output.py    # reading RTT, TTL and the replying address
+│   ├── _probe.py     # name resolution, the TCP and UDP probes
+│   └── _run.py       # ping
 ├── _proc.py       # private: the one runner every platform binary goes through
 ├── _retry.py      # private: bounded retry with exponential backoff
 ├── _pktinfo.py    # private: pktinfo constants, per-platform layouts, decoding (imports neither _udp nor _msg)
@@ -216,7 +221,7 @@ map:
   either: WSL2 binds a routable `10.255.255.254/32` to `lo`, so the address
   heuristic finds **no** loopback interface at all there, and a test that
   looks for one silently takes its skip branch.
-- **`_ping._PLATFORM` is a three-way split** — `windows` / `linux` / `bsd` —
+- **`_ping._command._PLATFORM` is a three-way split** — `windows` / `linux` / `bsd` —
   not `os.name == "nt"`. Of the six flags the module emits, *five* mean
   something different or nothing at all on BSD: `-W` is milliseconds rather
   than seconds, `-t` is an overall deadline rather than the TTL (`-m` is the
