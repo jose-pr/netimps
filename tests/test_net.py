@@ -1304,18 +1304,18 @@ def test_ping_failure_exhausts_tries(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# get_ip / is_link_scoped / get_default_port                        #
+# Host.ip / is_link_scoped / get_default_port                      #
 # --------------------------------------------------------------------------- #
 
 
-def test_get_ip_parses_literals_without_dns(monkeypatch):
+def test_host_ip_parses_literals_without_dns(monkeypatch):
     """A literal must never trigger a lookup."""
 
-    def explode(_):
-        raise AssertionError("gethostbyname must not be called for a literal")
+    def explode(*args, **kwargs):
+        raise AssertionError("a literal must not trigger DNS")
 
-    monkeypatch.setattr(netimps._ip._socket, "gethostbyname", explode)
-    assert netimps.get_ip("10.0.0.5") == IPv4Address("10.0.0.5")
+    monkeypatch.setattr(netimps._ip._socket, "getaddrinfo", explode)
+    assert netimps.Host("10.0.0.5").ip() == IPv4Address("10.0.0.5")
 
 
 def _stub_name_resolution(monkeypatch, module, address, family=socket.AF_INET):
@@ -1336,12 +1336,12 @@ def _stub_name_resolution(monkeypatch, module, address, family=socket.AF_INET):
     return calls
 
 
-def test_get_ip_falls_back_to_dns(monkeypatch):
+def test_host_ip_falls_back_to_dns(monkeypatch):
     _stub_name_resolution(monkeypatch, netimps._ip, "93.184.216.34")
-    assert netimps.get_ip("example.com") == IPv4Address("93.184.216.34")
+    assert netimps.Host("example.com").ip() == IPv4Address("93.184.216.34")
 
 
-def test_get_ip_resolves_a_v6_only_name(monkeypatch):
+def test_host_ip_resolves_a_v6_only_name(monkeypatch):
     """The whole point of dropping ``gethostbyname``: AAAA-only names resolve.
 
     It is IPv4-only, so a name with no A record used to come back ``None`` --
@@ -1350,15 +1350,15 @@ def test_get_ip_resolves_a_v6_only_name(monkeypatch):
     _stub_name_resolution(
         monkeypatch, netimps._ip, "2606:4700::1111", family=socket.AF_INET6
     )
-    assert netimps.get_ip("v6only.example") == netimps.parse("2606:4700::1111")
+    assert netimps.Host("v6only.example").ip() == netimps.parse("2606:4700::1111")
 
 
-def test_get_ip_returns_none_on_failure(monkeypatch):
+def test_host_ip_returns_none_on_failure(monkeypatch):
     def fail(*args, **kwargs):
-        raise OSError("no such host")
+        raise socket.gaierror(socket.EAI_NONAME, "no such host")
 
     monkeypatch.setattr(netimps._ip._socket, "getaddrinfo", fail)
-    assert netimps.get_ip("nope.invalid") is None
+    assert netimps.Host("nope.invalid").ip() is None
 
 
 @pytest.mark.parametrize(

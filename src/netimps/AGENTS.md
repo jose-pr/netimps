@@ -28,7 +28,7 @@ The package is consistent about what the first argument means:
 | `dst` | where traffic is **sent** | `ping`, `tcp_check`, `wait_for_port`, `get_route`, `count_hops`, `discover_mtu`, `get_tcp_mss`, `get_pmtu`, `scan_ports(host)` |
 | `src` | where traffic is **sent from** | `ping(src=)`, `get_free_port(src=)`, `discover_mtu(src=)`, `UDPEndpoint.send(src=)` |
 | `host` / `network` | the thing being **examined** | `scan_ports(host)`, `scan_hosts(network)` |
-| `address` / `ip` | an address being **classified** (no DNS) | `get_ip`, `get_interface`, `iter_interfaces`, `is_local_address`, `is_multicast`, `is_link_scoped` |
+| `address` / `ip` | an address being **classified** (no DNS) | `get_interface`, `iter_interfaces`, `is_local_address`, `is_multicast`, `is_link_scoped` |
 
 `dst`/`src` are abbreviated symmetrically, matching packet-header convention.
 A `dst` accepts a hostname; an `address` does not.
@@ -39,7 +39,7 @@ or an `IPv4Interface`/`IPv6Interface` (its `.ip` is used, dropping the `/prefix`
 which every consumer of a destination -- a subprocess argument, a socket
 call, a DNS query -- would otherwise read as garbage). A network
 (`IPv4Network`/`IPv6Network`) raises `TypeError`, since it has no single
-address to send to. `get_ip` and `resolve`'s `query` accept the same forms.
+address to send to. `resolve`'s `query` accepts the same forms.
 
 **Every `port` a network helper takes is validated** before a socket sees it:
 `tcp_check`, `wait_for_port`, `scan_ports`, `scan_hosts`, `get_pmtu`,
@@ -53,7 +53,7 @@ lookups, `get_default_port`/`get_default_scheme`, still return `None` instead:
 
 **Several parameters are named `ipv6=`** and mean one thing throughout --
 `True` IPv6, `False` IPv4, `None` (the default) whichever the resolver
-answers with: `get_ip`, `get_source_ip`, `get_route`, `count_hops`, `get_pmtu`,
+answers with: `Host.ip`, `get_source_ip`, `get_route`, `count_hops`, `get_pmtu`,
 `ping`, and `discover_mtu` via `**ping_kwargs`. A literal `dst` decides for
 itself.
 
@@ -290,13 +290,6 @@ so nothing is lost. Pass an existing enumeration in a loop; it is a syscall.
 
 ## Address and network helpers
 
-- **`get_ip(address, ipv6=None) -> IPAddress | None`** — literal *or hostname*
-  to an address. **May block on DNS**, unlike `try_parse`, which never touches
-  the network. The lookup goes through `getaddrinfo`, **not** the IPv4-only
-  `gethostbyname`, so `ipv6=True` really reaches an AAAA-only name — one that
-  used to resolve to `None` here and read as "no such host". A literal of the
-  "wrong" family is returned as-is: `ipv6` selects among a *name's* records,
-  and no lookup happens for a literal.
 - **`is_link_scoped(ip) -> bool`** — loopback (host scope) or link-local (link
   scope): confined to this host or link. **Not "is private"** — RFC 1918 ranges
   are globally scoped and return `False`.

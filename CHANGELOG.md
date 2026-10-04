@@ -73,6 +73,7 @@ probe says so in its prefix.
 | `Fqdn.wire` (property) | `FQDN.encode()`, `bytes(name)` |
 | `Fqdn.unicode` (property) | `FQDN.to_unicode()` |
 | `Fqdn.as_fully_qualified()` | `FQDN.fully_qualified()` |
+| `get_ip(x)` | `Host(x).ip()` (removed; `check=True` raises where `get_ip` returned `None`) |
 | `Host.fqdn` (property) | `Host.fqdn()` (method; reverse lookup for an address) |
 | `Host.ip(refresh)` | `Host.ip(*, check, ipv6, refresh, <resolver options>)` |
 | `Fqdn.resolve() -> records` | `FQDN.resolve() -> (fqdn, ip)`; records come from `netimps.resolve(name, rdtype)` |
@@ -124,6 +125,13 @@ probe says so in its prefix.
   `NetimpsError`. Every existing `except` clause keeps matching.
 - `resolve_wire` and `resolve_doh` chain an unreadable reply's
   `DNSDecodeError` as the `__cause__` of the `ResolutionError` they raise.
+
+### Removed
+
+- **`get_ip(address, ipv6=None)`.** `Host(x).ip()` is the same
+  operation with the name kept, and `Host(x).ip(check=True)` raises
+  `ResolutionError` where `get_ip` returned `None`. `get_route` and the
+  `addr` command use it; `Host(x).resolve()` gives `(fqdn, ip)`.
 
 ### Fixed
 

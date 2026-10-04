@@ -60,7 +60,6 @@ __all__ = [
     "IPv6Address",
     "IPv6Interface",
     "IPv6Network",
-    "get_ip",
     "get_hostname",
     "collapse",
     "subtract",
@@ -194,71 +193,6 @@ def _dst_argument(value) -> str:
     if isinstance(value, (IPv4Interface, IPv6Interface)):
         return str(value.ip)
     return str(value)
-
-
-def _family_for(ipv6: Optional[bool]) -> int:
-    """``AF_INET``/``AF_INET6``/``AF_UNSPEC`` for an ``ipv6=`` argument.
-
-    The three-state ``ipv6`` flag (``True`` v6, ``False`` v4, ``None`` either)
-    is the package's standard spelling for "which family?", and every
-    ``getaddrinfo`` caller has to turn it into a constant. Internal.
-    """
-    if ipv6 is True:
-        return _socket.AF_INET6
-    if ipv6 is False:
-        return _socket.AF_INET
-    return _socket.AF_UNSPEC
-
-
-def get_ip(address: "HostLike", ipv6: Optional[bool] = None) -> Optional[IPAddress]:
-    """Resolve a hostname *or* literal address to an address object, or ``None``.
-
-    Tries to parse ``address`` as a literal first and falls back to a DNS
-    lookup, returning ``None`` if both fail::
-
-        get_ip("10.0.0.5")        # IPv4Address('10.0.0.5')   -- no DNS traffic
-        get_ip("example.com")     # IPv4Address('93.184.216.34')
-        get_ip("v6only.example", ipv6=True)   # IPv6Address(...)
-        get_ip("nonexistent.")    # None
-
-    Also accepts an :class:`IPv4Interface`/:class:`IPv6Interface` (its ``.ip``
-    is used) or an existing :class:`IPv4Address`/:class:`IPv6Address`
-    (returned as-is, no DNS touched) -- not just a bare hostname string.
-
-    :param ipv6: which family to resolve to -- ``True`` for IPv6, ``False``
-        for IPv4, ``None`` (the default) for whichever the resolver returns
-        first. The lookup goes through ``getaddrinfo``, **not**
-        ``gethostbyname``, which is IPv4-only: an AAAA-only name used to
-        resolve to ``None`` here and read as "no such host".
-
-    A literal of the wrong family is returned as-is rather than rejected --
-    ``ipv6`` selects among a *name's* records and no lookup happens for a
-    literal.
-
-    .. note::
-       The difference from ``try_parse(address)`` matters: that never
-       touches the network, while this **may block on DNS**. Use ``try_parse``
-       to validate user input; use ``get_ip`` when you genuinely want a name
-       resolved.
-    """
-    address = _dst_argument(address)
-    try:
-        return _ipaddress.ip_address(address)
-    except ValueError:
-        pass
-
-    try:
-        infos = _socket.getaddrinfo(
-            address, None, _family_for(ipv6), _socket.SOCK_STREAM
-        )
-    except OSError:
-        return None
-    for info in infos:
-        try:
-            return _ipaddress.ip_address(info[4][0])
-        except ValueError:
-            continue
-    return None
 
 
 def collapse(networks: "Iterable[IPNetworkLike]") -> "List[IPNetwork]":
@@ -521,7 +455,7 @@ class Host:
 
     The point is that ``str(host)`` is **always what was given**, so a URL can
     still be rebuilt when resolution fails -- which is the case a bare
-    ``get_ip()`` handles badly, since it returns ``None`` and loses the name.
+    a bare lookup handles badly, since it returns ``None`` and loses the name.
     """
 
     __slots__ = ("value", "_resolved", "_attempted")

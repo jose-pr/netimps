@@ -453,86 +453,74 @@ def test_dst_argument_stringifies_host_object():
 
 
 # --------------------------------------------------------------------------- #
-# get_ip accepts HostLike                                                 #
+# Host.ip: what a name resolves to, and what a literal does not look up        #
 # --------------------------------------------------------------------------- #
 
 
-def test_get_ip_accepts_interface_object(monkeypatch):
-    def explode(_):
-        raise AssertionError("gethostbyname must not be called for a literal")
-
-    monkeypatch.setattr(netimps._ip._socket, "gethostbyname", explode)
-    assert netimps.get_ip(IPv4Interface("10.0.0.5/24")) == IPv4Address("10.0.0.5")
-
-
-def test_get_ip_accepts_address_object(monkeypatch):
-    def explode(_):
-        raise AssertionError("gethostbyname must not be called for a literal")
-
-    monkeypatch.setattr(netimps._ip._socket, "gethostbyname", explode)
-    assert netimps.get_ip(IPv4Address("10.0.0.5")) == IPv4Address("10.0.0.5")
+def test_host_ip_of_an_address_object_or_interface_needs_no_lookup():
+    """The guard fails any lookup, so reaching the assertion is the test."""
+    assert netimps.Host(IPv4Address("10.0.0.5")).ip() == IPv4Address("10.0.0.5")
+    assert netimps.Host(_dst_argument(IPv4Interface("10.0.0.5/24"))).ip() == (
+        IPv4Address("10.0.0.5")
+    )
 
 
-def test_get_ip_rejects_network():
+def test_a_network_is_rejected_where_a_destination_is_built():
+    """`_dst_argument` is what turns a `HostLike` into the text `Host` holds."""
     with pytest.raises(TypeError, match="not a network"):
-        netimps.get_ip(IPv4Network("10.0.0.0/24"))
+        _dst_argument(IPv4Network("10.0.0.0/24"))
 
 
-# --------------------------------------------------------------------------- #
-# get_ip resolves with getaddrinfo, not the IPv4-only gethostbyname           #
-# --------------------------------------------------------------------------- #
-
-
-def test_get_ip_resolves_an_aaaa_only_name(monkeypatch):
+def test_host_ip_resolves_an_aaaa_only_name(monkeypatch):
     """`gethostbyname` cannot return a v6 address, so this used to be None.
 
     A v6-only name answered "no such host" rather than its AAAA record -- a
-    falsy wrong answer with nothing to catch. The repo's own AGENTS.md records
-    the lesson; it had been applied in _ping.py and nowhere else.
+    falsy wrong answer with nothing to catch.
     """
     import socket
 
     def explode(_name):  # pragma: no cover - must not run
         raise AssertionError("gethostbyname is IPv4-only and must not be used")
 
-    monkeypatch.setattr(netimps._ip._socket, "gethostbyname", explode)
+    monkeypatch.setattr(socket, "gethostbyname", explode)
     monkeypatch.setattr(
-        netimps._ip._socket,
+        socket,
         "getaddrinfo",
         lambda *a, **k: [
             (socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("2001:db8::5", 0, 0, 0))
         ],
     )
-    assert netimps.get_ip("v6only.example") == IPv6Address("2001:db8::5")
+    assert netimps.Host("v6only.example").ip() == IPv6Address("2001:db8::5")
 
 
-def test_get_ip_honours_the_ipv6_flag(monkeypatch):
+def test_host_ip_honours_the_ipv6_flag(monkeypatch):
     import socket
 
     seen = {}
 
     def fake_getaddrinfo(host, port, family=0, kind=0, *a, **k):
         seen["family"] = family
-        raise OSError("resolution blocked in tests")
+        raise socket.gaierror(socket.EAI_NONAME, "resolution blocked in tests")
 
-    monkeypatch.setattr(netimps._ip._socket, "getaddrinfo", fake_getaddrinfo)
-    assert netimps.get_ip("host.invalid", ipv6=True) is None
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    assert netimps.Host("host.invalid").ip(ipv6=True) is None
     assert seen["family"] == socket.AF_INET6
-    assert netimps.get_ip("host.invalid", ipv6=False) is None
+    assert netimps.Host("host.invalid").ip(ipv6=False) is None
     assert seen["family"] == socket.AF_INET
-    assert netimps.get_ip("host.invalid") is None
+    assert netimps.Host("host.invalid").ip() is None
     assert seen["family"] == socket.AF_UNSPEC
 
 
-def test_get_ip_literal_never_resolves(monkeypatch):
+def test_host_ip_literal_never_resolves(monkeypatch):
     """A literal is its own answer, whatever family it is."""
+    import socket
 
     def explode(*a, **k):  # pragma: no cover - must not run
         raise AssertionError("a literal must not reach the resolver")
 
-    monkeypatch.setattr(netimps._ip._socket, "getaddrinfo", explode)
-    assert netimps.get_ip("10.0.0.5") == IPv4Address("10.0.0.5")
-    assert netimps.get_ip("2001:db8::5") == IPv6Address("2001:db8::5")
+    monkeypatch.setattr(socket, "getaddrinfo", explode)
+    assert netimps.Host("10.0.0.5").ip() == IPv4Address("10.0.0.5")
+    assert netimps.Host("2001:db8::5").ip() == IPv6Address("2001:db8::5")
 
 
 # --------------------------------------------------------------------------- #

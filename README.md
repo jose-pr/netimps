@@ -168,7 +168,7 @@ netimps.retry(lambda: netimps.tcp_check("example.com", 443), attempts=3)
 | `parse`, `try_parse`, `is_valid` | build a type from a value (raising / `None` / `bool`) |
 | `MACAddress` | parse / classify / render MAC addresses |
 | `get_interfaces`, `Interface`, `iter_addresses` | native cross-platform NIC discovery |
-| `get_ip`, `is_link_scoped` | address resolution and scope classification |
+| `is_link_scoped` | scope classification |
 | `collapse`, `subtract` | CIDR set maths |
 | `split_host` | `host:port` splitting, IPv6-aware |
 | `join_host`, `unmap`, `is_wildcard` | build `host:port` (IPv6-bracketed), collapse a v4-mapped address, test for the bind-anything form |

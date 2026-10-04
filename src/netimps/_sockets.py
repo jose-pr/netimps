@@ -40,8 +40,8 @@ from ._ip import (
     IPAddressLike,
     IPInterface,
     IPNetwork,
+    Host,
     _dst_argument,
-    get_ip,
 )
 from ._mac import MACAddress
 from ._parse import parse, try_parse
@@ -1418,7 +1418,7 @@ def get_route(dst: "HostLike" = _DEFAULT_PROBE, ipv6: "Optional[bool]" = None) -
     """
 
     dst = _dst_argument(dst)
-    parsed_dest = get_ip(dst, ipv6)
+    parsed_dest = Host(dst).ip(ipv6=ipv6)
 
     gateway_text = None
     index = 0

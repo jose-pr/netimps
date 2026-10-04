@@ -65,7 +65,6 @@ EXPECTED = [
     "get_hostname",
     "get_interface",
     "get_interfaces",
-    "get_ip",
     "get_pmtu",
     "get_route",
     "get_source_ip",

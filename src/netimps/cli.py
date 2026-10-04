@@ -68,6 +68,7 @@ else:
 
 from ._exceptions import ResolutionError
 from . import (
+    Host,
     IPNetwork,
     MACAddress,
     discover_mtu,
@@ -75,7 +76,6 @@ from . import (
     get_default_scheme,
     get_free_port,
     get_interfaces,
-    get_ip,
     get_pmtu,
     get_route,
     get_source_ip,
@@ -602,7 +602,7 @@ class Addr(_Base):
             )
             return None
 
-        address = get_ip(self.value)
+        address = Host(self.value).ip()
         if address is None:
             _error(
                 "error: %r is not an address, network, MAC or resolvable name"
