@@ -121,18 +121,6 @@ IPNetworkLike = Union[
 ]
 
 
-# Internal aliases kept as runtime objects (not just annotations) so they read
-# well in tracebacks; the public spellings above are what callers should use.
-_AddressValue = Union[str, int, bytes, "_ipaddress._BaseAddress"]
-_NetworkValue = Union[
-    str,
-    int,
-    bytes,
-    "_ipaddress._BaseNetwork",
-    "_ipaddress._BaseAddress",
-]
-
-
 # ---------------------------------------------------------------------------
 # Parsing
 # ---------------------------------------------------------------------------

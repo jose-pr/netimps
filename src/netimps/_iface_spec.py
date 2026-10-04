@@ -34,7 +34,7 @@ from ._ip import IPAddress
 from ._mac import MACAddress
 from ._parse import is_valid, parse, try_parse
 
-__all__ = ["interface_address", "interface_index"]
+__all__ = ["InterfaceLike", "interface_address", "interface_index"]
 
 #: The loose "which interface?" spec every ``src=``/``interface=`` parameter
 #: in the package accepts: an :class:`Interface`, a :class:`MACAddress` (or

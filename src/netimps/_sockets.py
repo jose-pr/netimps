@@ -1841,7 +1841,8 @@ def count_hops(
             return _hop_count_traceroute(target, max_hops, timeout, wants_six)
         raise PermissionError(
             "count_hops needs a raw socket (root/Administrator); "
-            "pass allow_traceroute=True, or use get_route() for the first hop"
+            "leave allow_traceroute=True to use the system traceroute, or use "
+            "get_route() for the first hop"
         ) from exc
 
     try:

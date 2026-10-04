@@ -23,6 +23,7 @@ import argparse
 import json
 import pathlib
 import platform
+import re
 import statistics
 import sys
 import time
@@ -33,6 +34,17 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "src"))
 import netimps  # noqa: E402  (deliberately after the path insert)
 
 RESULTS = pathlib.Path(__file__).resolve().parent / "results"
+
+
+def _repo_version() -> str:
+    """The version in ``pyproject.toml``, which is what the measured tree is.
+
+    ``netimps.__version__`` is the installed metadata, and an editable install
+    keeps the number it was installed at.
+    """
+    text = (RESULTS.parent.parent / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
+    return match.group(1) if match else netimps.__version__
 
 
 def _measure(fn: "Callable[[], object]", samples: int) -> "Dict[str, float]":
@@ -173,6 +185,7 @@ def main() -> int:
     payload = {
         "schema": 1,
         "package": "netimps",
+        "version": _repo_version(),
         "python": platform.python_version(),
         "implementation": platform.python_implementation(),
         "platform": platform.platform(),

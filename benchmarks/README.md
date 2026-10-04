@@ -29,6 +29,7 @@ that is the only thing that makes a before/after comparison recoverable later.
 {
   "schema": 1,
   "package": "netimps",
+  "version": "0.3.4",
   "python": "3.14.6",
   "implementation": "CPython",
   "platform": "Windows-11-10.0.28000-SP0",
