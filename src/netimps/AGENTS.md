@@ -1327,7 +1327,18 @@ ordered. Built from a dotted string or from separate labels, **leftmost first**:
   things an IP does not have. Use **`Host`** for a value that may be either, and
   **`Host.fqdn()`** to narrow (an `FQDN`, or the name an address reverses to).
   Digit-heavy real names are fine: `4.3.2.1.in-addr.arpa` and `0.pool.ntp.org`
-  both parse.
+  both parse. The check runs after IDNA mapping, so fullwidth digits and the
+  ideographic full stops (U+3002, U+FF0E, U+FF61) that spell `127.0.0.1` are
+  refused too; those full stops separate labels.
+- **A label is printable ASCII (0x21 to 0x7E) without a dot, and holds none of
+  `: / ? # [ ] @`.** A space, a control character or a URL
+  (`FQDN("http://example.com")`) raises `NetimpsValueError`. The wire entry
+  (`decode`/`decode_at`) takes the same printable-ASCII rule without the
+  delimiter exclusion, so whatever the constructor accepts, `decode(encode())`
+  returns. Parts are `str` or `FQDN`: `bytes`, and an iterable item of any other
+  type, raise `TypeError`. `/`, `child` and `with_hostname` raise
+  `NetimpsValueError` for a result over 253 octets, and `encode()` for one over
+  255 on the wire.
 - **`.domain` is not the registrable domain.** `FQDN("example.com").domain` is
   `FQDN('com')`, a public suffix. Telling `example.co.uk` (registrable) from
   `co.uk` (not) needs the Public Suffix List, a sizeable data file with its own

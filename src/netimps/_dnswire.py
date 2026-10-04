@@ -40,8 +40,18 @@ EDNS_PAYLOAD = 1232
 MAX_POINTERS = 32
 
 
+def is_label(label: bytes) -> bool:
+    """Whether ``label`` is a label an :class:`netimps.FQDN` can hold: one or
+    more printable ASCII bytes (0x21 to 0x7E) and no dot.
+
+    The one rule the text and the wire entries of ``FQDN`` share.
+    """
+    return bool(label) and all(0x21 <= byte <= 0x7E and byte != 0x2E for byte in label)
+
+
 def encode_name(name: str) -> bytes:
-    """``name`` as DNS labels (IDNA for a non-ASCII label)."""
+    """``name`` as DNS labels (IDNA for a non-ASCII label), at most 255 octets
+    on the wire."""
     out = b""
     for label in name.rstrip(".").split("."):
         if not label:
@@ -50,6 +60,8 @@ def encode_name(name: str) -> bytes:
         if len(raw) > 63:
             raise DNSDecodeError("label longer than 63 bytes in %r" % name)
         out += bytes([len(raw)]) + raw
+    if len(out) + 1 > 255:
+        raise DNSDecodeError("name longer than 255 bytes in %r" % name)
     return out + b"\x00"
 
 

@@ -821,3 +821,102 @@ def test_a_relative_name_sorts_before_the_same_name_fully_qualified():
         FQDN("example.com"),
         FQDN("example.com."),
     ]
+
+
+# --------------------------------------------------------------------------- #
+# Input: IDNA first, one label rule, length on growth, item types              #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "１２７.0.0.1",  # fullwidth digits map to 127.0.0.1
+        "127。0。0。1",  # ideographic full stops
+        "127．0．0．1",  # fullwidth full stop
+        "127｡0｡0｡1",  # halfwidth ideographic full stop
+    ],
+)
+def test_an_address_written_in_non_ascii_is_still_an_address(text):
+    """The address check runs on the IDNA-mapped labels, so a spelling that maps
+    to `127.0.0.1` cannot get in as a name."""
+    with pytest.raises(ValueError, match="is an IP address"):
+        FQDN(text)
+    assert FQDN.is_valid(text) is False
+
+
+def test_an_ideographic_full_stop_separates_labels():
+    """It is a dot to IDNA, so it is a dot here: one label holding a dot would
+    not survive `parse(str(v))`."""
+    v = FQDN("example。com")
+    assert v.labels == ("example", "com")
+    assert FQDN.parse(str(v)) == v
+    assert FQDN("example。").is_fully_qualified()
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "exa mple.com",
+        "exa\nmple.com",
+        "exa\x00mple.com",
+        "tab\there.com",
+        "http://example.com",
+        "user@example.com",
+        "example.com/path",
+        "exa\x7fmple.com",
+    ],
+)
+def test_a_label_holds_printable_ascii_without_structural_characters(bad):
+    """The wire entry refuses a space or a control byte, so the text entry does
+    too; a URL is not a name."""
+    with pytest.raises(ValueError, match="cannot hold|label"):
+        FQDN(bad)
+    assert FQDN.is_valid(bad) is False
+
+
+def test_the_text_entry_never_admits_what_the_wire_entry_refuses():
+    for text in ("exa mple.com.", "a\nb."):
+        assert FQDN.try_parse(text) is None
+    for text in ("_dmarc.example.com.", "*.example.com.", "a-b.example.com."):
+        v = FQDN(text)
+        assert FQDN.decode(v.encode()) == v
+
+
+def test_growing_a_name_past_the_limit_is_refused():
+    """253 printable octets is the cap; `/`, `child` and `with_hostname` check
+    the name they build, since `encode()` would otherwise emit 259 octets."""
+    f = FQDN(".".join(["a" * 63] * 3 + ["a" * 61]))
+    assert len(str(f)) == 253
+    with pytest.raises(ValueError, match="253-octet"):
+        f / "www"
+    with pytest.raises(ValueError, match="253-octet"):
+        f.child("w", "x")
+    with pytest.raises(ValueError, match="253-octet"):
+        FQDN("a.b.c").with_hostname("x" * 63) / f
+    near = FQDN(".".join(["a" * 63] * 3 + ["a" * 57]))
+    assert len(str(near)) == 249
+    assert len((near / "w").encode()) <= 255
+    longest = FQDN("a" * 63 + "." + "b" * 63 + "." + "c" * 63 + "." + "d" * 61)
+    assert len(longest.with_hostname("e" * 63)) == 4
+    with pytest.raises(ValueError):
+        FQDN("a.b").with_hostname("x" * 64)
+
+
+@pytest.mark.parametrize("bad", [b"abc", bytearray(b"abc"), [b"www", "example"]])
+def test_bytes_are_not_labels(bad):
+    with pytest.raises(TypeError):
+        FQDN(bad)
+    assert FQDN.is_valid(bad) is False
+
+
+@pytest.mark.parametrize("item", [None, 5, 1.5, object(), ["nested"]])
+def test_an_iterable_item_is_a_str_or_an_fqdn(item):
+    with pytest.raises(TypeError):
+        FQDN(["www", item])
+    assert FQDN.is_valid(["www", item]) is False
+
+
+def test_an_iterable_of_str_and_fqdn_still_builds():
+    assert FQDN(["www", FQDN("example.com")]) == FQDN("www.example.com")
+    assert FQDN(iter(["www", "example", "com"])) == FQDN("www.example.com")

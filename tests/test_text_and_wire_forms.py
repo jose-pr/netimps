@@ -206,3 +206,60 @@ def test_the_codec_in_resolve_wire_reads_names_through_the_same_reader():
     with pytest.raises(DNSDecodeError):
         _dnswire._read_name(b"\xc0\x00", 0)
     assert netimps.DNSDecodeError is DNSDecodeError
+
+
+# ------------------------------------------- one rule for what a label holds
+
+
+def _wider_corpus():
+    rng = random.Random(20261005)
+    seeds = [
+        "WWW.Example.COM.",
+        "MiXeD.CaSe.example.",
+        "münchen.de.",
+        "例え.テスト.",
+        "xn--mnchen-3ya.de.",
+        "_dmarc.example.com.",
+        "*.example.com.",
+        "1.2.3.4.sub.",
+        "a" * 63 + "." + "b" * 63 + "." + "c" * 63 + "." + "d" * 61 + ".",
+        "example。com。",
+    ]
+    for text in seeds:
+        yield FQDN(text)
+    for name in _names(rng, 100):
+        yield FQDN(
+            ".".join(
+                label.upper() if rng.random() < 0.5 else label for label in name.labels
+            )
+            + "."
+        )
+    base = FQDN("1.2.3.4.sub.")
+    yield base.reverse()
+    yield from base.domains
+    yield FQDN("example.com.") / "www"
+    yield FQDN("example.com.").with_hostname("MAIL")
+
+
+def test_decode_inverts_encode_over_mixed_case_derived_and_non_ascii_names():
+    for name in _wider_corpus():
+        absolute = name.fully_qualified()
+        assert FQDN.decode(absolute.encode()) == absolute
+
+
+def test_whatever_the_constructor_accepts_the_wire_entry_accepts():
+    """A fuzz over characters that cross the label rule: construction either
+    refuses, or the result survives encode, decode and parse."""
+    rng = random.Random(7)
+    alphabet = "ab1-_ .:/\n\x00\x7f。１ü*@"
+    accepted = 0
+    for _ in range(3000):
+        text = "".join(rng.choice(alphabet) for _ in range(rng.randrange(1, 12)))
+        try:
+            v = FQDN(text)
+        except (ValueError, TypeError):
+            continue
+        accepted += 1
+        assert FQDN.decode(v.fully_qualified().encode()) == v.fully_qualified()
+        assert FQDN.parse(str(v)) == v
+    assert accepted > 50

@@ -73,6 +73,7 @@ from typing import (
 )
 from ipaddress import IPv4Address, IPv6Address
 
+from ._dnswire import is_label
 from ._exceptions import DNSDecodeError, NetimpsValueError
 
 _IPAddress = Union[IPv4Address, IPv6Address]
@@ -90,6 +91,14 @@ MAX_NAME_LENGTH = 253
 
 #: RFC 1035 2.3.4, per label.
 MAX_LABEL_LENGTH = 63
+
+#: The characters IDNA reads as a dot besides ``.`` (U+3002, U+FF0E, U+FF61).
+_IDEOGRAPHIC_DOTS = {0x3002: ".", 0xFF0E: ".", 0xFF61: "."}
+
+#: RFC 3986 section 2.2 general delimiters. The wire carries any printable
+#: byte in a label, but text holding one of these is a URL or an address, not
+#: a name, so `FQDN("http://example.com")` is refused rather than kept.
+_URI_DELIMITERS = frozenset(":/?#[]@")
 
 _D = TypeVar("_D")
 
@@ -139,16 +148,27 @@ class FQDN:
     _labels: "Tuple[str, ...]"
     _absolute: bool
 
-    def __init__(self, *parts: "Union[FQDNLike, Iterable[str]]") -> None:
+    def __init__(self, *parts: "Union[FQDNLike, Iterable[Union[str, FQDN]]]") -> None:
         labels: "List[str]" = []
         absolute = False
 
-        flat: "List[Any]" = []
+        flat: "List[Union[str, FQDN]]" = []
         for part in parts:
             if isinstance(part, (str, FQDN)):
                 flat.append(part)
+            elif isinstance(part, (bytes, bytearray, memoryview)):
+                raise TypeError(
+                    "FQDN parts are text, not %r; decode the bytes, or use "
+                    "FQDN.decode for the wire form" % (type(part).__name__,)
+                )
             elif isinstance(part, Iterable):
-                flat.extend(part)
+                for item in part:
+                    if not isinstance(item, (str, FQDN)):
+                        raise TypeError(
+                            "FQDN labels must be str or FQDN, not %r"
+                            % (type(item).__name__,)
+                        )
+                    flat.append(item)
             else:
                 raise TypeError(
                     "FQDN parts must be str, FQDN or an iterable of labels, not %r"
@@ -165,7 +185,9 @@ class FQDN:
                 if last and part._absolute:
                     absolute = True
                 continue
-            text = str(part).strip()
+            # IDNA reads these as dots; splitting on them here keeps the
+            # printed name and its labels the same thing.
+            text = part.strip().translate(_IDEOGRAPHIC_DOTS)
             if not text:
                 # Caught here rather than falling through to the empty-label
                 # check, which would report "consecutive dots" for a string
@@ -191,26 +213,14 @@ class FQDN:
         if not labels:
             raise NetimpsValueError("FQDN requires at least one label")
 
-        # Reject an address *before* the label rules, so the error names the
-        # real problem: "10.0.0.1" would otherwise pass every label check and
-        # produce a nonsense "name". Routed through the package's own parser
-        # rather than a second address detector.
-        from ._ip import IPAddress
-        from ._parse import is_valid
-
-        candidate = ".".join(labels)
-        if is_valid(candidate, IPAddress) or is_valid(candidate.strip("[]"), IPAddress):
-            raise NetimpsValueError(
-                "%r is an IP address, not a domain name -- use netimps.Host for "
-                "a value that may be either" % (candidate,)
-            )
-
+        # IDNA first: the address and label rules apply to the ASCII a name
+        # becomes, so a spelling that maps to `127.0.0.1` cannot get in.
+        shown = ".".join(labels)
         encoded = []
         for label in labels:
             if not label:
                 raise NetimpsValueError(
-                    "empty label in %r -- consecutive dots are not a name"
-                    % (candidate,)
+                    "empty label in %r -- consecutive dots are not a name" % (shown,)
                 )
             label = _idna_encode(label)
             if len(label) > MAX_LABEL_LENGTH:
@@ -220,7 +230,30 @@ class FQDN:
                 )
             encoded.append(label)
 
-        total = len(".".join(encoded))
+        # Reject an address *before* the label rules, so the error names the
+        # real problem: "10.0.0.1" would otherwise pass every label check and
+        # produce a nonsense "name". Routed through the package's own parser
+        # rather than a second address detector.
+        from ._ip import IPAddress
+        from ._parse import is_valid
+
+        candidate = ".".join(encoded)
+        if is_valid(candidate, IPAddress) or is_valid(candidate.strip("[]"), IPAddress):
+            raise NetimpsValueError(
+                "%r is an IP address, not a domain name -- use netimps.Host for "
+                "a value that may be either" % (candidate,)
+            )
+
+        for label in encoded:
+            if not is_label(label.encode("ascii")) or _URI_DELIMITERS.intersection(
+                label
+            ):
+                raise NetimpsValueError(
+                    "label %r cannot hold a space, a control character or "
+                    "any of : / ? # [ ] @" % (label,)
+                )
+
+        total = len(candidate)
         if total > MAX_NAME_LENGTH:
             raise NetimpsValueError(
                 "name is %d octets, over the %d-octet limit" % (total, MAX_NAME_LENGTH)
@@ -726,7 +759,7 @@ class FQDN:
             raise DNSDecodeError("the root has no labels, so it is not an FQDN")
         labels = []
         for label in raw:
-            if any(byte < 0x21 or byte > 0x7E or byte == 0x2E for byte in label):
+            if not is_label(label):
                 raise DNSDecodeError(
                     "label %r holds a byte an FQDN label cannot" % (label,)
                 )
@@ -750,16 +783,22 @@ class FQDN:
     def _from_labels(cls, labels: "Tuple[str, ...]", absolute: bool) -> "FQDN":
         """Build without re-validating: the labels came from a valid name.
 
-        Bypasses ``__init__`` deliberately. Every caller is slicing or
-        reordering labels that already passed the length, IDNA and
+        Bypasses ``__init__`` deliberately. Every caller is slicing,
+        reordering or joining labels that already passed the IDNA, label and
         not-an-address checks, so re-running them would be wasted work -- and
         the address check in particular would *reject* a legitimate derived
         name: ``FQDN("1.2.3.4.example.com").domain`` walks down to
         ``FQDN('4.example.com')`` and then ``FQDN('example.com')``, but a
-        reversed name can pass through a form that parses as an address.
+        reversed name can pass through a form that parses as an address. The
+        total length is checked, since ``/`` and ``with_hostname`` grow a name.
         """
         if not labels:
             raise NetimpsValueError("a name needs at least one label")
+        total = sum(len(label) for label in labels) + len(labels) - 1
+        if total > MAX_NAME_LENGTH:
+            raise NetimpsValueError(
+                "name is %d octets, over the %d-octet limit" % (total, MAX_NAME_LENGTH)
+            )
         instance = object.__new__(cls)
         object.__setattr__(instance, "_labels", tuple(labels))
         object.__setattr__(instance, "_absolute", bool(absolute))

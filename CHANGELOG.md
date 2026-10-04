@@ -348,6 +348,17 @@ probe says so in its prefix.
   The four ordering operators now derive from one key, reversed folded labels
   then absoluteness.
 
+- **`FQDN` validates after IDNA mapping, with one label rule shared by the
+  text and the wire entries.** Fullwidth digits and the ideographic full stops
+  mapped to `127.0.0.1` and constructed `FQDN('127.0.0.1')`; U+3002 became a
+  dot inside one label. A label with a space, a control character or one of
+  `: / ? # [ ] @` (`FQDN("http://example.com")`) constructed, then failed
+  `FQDN.decode(v.encode())`. All now raise `NetimpsValueError`. `bytes` and an
+  iterable item that is not a `str` or an `FQDN` (`FQDN(b"abc")` was
+  `FQDN('97.98.99')`, `FQDN(["www", None])` was `www.None`) raise `TypeError`.
+  `/`, `child` and `with_hostname` refuse a result over 253 octets, where
+  `encode()` used to emit 259; `encode_name` refuses over 255 on the wire.
+
 ## [0.3.4] - 2026-10-03
 
 ### Fixed
