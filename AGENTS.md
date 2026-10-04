@@ -80,7 +80,16 @@ src/netimps/
 │   ├── _addresses.py # is_broadcast, is_unicast, iter_addresses
 │   ├── _lookup.py    # get_interface, iter_interfaces, is_local_address, is_local_host
 │   └── _spec.py      # InterfaceLike and its coercion to an address or index
-├── _sockets.py    # private: source IP, free port, tcp/wait, route, hops, MTU
+├── _sockets/      # private package: socket helpers, route and MTU queries
+│   ├── _options.py   # disable_connreset, set_buffer_size
+│   ├── _hint.py      # bind_error_hint
+│   ├── _bind.py      # bind, SocketOption, get_free_port
+│   ├── _connect.py   # get_source_ip, tcp_check, wait_for_port
+│   ├── _nexthop.py   # first-hop readers per platform
+│   ├── _route.py     # get_route, Route
+│   ├── _hops.py      # count_hops
+│   ├── _pmtu.py      # get_pmtu, get_tcp_mss, the don't-fragment option
+│   └── _mtu.py       # discover_mtu, max_udp_payload
 ├── _dns.py        # private: resolve() chaining dnspython/system/nslookup backends
 ├── _ping.py       # private: ping() over the platform binary
 ├── _proc.py       # private: the one runner every platform binary goes through

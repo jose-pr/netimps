@@ -131,13 +131,13 @@ def test_bind_closes_socket_on_failure():
             closed.append(True)
             super().close()
 
-    original = netimps._sockets._socket.socket
-    netimps._sockets._socket.socket = Tracking
+    original = netimps._sockets._bind._socket.socket
+    netimps._sockets._bind._socket.socket = Tracking
     try:
         with pytest.raises(OSError):
             bind("192.0.2.99", 9)  # not a local address
     finally:
-        netimps._sockets._socket.socket = original
+        netimps._sockets._bind._socket.socket = original
     assert closed, "socket was not closed after the failed bind"
 
 

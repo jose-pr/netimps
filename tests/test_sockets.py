@@ -21,7 +21,15 @@ from netimps import (
     tcp_check,
     wait_for_port,
 )
-from netimps import _sockets
+from netimps._sockets import (
+    _bind,
+    _connect,
+    _hops,
+    _mtu,
+    _nexthop,
+    _pmtu,
+    _route,
+)
 
 # --------------------------------------------------------------------------- #
 # get_source_ip                                                                #
@@ -53,7 +61,7 @@ def test_get_source_ip_sends_no_packets(monkeypatch):
         def sendto(self, *a, **k):  # pragma: no cover - must not run
             raise AssertionError("get_source_ip must not send")
 
-    monkeypatch.setattr(_sockets._socket, "socket", NoSend)
+    monkeypatch.setattr(_connect._socket, "socket", NoSend)
     assert get_source_ip("127.0.0.1") is not None
 
 
@@ -61,7 +69,7 @@ def test_get_source_ip_unroutable_is_none(monkeypatch):
     def refuse(*a, **k):
         raise OSError("network unreachable")
 
-    monkeypatch.setattr(_sockets._socket.socket, "connect", refuse)
+    monkeypatch.setattr(_connect._socket.socket, "connect", refuse)
     assert get_source_ip("203.0.113.1") is None
 
 
@@ -165,7 +173,7 @@ def test_wait_for_port_respects_deadline_with_slow_connects(monkeypatch):
         time.sleep(timeout or 0)
         return False
 
-    monkeypatch.setattr(_sockets, "tcp_check", slow)
+    monkeypatch.setattr(_connect, "tcp_check", slow)
     start = time.monotonic()
     assert wait_for_port("127.0.0.1", 9, deadline=0.5, interval=0.05) is False
     elapsed = time.monotonic() - start
@@ -288,7 +296,7 @@ def test_hop_count_raises_without_privileges_when_fallback_disabled(monkeypatch)
             raise PermissionError("not permitted")
         return socket.socket(family, kind, proto)
 
-    monkeypatch.setattr(_sockets._socket, "socket", no_raw)
+    monkeypatch.setattr(_hops._socket, "socket", no_raw)
     with pytest.raises(PermissionError, match="raw socket"):
         netimps.count_hops("127.0.0.1", allow_traceroute=False)
 
@@ -301,9 +309,9 @@ def _no_raw(family, kind, proto=0, *a, **k):
 
 def test_hop_count_falls_back_to_traceroute(monkeypatch):
     """Without a raw socket, the system tool is used instead of failing."""
-    monkeypatch.setattr(_sockets._socket, "socket", _no_raw)
+    monkeypatch.setattr(_hops._socket, "socket", _no_raw)
     monkeypatch.setattr(
-        _sockets, "_hop_count_traceroute", lambda target, hops, timeout, ipv6=False: 7
+        _hops, "_hop_count_traceroute", lambda target, hops, timeout, ipv6=False: 7
     )
     assert netimps.count_hops("127.0.0.1") == 7
 
@@ -326,9 +334,9 @@ def test_hop_count_accepts_interface_object(monkeypatch):
         return real(host, port, family, kind, *a, **k)
 
     monkeypatch.setattr(netimps._ping._socket, "getaddrinfo", recording)
-    monkeypatch.setattr(_sockets._socket, "socket", _no_raw)
+    monkeypatch.setattr(_hops._socket, "socket", _no_raw)
     monkeypatch.setattr(
-        _sockets, "_hop_count_traceroute", lambda target, hops, timeout, ipv6=False: 1
+        _hops, "_hop_count_traceroute", lambda target, hops, timeout, ipv6=False: 1
     )
     netimps.count_hops(IPv4Interface("127.0.0.1/8"), allow_traceroute=True)
     assert seen == ["127.0.0.1"]
@@ -346,8 +354,8 @@ def test_hop_count_resolves_with_getaddrinfo_not_gethostbyname(monkeypatch):
     def explode(_name):  # pragma: no cover - must not run
         raise AssertionError("gethostbyname is IPv4-only and must not be used")
 
-    monkeypatch.setattr(_sockets._socket, "gethostbyname", explode)
-    monkeypatch.setattr(_sockets._socket, "socket", _no_raw)
+    monkeypatch.setattr(_hops._socket, "gethostbyname", explode)
+    monkeypatch.setattr(_hops._socket, "socket", _no_raw)
 
     seen = {}
 
@@ -355,7 +363,7 @@ def test_hop_count_resolves_with_getaddrinfo_not_gethostbyname(monkeypatch):
         seen["target"], seen["ipv6"] = target, ipv6
         return 3
 
-    monkeypatch.setattr(_sockets, "_hop_count_traceroute", fake_traceroute)
+    monkeypatch.setattr(_hops, "_hop_count_traceroute", fake_traceroute)
     assert netimps.count_hops("::1") == 3
     assert seen == {"target": "::1", "ipv6": True}
 
@@ -394,9 +402,9 @@ def test_hop_count_v6_probe_uses_the_v6_options(monkeypatch):
         def close(self):
             pass
 
-    monkeypatch.setattr(_sockets._socket, "socket", Recording)
+    monkeypatch.setattr(_hops._socket, "socket", Recording)
     monkeypatch.setattr(
-        _sockets,
+        _hops,
         "_hop_count_traceroute",
         lambda target, hops, timeout, ipv6=False: None,
     )
@@ -407,7 +415,7 @@ def test_hop_count_v6_probe_uses_the_v6_options(monkeypatch):
 
 def _traceroute_program(fake_program, **kwargs):
     """A fake of the binary `_hop_count_traceroute` runs on this platform."""
-    return fake_program("tracert" if _sockets._IS_WINDOWS else "traceroute", **kwargs)
+    return fake_program("tracert" if _hops._IS_WINDOWS else "traceroute", **kwargs)
 
 
 def test_traceroute_parser_reads_hop_number(fake_program):
@@ -420,7 +428,7 @@ def test_traceroute_parser_reads_hop_number(fake_program):
         "Trace complete.\n"
     )
     _traceroute_program(fake_program, stdout=output)
-    assert _sockets._hop_count_traceroute("8.8.8.8", 30, 1.0) == 3
+    assert _hops._hop_count_traceroute("8.8.8.8", 30, 1.0) == 3
 
 
 def test_traceroute_parser_localised_prose_is_ignored(fake_program):
@@ -431,12 +439,12 @@ def test_traceroute_parser_localised_prose_is_ignored(fake_program):
         "  3     9 ms     7 ms    11 ms  1.1.1.1 \n"
     )
     _traceroute_program(fake_program, stdout=output)
-    assert _sockets._hop_count_traceroute("1.1.1.1", 30, 1.0) == 3
+    assert _hops._hop_count_traceroute("1.1.1.1", 30, 1.0) == 3
 
 
 def test_traceroute_parser_missing_binary_is_none(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", str(tmp_path))
-    assert _sockets._hop_count_traceroute("8.8.8.8", 30, 1.0) is None
+    assert _hops._hop_count_traceroute("8.8.8.8", 30, 1.0) is None
 
 
 def test_traceroute_parser_no_match_is_none(fake_program):
@@ -444,7 +452,7 @@ def test_traceroute_parser_no_match_is_none(fake_program):
         fake_program,
         stdout="  1     5 ms  192.0.2.1 \n  2     *  Request timed out.\n",
     )
-    assert _sockets._hop_count_traceroute("8.8.8.8", 30, 1.0) is None
+    assert _hops._hop_count_traceroute("8.8.8.8", 30, 1.0) is None
 
 
 def test_traceroute_failing_exit_status_is_none(fake_program):
@@ -458,7 +466,7 @@ def test_traceroute_failing_exit_status_is_none(fake_program):
         stdout="  3     9 ms     7 ms    11 ms  8.8.8.8 \n",
         returncode=2,
     )
-    assert _sockets._hop_count_traceroute("8.8.8.8", 30, 1.0) is None
+    assert _hops._hop_count_traceroute("8.8.8.8", 30, 1.0) is None
 
 
 # --------------------------------------------------------------------------- #
@@ -468,16 +476,16 @@ def test_traceroute_failing_exit_status_is_none(fake_program):
 
 def test_is_icmp_reply_skips_variable_ip_header():
     # IHL=5 -> 20-byte header, then ICMP type 11 (time exceeded).
-    assert _sockets._is_icmp_reply(b"\x45" + b"\x00" * 19 + b"\x0b")
+    assert _hops._is_icmp_reply(b"\x45" + b"\x00" * 19 + b"\x0b")
     # IHL=6 -> 24-byte header; the type must be read at the right offset.
-    assert _sockets._is_icmp_reply(b"\x46" + b"\x00" * 23 + b"\x00")
+    assert _hops._is_icmp_reply(b"\x46" + b"\x00" * 23 + b"\x00")
     # Type 8 is an echo *request*, not a reply to our probe.
-    assert not _sockets._is_icmp_reply(b"\x45" + b"\x00" * 19 + b"\x08")
+    assert not _hops._is_icmp_reply(b"\x45" + b"\x00" * 19 + b"\x08")
 
 
 def test_is_icmp_reply_rejects_short_packets():
-    assert not _sockets._is_icmp_reply(b"")
-    assert not _sockets._is_icmp_reply(b"\x45" * 5)
+    assert not _hops._is_icmp_reply(b"")
+    assert not _hops._is_icmp_reply(b"\x45" * 5)
 
 
 # --------------------------------------------------------------------------- #
@@ -485,7 +493,7 @@ def test_is_icmp_reply_rejects_short_packets():
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.skipif(not _sockets._IS_LINUX, reason="IP_MTU is a Linux socket option")
+@pytest.mark.skipif(not _pmtu._IS_LINUX, reason="IP_MTU is a Linux socket option")
 @pytest.mark.parametrize("dst", ["127.0.0.1", "::1"])
 def test_get_pmtu_answers_on_linux(dst):
     """The positive assertion, on the one platform that must answer it.
@@ -508,7 +516,7 @@ def test_get_pmtu_answers_on_linux(dst):
 
 
 @pytest.mark.skipif(
-    _sockets._IS_LINUX, reason="Linux is the platform that does have IP_MTU"
+    _pmtu._IS_LINUX, reason="Linux is the platform that does have IP_MTU"
 )
 def test_get_pmtu_is_none_where_the_option_does_not_exist():
     """Windows and BSD expose no cached path MTU; None is the right answer.
@@ -534,7 +542,7 @@ def test_get_pmtu_accepts_interface_object():
 def test_get_pmtu_sends_nothing(monkeypatch):
     """It is a lookup, not a measurement -- no packets leave."""
     calls = []
-    real = _sockets._socket.socket
+    real = _pmtu._socket.socket
 
     class NoSend(real):
         def send(self, *a, **k):  # pragma: no cover - must not run
@@ -545,14 +553,14 @@ def test_get_pmtu_sends_nothing(monkeypatch):
             calls.append("sendto")
             raise AssertionError("get_pmtu must not send")
 
-    monkeypatch.setattr(_sockets._socket, "socket", NoSend)
+    monkeypatch.setattr(_pmtu._socket, "socket", NoSend)
     netimps.get_pmtu("127.0.0.1")
     assert not calls
 
 
 def test_discover_mtu_probe_false_delegates_to_get_pmtu(monkeypatch):
     """probe=False is exactly get_pmtu -- and must not ping."""
-    monkeypatch.setattr(_sockets, "get_pmtu", lambda dst, port=80, ipv6=None: 1400)
+    monkeypatch.setattr(_mtu, "get_pmtu", lambda dst, port=80, ipv6=None: 1400)
     monkeypatch.setattr(
         netimps, "ping", lambda *a, **k: pytest.fail("probe=False must not ping")
     )
@@ -566,9 +574,9 @@ def test_discover_mtu_ignores_the_kernel_by_default(monkeypatch):
     was 9000 and get_pmtu returned None, while probing found the true 1500.
     """
     monkeypatch.setattr(
-        _sockets, "get_pmtu", lambda *a, **k: pytest.fail("default must probe")
+        _mtu, "get_pmtu", lambda *a, **k: pytest.fail("default must probe")
     )
-    monkeypatch.setattr(netimps._sockets, "ping", _fake_ping(1500))
+    monkeypatch.setattr(_mtu, "ping", _fake_ping(1500))
     assert netimps.discover_mtu("10.0.0.1") == 1500
 
 
@@ -588,8 +596,8 @@ def _fake_ping(limit):
 
 
 def test_discover_mtu_finds_the_boundary(monkeypatch):
-    monkeypatch.setattr(netimps._sockets, "ping", _fake_ping(1500), raising=False)
-    monkeypatch.setattr(netimps._sockets, "ping", _fake_ping(1500))
+    monkeypatch.setattr(_mtu, "ping", _fake_ping(1500), raising=False)
+    monkeypatch.setattr(_mtu, "ping", _fake_ping(1500))
     assert netimps.discover_mtu("10.0.0.1") == 1500
 
 
@@ -601,23 +609,21 @@ def test_discover_mtu_accepts_interface_object(monkeypatch):
         seen.append(dst)
         return netimps.PingResult((size or 0) + 28 <= 1500, dst)
 
-    monkeypatch.setattr(netimps._sockets, "ping", fake_ping, raising=False)
-    monkeypatch.setattr(netimps._sockets, "ping", fake_ping)
+    monkeypatch.setattr(_mtu, "ping", fake_ping, raising=False)
+    monkeypatch.setattr(_mtu, "ping", fake_ping)
     assert netimps.discover_mtu(IPv4Interface("10.0.0.1/24")) == 1500
     assert all(d == "10.0.0.1" for d in seen)
 
 
 @pytest.mark.parametrize("limit", [576, 1280, 1420, 1500, 9000])
 def test_discover_mtu_across_common_values(monkeypatch, limit):
-    monkeypatch.setattr(netimps._sockets, "ping", _fake_ping(limit))
+    monkeypatch.setattr(_mtu, "ping", _fake_ping(limit))
     assert netimps.discover_mtu("10.0.0.1") == limit
 
 
 def test_discover_mtu_returns_none_when_nothing_answers(monkeypatch):
     """A firewalled host must not read as a tiny MTU."""
-    monkeypatch.setattr(
-        netimps._sockets, "ping", lambda *a, **k: netimps.PingResult(False, "x")
-    )
+    monkeypatch.setattr(_mtu, "ping", lambda *a, **k: netimps.PingResult(False, "x"))
     assert netimps.discover_mtu("10.0.0.1") is None
 
 
@@ -629,7 +635,7 @@ def test_discover_mtu_short_circuits_at_the_ceiling(monkeypatch):
         calls.append(size)
         return netimps.PingResult(True, dst)
 
-    monkeypatch.setattr(netimps._sockets, "ping", ping)
+    monkeypatch.setattr(_mtu, "ping", ping)
     assert netimps.discover_mtu("10.0.0.1", low=576, high=9000) == 9000
     assert len(calls) == 2, "one probe at the floor, one at the ceiling"
 
@@ -649,7 +655,7 @@ def test_discover_mtu_result_includes_headers(monkeypatch):
             survived.append(size)
         return netimps.PingResult(ok, dst)
 
-    monkeypatch.setattr(netimps._sockets, "ping", ping)
+    monkeypatch.setattr(_mtu, "ping", ping)
     result = netimps.discover_mtu("10.0.0.1")
     assert result == 1500
     # The reported MTU is the largest surviving payload plus the 28-byte
@@ -669,15 +675,15 @@ def test_discover_mtu_rejects_unknown_method():
 
 def test_discover_mtu_tcp_uses_mss_plus_headers(monkeypatch):
     """TCP cannot probe, so it derives the MTU from the negotiated MSS."""
-    monkeypatch.setattr(_sockets, "_tcp_mss", lambda *a, **k: (1400, socket.AF_INET))
+    monkeypatch.setattr(_mtu, "_tcp_mss", lambda *a, **k: (1400, socket.AF_INET))
     assert netimps.discover_mtu("8.8.8.8", port=443, method="tcp") == 1440
     # IPv6 adds 20 more header bytes.
-    monkeypatch.setattr(_sockets, "_tcp_mss", lambda *a, **k: (1400, socket.AF_INET6))
+    monkeypatch.setattr(_mtu, "_tcp_mss", lambda *a, **k: (1400, socket.AF_INET6))
     assert netimps.discover_mtu("2001:db8::1", port=443, method="tcp") == 1460
 
 
 def test_discover_mtu_tcp_none_when_mss_unavailable(monkeypatch):
-    monkeypatch.setattr(_sockets, "_tcp_mss", lambda *a, **k: None)
+    monkeypatch.setattr(_mtu, "_tcp_mss", lambda *a, **k: None)
     assert netimps.discover_mtu("8.8.8.8", port=443, method="tcp") is None
 
 
@@ -917,7 +923,7 @@ def test_discover_mtu_forwards_ping_kwargs(monkeypatch):
         seen.append(kw)
         return netimps.PingResult((size or 0) + 28 <= 1500, dst)
 
-    monkeypatch.setattr(netimps._sockets, "ping", ping)
+    monkeypatch.setattr(_mtu, "ping", ping)
     netimps.discover_mtu("10.0.0.1", tries=3, ipv6=False)
     assert seen and all(k == {"tries": 3, "ipv6": False} for k in seen)
 
@@ -967,7 +973,7 @@ def _recording_socket(monkeypatch):
             applied.append((level, option, value))
             return real.setsockopt(self, level, option, value)
 
-    monkeypatch.setattr(_sockets._socket, "socket", Recording)
+    monkeypatch.setattr(_bind._socket, "socket", Recording)
     return applied
 
 
@@ -1099,8 +1105,8 @@ def test_tcp_check_resolves_once_and_shares_one_deadline(monkeypatch):
         def close(self):
             pass
 
-    monkeypatch.setattr(_sockets._socket, "getaddrinfo", fake_getaddrinfo)
-    monkeypatch.setattr(_sockets._socket, "socket", Blocking)
+    monkeypatch.setattr(_connect._socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(_connect._socket, "socket", Blocking)
 
     start = time.monotonic()
     assert tcp_check("many.example", 9, timeout=0.3) is False
@@ -1135,7 +1141,7 @@ def test_get_source_ip_family_follows_the_resolver(monkeypatch):
         families.append(family)
         return real(family, kind, *a, **k)
 
-    monkeypatch.setattr(_sockets._socket, "socket", recording)
+    monkeypatch.setattr(_connect._socket, "socket", recording)
     monkeypatch.setattr(
         netimps._ping._socket,
         "getaddrinfo",
@@ -1249,25 +1255,25 @@ _IPV6_ROUTE_TABLE = (
 
 
 def test_ipv6_route_table_finds_the_gateway():
-    hop = _sockets._parse_ipv6_route_table(_IPV6_ROUTE_TABLE, "2001:db8::5")
+    hop = _nexthop._parse_ipv6_route_table(_IPV6_ROUTE_TABLE, "2001:db8::5")
     assert hop is not None
     assert hop[0] == "fe80::1"
 
 
 def test_ipv6_route_table_reports_on_link_for_loopback():
-    hop = _sockets._parse_ipv6_route_table(_IPV6_ROUTE_TABLE, "::1")
+    hop = _nexthop._parse_ipv6_route_table(_IPV6_ROUTE_TABLE, "::1")
     assert hop is not None and hop[0] is None
 
 
 def test_ipv6_route_table_skips_the_reject_default():
     """RTF_UP clear + RTF_REJECT set is "unreachable", not "on-link via lo"."""
     assert (
-        _sockets._parse_ipv6_route_table(_IPV6_ROUTE_TABLE, "2606:4700::1111") is None
+        _nexthop._parse_ipv6_route_table(_IPV6_ROUTE_TABLE, "2606:4700::1111") is None
     )
 
 
 def test_ipv6_route_table_prefers_the_longest_prefix():
-    hop = _sockets._parse_ipv6_route_table(_IPV6_ROUTE_TABLE, "fe80::abcd")
+    hop = _nexthop._parse_ipv6_route_table(_IPV6_ROUTE_TABLE, "fe80::abcd")
     assert hop is not None and hop[0] is None  # on-link via the /64, not the /32
 
 
@@ -1292,19 +1298,19 @@ _ROUTE_GET_ON_LINK = (
 
 
 def test_route_get_output_reads_the_gateway():
-    hop = _sockets._parse_route_get_output(_ROUTE_GET_VIA_GATEWAY)
+    hop = _nexthop._parse_route_get_output(_ROUTE_GET_VIA_GATEWAY)
     assert hop is not None and hop[0] == "192.168.64.1"
 
 
 def test_route_get_output_treats_a_link_gateway_as_on_link():
     """`link#4` is not an address; it is BSD for "no router involved"."""
-    hop = _sockets._parse_route_get_output(_ROUTE_GET_ON_LINK)
+    hop = _nexthop._parse_route_get_output(_ROUTE_GET_ON_LINK)
     assert hop is not None and hop[0] is None
 
 
 def test_route_get_output_unmatched_is_unknown():
     assert (
-        _sockets._parse_route_get_output("route: writing to routing socket\n") is None
+        _nexthop._parse_route_get_output("route: writing to routing socket\n") is None
     )
 
 
@@ -1315,9 +1321,9 @@ def test_route_reports_unknown_rather_than_on_link(monkeypatch):
     None` then claimed "no router involved" for a destination two subnets
     away.
     """
-    monkeypatch.setattr(_sockets, "_windows_next_hop", lambda dst, ipv6=False: None)
-    monkeypatch.setattr(_sockets, "_posix_next_hop", lambda dst, ipv6=False: None)
-    monkeypatch.setattr(_sockets, "_bsd_next_hop", lambda dst, ipv6=False: None)
+    monkeypatch.setattr(_route, "_windows_next_hop", lambda dst, ipv6=False: None)
+    monkeypatch.setattr(_route, "_posix_next_hop", lambda dst, ipv6=False: None)
+    monkeypatch.setattr(_route, "_bsd_next_hop", lambda dst, ipv6=False: None)
     route = get_route("1.1.1.1")
     assert route.gateway is None
     assert route.on_link is None
@@ -1333,7 +1339,7 @@ def test_route_v6_destination_reaches_the_next_hop_lookup(monkeypatch):
         return ("fe80::1", 7)
 
     for name in ("_windows_next_hop", "_posix_next_hop", "_bsd_next_hop"):
-        monkeypatch.setattr(_sockets, name, record)
+        monkeypatch.setattr(_route, name, record)
     route = get_route("2001:db8::5")
     assert seen == {"dst": "2001:db8::5", "ipv6": True}
     assert route.on_link is False
@@ -1353,7 +1359,7 @@ def test_dont_fragment_is_settable_for_both_families():
         except OSError:  # pragma: no cover - env dependent
             continue
         try:
-            assert _sockets._set_dont_fragment(sock, family) is True
+            assert _pmtu._set_dont_fragment(sock, family) is True
         finally:
             sock.close()
 
@@ -1365,7 +1371,7 @@ def test_discover_mtu_udp_returns_none_when_df_cannot_be_set(monkeypatch):
     were fragmented locally, reassembled by the peer and answered -- making
     `discover_mtu(method="udp")` report `high` (9000 by default) everywhere.
     """
-    monkeypatch.setattr(_sockets, "_set_dont_fragment", lambda sock, family: False)
+    monkeypatch.setattr(_mtu, "_set_dont_fragment", lambda sock, family: False)
     assert netimps.discover_mtu("127.0.0.1", port=9, method="udp", timeout=0.1) is None
 
 
@@ -1392,7 +1398,7 @@ def test_discover_mtu_udp_probe_family_follows_the_destination(monkeypatch):
         def close(self):
             pass
 
-    monkeypatch.setattr(_sockets._socket, "socket", Recording)
+    monkeypatch.setattr(_mtu._socket, "socket", Recording)
     assert netimps.discover_mtu("::1", port=9, method="udp", timeout=0.1) is None
     assert families and set(families) == {socket.AF_INET6}
 
@@ -1412,11 +1418,11 @@ def test_is_icmp_reply_reads_a_v6_packet_without_an_ip_header():
     And the type numbers are not the v4 ones: 3 is "time exceeded" in v6 and
     "destination unreachable" in v4, so the tables cannot be shared.
     """
-    assert _sockets._is_icmp_reply(b"\x03\x00\x00\x00", ipv6=True)  # time exceeded
-    assert _sockets._is_icmp_reply(b"\x01\x00", ipv6=True)  # unreachable
-    assert _sockets._is_icmp_reply(b"\x81\x00", ipv6=True)  # echo reply
-    assert not _sockets._is_icmp_reply(b"\x80\x00", ipv6=True)  # echo *request*
-    assert not _sockets._is_icmp_reply(b"", ipv6=True)
+    assert _hops._is_icmp_reply(b"\x03\x00\x00\x00", ipv6=True)  # time exceeded
+    assert _hops._is_icmp_reply(b"\x01\x00", ipv6=True)  # unreachable
+    assert _hops._is_icmp_reply(b"\x81\x00", ipv6=True)  # echo reply
+    assert not _hops._is_icmp_reply(b"\x80\x00", ipv6=True)  # echo *request*
+    assert not _hops._is_icmp_reply(b"", ipv6=True)
 
 
 def test_bsd_next_hop_answers_loopback_without_spawning(fake_program):
@@ -1427,8 +1433,8 @@ def test_bsd_next_hop_answers_loopback_without_spawning(fake_program):
     right on every platform, so it never reaches the parser.
     """
     fake = fake_program("route")
-    assert _sockets._bsd_next_hop("127.0.0.1") == (None, 0)
-    assert _sockets._bsd_next_hop("::1", ipv6=True) == (None, 0)
+    assert _nexthop._bsd_next_hop("127.0.0.1") == (None, 0)
+    assert _nexthop._bsd_next_hop("::1", ipv6=True) == (None, 0)
     assert fake.calls == []
 
 
@@ -1436,8 +1442,8 @@ def test_program_helpers_never_read_the_callers_stdin(fake_program):
     """A library that inherits stdin can swallow its caller's input."""
     route = fake_program("route", stdout="  interface: en0\n")
     traceroute = _traceroute_program(fake_program)
-    _sockets._bsd_next_hop("1.1.1.1")
-    _sockets._hop_count_traceroute("1.1.1.1", 5, 1.0)
+    _nexthop._bsd_next_hop("1.1.1.1")
+    _hops._hop_count_traceroute("1.1.1.1", 5, 1.0)
     assert route.stdin_lengths == [0]
     assert traceroute.stdin_lengths == [0]
 
@@ -1530,8 +1536,8 @@ def test_bind_error_hint_explains_wsaeinval():
 
 #: The functions themselves, for the tests of them: the fixture below replaces
 #: the module attributes for every test in this file.
-_real_icmp_packet_limit = _sockets._icmp_packet_limit
-_real_udp_packet_limit = _sockets._udp_packet_limit
+_real_icmp_packet_limit = _mtu._icmp_packet_limit
+_real_udp_packet_limit = _mtu._udp_packet_limit
 
 
 @pytest.fixture(autouse=True)
@@ -1541,9 +1547,9 @@ def no_path_cap(monkeypatch):
     The limits of the probe tools are taken out as well: on macOS the real
     ``sysctl`` answers 8192 and would cap every faked path above it.
     """
-    monkeypatch.setattr(_sockets, "_outgoing_path", lambda *a, **k: (None, False))
-    monkeypatch.setattr(_sockets, "_icmp_packet_limit", lambda overhead: 65535)
-    monkeypatch.setattr(_sockets, "_udp_packet_limit", lambda overhead: 65535)
+    monkeypatch.setattr(_mtu, "_outgoing_path", lambda *a, **k: (None, False))
+    monkeypatch.setattr(_mtu, "_icmp_packet_limit", lambda overhead: 65535)
+    monkeypatch.setattr(_mtu, "_udp_packet_limit", lambda overhead: 65535)
 
 
 def _dual_stack_name(monkeypatch, v4="127.0.0.1", v6="::1"):
@@ -1579,7 +1585,7 @@ def test_discover_mtu_overhead_follows_the_family_that_was_probed(
         seen.append((dst, size))
         return netimps.PingResult((size or 0) + 28 <= 1480, dst)
 
-    monkeypatch.setattr(_sockets, "ping", ping)
+    monkeypatch.setattr(_mtu, "ping", ping)
     assert netimps.discover_mtu("dual.test", ipv6=False, high=1500) == 1480
     assert {dst for dst, _ in seen} == {"127.0.0.1"}
 
@@ -1595,7 +1601,7 @@ def test_discover_mtu_resolves_the_name_once(monkeypatch, no_path_cap):
 
     monkeypatch.setattr(socket, "getaddrinfo", counting)
     monkeypatch.setattr(
-        _sockets,
+        _mtu,
         "ping",
         lambda dst, size=None, **kw: netimps.PingResult((size or 0) + 28 <= 1500, dst),
     )
@@ -1632,9 +1638,9 @@ def test_get_tcp_mss_takes_ipv6_and_refuses_the_other_family(monkeypatch):
 
 
 def test_discover_mtu_tcp_overhead_is_the_connected_familys(monkeypatch):
-    monkeypatch.setattr(_sockets, "_tcp_mss", lambda *a, **k: (1400, socket.AF_INET6))
+    monkeypatch.setattr(_mtu, "_tcp_mss", lambda *a, **k: (1400, socket.AF_INET6))
     assert netimps.discover_mtu("dual.test", method="tcp", port=443) == 1460
-    monkeypatch.setattr(_sockets, "_tcp_mss", lambda *a, **k: (1400, socket.AF_INET))
+    monkeypatch.setattr(_mtu, "_tcp_mss", lambda *a, **k: (1400, socket.AF_INET))
     assert netimps.discover_mtu("dual.test", method="tcp", port=443) == 1440
 
 
@@ -1652,25 +1658,25 @@ def test_discover_mtu_continues_past_high_up_to_the_interface_mtu(monkeypatch):
     Returning ``high`` after one probe reported 9000 for a 65535 loopback.
     """
     seen = []
-    monkeypatch.setattr(_sockets, "_outgoing_path", lambda *a, **k: (20000, False))
-    monkeypatch.setattr(_sockets, "ping", _wire_ping(12345, seen))
+    monkeypatch.setattr(_mtu, "_outgoing_path", lambda *a, **k: (20000, False))
+    monkeypatch.setattr(_mtu, "ping", _wire_ping(12345, seen))
     assert netimps.discover_mtu("10.0.0.1", high=9000) == 12345
     assert max(seen) <= 20000
 
 
 def test_discover_mtu_probes_nothing_above_the_interface_mtu(monkeypatch):
     seen = []
-    monkeypatch.setattr(_sockets, "_outgoing_path", lambda *a, **k: (1500, False))
-    monkeypatch.setattr(_sockets, "ping", _wire_ping(10**6, seen))
+    monkeypatch.setattr(_mtu, "_outgoing_path", lambda *a, **k: (1500, False))
+    monkeypatch.setattr(_mtu, "ping", _wire_ping(10**6, seen))
     assert netimps.discover_mtu("10.0.0.1", high=9000) == 1500
     assert max(seen) == 1500
 
 
 def test_discover_mtu_answers_the_interface_mtu_when_the_path_carries_it(monkeypatch):
     seen = []
-    monkeypatch.setattr(_sockets, "_outgoing_path", lambda *a, **k: (65535, False))
-    monkeypatch.setattr(_sockets, "_icmp_packet_limit", lambda overhead: 10**6)
-    monkeypatch.setattr(_sockets, "ping", _wire_ping(10**6, seen))
+    monkeypatch.setattr(_mtu, "_outgoing_path", lambda *a, **k: (65535, False))
+    monkeypatch.setattr(_mtu, "_icmp_packet_limit", lambda overhead: 10**6)
+    monkeypatch.setattr(_mtu, "ping", _wire_ping(10**6, seen))
     assert netimps.discover_mtu("10.0.0.1", high=20000) == 65535
 
 
@@ -1679,7 +1685,7 @@ def test_discover_mtu_with_an_unknown_first_hop_is_at_least_high(
 ):
     """No interface MTU to cap at: ``high`` is the documented floor of the answer."""
     seen = []
-    monkeypatch.setattr(_sockets, "ping", _wire_ping(10**6, seen))
+    monkeypatch.setattr(_mtu, "ping", _wire_ping(10**6, seen))
     assert netimps.discover_mtu("10.0.0.1", high=1500) == 1500
     assert max(seen) == 1500
 
@@ -1690,9 +1696,9 @@ def test_a_local_destination_bounded_by_the_probe_tool_is_the_interface_mtu(
     """The platform ping cannot send past its limit, and a local path has no
     other hop to narrow it: the loopback MTU is the answer."""
     seen = []
-    monkeypatch.setattr(_sockets, "_outgoing_path", lambda *a, **k: (65536, True))
-    monkeypatch.setattr(_sockets, "_icmp_packet_limit", lambda overhead: 65535)
-    monkeypatch.setattr(_sockets, "ping", _wire_ping(65535, seen))
+    monkeypatch.setattr(_mtu, "_outgoing_path", lambda *a, **k: (65536, True))
+    monkeypatch.setattr(_mtu, "_icmp_packet_limit", lambda overhead: 65535)
+    monkeypatch.setattr(_mtu, "ping", _wire_ping(65535, seen))
     assert netimps.discover_mtu("127.0.0.1") == 65536
     assert max(seen) == 65535
 
@@ -1700,33 +1706,33 @@ def test_a_local_destination_bounded_by_the_probe_tool_is_the_interface_mtu(
 def test_a_remote_path_bounded_by_the_probe_tool_falls_back_to_udp(monkeypatch):
     """macOS ping stops at ``net.inet.raw.maxdgram``; UDP has no such limit."""
     seen = []
-    monkeypatch.setattr(_sockets, "_outgoing_path", lambda *a, **k: (16384, False))
-    monkeypatch.setattr(_sockets, "_icmp_packet_limit", lambda overhead: 8192)
-    monkeypatch.setattr(_sockets, "ping", _wire_ping(10**6, seen))
+    monkeypatch.setattr(_mtu, "_outgoing_path", lambda *a, **k: (16384, False))
+    monkeypatch.setattr(_mtu, "_icmp_packet_limit", lambda overhead: 8192)
+    monkeypatch.setattr(_mtu, "ping", _wire_ping(10**6, seen))
     asked = []
 
     def udp(*args, **kwargs):
         asked.append(args)
         return 9000
 
-    monkeypatch.setattr(_sockets, "_discover_mtu_udp", udp)
+    monkeypatch.setattr(_mtu, "_discover_mtu_udp", udp)
     assert netimps.discover_mtu("10.0.0.1") == 9000
     assert max(seen) == 8192 and asked
-    monkeypatch.setattr(_sockets, "_discover_mtu_udp", lambda *a, **k: None)
+    monkeypatch.setattr(_mtu, "_discover_mtu_udp", lambda *a, **k: None)
     assert netimps.discover_mtu("10.0.0.1") == 8192
 
 
 def test_the_bsd_probe_limit_text_is_parsed():
-    assert _sockets._parse_sysctl_int("8192\n") == 8192
-    assert _sockets._parse_sysctl_int("net.inet.raw.maxdgram: 9216\n") == 9216
-    assert _sockets._parse_sysctl_int("") is None
-    assert _sockets._parse_sysctl_int("nope") is None
+    assert _mtu._parse_sysctl_int("8192\n") == 8192
+    assert _mtu._parse_sysctl_int("net.inet.raw.maxdgram: 9216\n") == 9216
+    assert _mtu._parse_sysctl_int("") is None
+    assert _mtu._parse_sysctl_int("nope") is None
 
 
 def test_the_bsd_icmp_limit_is_the_sysctl_value(fake_program, monkeypatch):
     fake = fake_program("sysctl", stdout="8192\n")
-    monkeypatch.setattr(_sockets, "_IS_WINDOWS", False)
-    monkeypatch.setattr(_sockets, "_IS_LINUX", False)
+    monkeypatch.setattr(_mtu, "_IS_WINDOWS", False)
+    monkeypatch.setattr(_mtu, "_IS_LINUX", False)
     assert _real_icmp_packet_limit(28) == 8192
     assert fake.argv[-2:] == ["-n", "net.inet.raw.maxdgram"]
 
@@ -1735,9 +1741,9 @@ def test_the_bsd_icmp_limit_without_sysctl_is_the_ip_maximum(monkeypatch):
     def missing(*args, **kwargs):
         raise FileNotFoundError("sysctl")
 
-    monkeypatch.setattr(_sockets, "_IS_WINDOWS", False)
-    monkeypatch.setattr(_sockets, "_IS_LINUX", False)
-    monkeypatch.setattr(_sockets._proc, "run", missing)
+    monkeypatch.setattr(_mtu, "_IS_WINDOWS", False)
+    monkeypatch.setattr(_mtu, "_IS_LINUX", False)
+    monkeypatch.setattr(_mtu._proc, "run", missing)
     assert _real_icmp_packet_limit(28) == 65535
 
 
@@ -1745,8 +1751,8 @@ def test_the_bsd_udp_limit_is_the_sysctl_payload_plus_the_headers(
     fake_program, monkeypatch
 ):
     fake = fake_program("sysctl", stdout="9216\n")
-    monkeypatch.setattr(_sockets, "_IS_WINDOWS", False)
-    monkeypatch.setattr(_sockets, "_IS_LINUX", False)
+    monkeypatch.setattr(_mtu, "_IS_WINDOWS", False)
+    monkeypatch.setattr(_mtu, "_IS_LINUX", False)
     assert _real_udp_packet_limit(28) == 9244
     assert fake.argv[-2:] == ["-n", "net.inet.udp.maxdgram"]
 
@@ -1763,11 +1769,11 @@ def test_a_local_udp_search_that_ends_at_the_socket_limit_is_the_loopback_mtu(
             lambda size: size <= limit, low, high, first_hop, limit, local
         )
 
-    _real_search_mtu = _sockets._search_mtu
-    monkeypatch.setattr(_sockets, "_outgoing_path", lambda *a, **k: (16384, True))
-    monkeypatch.setattr(_sockets, "_udp_packet_limit", lambda overhead: 9244)
-    monkeypatch.setattr(_sockets, "_set_dont_fragment", lambda sock, family: True)
-    monkeypatch.setattr(_sockets, "_search_mtu", udp_search)
+    _real_search_mtu = _mtu._search_mtu
+    monkeypatch.setattr(_mtu, "_outgoing_path", lambda *a, **k: (16384, True))
+    monkeypatch.setattr(_mtu, "_udp_packet_limit", lambda overhead: 9244)
+    monkeypatch.setattr(_mtu, "_set_dont_fragment", lambda sock, family: True)
+    monkeypatch.setattr(_mtu, "_search_mtu", udp_search)
     assert netimps.discover_mtu("127.0.0.1", method="udp", port=9) == 16384
     assert seen == [(16384, 9244, True)]
 
@@ -1782,7 +1788,7 @@ def test_a_literal_of_the_other_family_has_no_target():
 
 
 def test_the_windows_ping_limit_is_65500_payload_bytes(monkeypatch):
-    monkeypatch.setattr(_sockets, "_IS_WINDOWS", True)
+    monkeypatch.setattr(_mtu, "_IS_WINDOWS", True)
     assert _real_icmp_packet_limit(28) == 65528
     assert _real_icmp_packet_limit(48) == 65535
 
@@ -1918,8 +1924,8 @@ class _Clock:
 def test_wait_for_port_never_waits_less_than_its_interval(monkeypatch):
     """The back-off cap was a flat second, shortening an interval above it."""
     clock = _Clock()
-    monkeypatch.setattr(_sockets, "_time", clock)
-    monkeypatch.setattr(_sockets, "tcp_check", lambda *a, **k: False)
+    monkeypatch.setattr(_connect, "_time", clock)
+    monkeypatch.setattr(_connect, "tcp_check", lambda *a, **k: False)
     assert netimps.wait_for_port("h", 80, deadline=20, interval=5.0) is False
     assert clock.sleeps[:3] == [5.0, 5.0, 5.0]
     assert min(clock.sleeps[:-1]) >= 5.0
@@ -1927,8 +1933,8 @@ def test_wait_for_port_never_waits_less_than_its_interval(monkeypatch):
 
 def test_wait_for_port_still_backs_off_to_one_second(monkeypatch):
     clock = _Clock()
-    monkeypatch.setattr(_sockets, "_time", clock)
-    monkeypatch.setattr(_sockets, "tcp_check", lambda *a, **k: False)
+    monkeypatch.setattr(_connect, "_time", clock)
+    monkeypatch.setattr(_connect, "tcp_check", lambda *a, **k: False)
     netimps.wait_for_port("h", 80, deadline=10, interval=0.1)
     assert clock.sleeps[0] == 0.1
     assert max(clock.sleeps) == 1.0
@@ -1954,6 +1960,6 @@ def test_one_timeout_floor_serves_a_scan_and_a_check():
     from netimps import _scan
 
     assert _scan._checked_timeout(0) == 0
-    assert _sockets._connect_timeout(_scan._checked_timeout(0)) == _sockets._MIN_TIMEOUT
+    assert _connect._connect_timeout(_scan._checked_timeout(0)) == _connect._MIN_TIMEOUT
     with pytest.raises(ValueError):
         _scan._checked_timeout(-1)

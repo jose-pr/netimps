@@ -174,7 +174,9 @@ def test_a_stream_socket_is_not_touched_by_the_default(monkeypatch):
     """
     calls = []
     monkeypatch.setattr(
-        netimps._sockets, "disable_connreset", lambda sock: calls.append(sock.type)
+        netimps._sockets._bind,
+        "disable_connreset",
+        lambda sock: calls.append(sock.type),
     )
     bind("127.0.0.1", 0, kind=socket.SOCK_STREAM).close()
     assert calls == []
