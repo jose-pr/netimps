@@ -1396,7 +1396,7 @@ def test_the_fallback_says_why_and_logs_once(monkeypatch, caplog, no_such_host):
 @pytest.mark.parametrize(
     "sa_len, offset, mask, expected",
     [
-        # FreeBSD lo0, `ifconfig` shows "netmask 0x0": sa_len 0, nothing present.
+        # An all-zero mask trimmed to nothing: sa_len 0.
         (0, 4, b"\xff\x00\x00\x00", b"\x00\x00\x00\x00"),
         # An ordinary full-length sockaddr_in: unchanged.
         (16, 4, b"\xff\xff\xff\x00", b"\xff\xff\xff\x00"),

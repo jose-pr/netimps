@@ -298,9 +298,11 @@ a `bool` or `None`. `repr` is a constructor call that rebuilds an equal value.
   and `ipconfig` does not show. Deprecated and preferred addresses are kept.
 - **The Windows `index` is `IfIndex`, or `Ipv6IfIndex` when that is 0** (an
   adapter with IPv4 unbound).
-- **BSD netmasks.** The kernel trims a netmask sockaddr after its last non-zero
-  byte, so a short or empty one stands for the zero-filled mask: FreeBSD's `lo0`
-  (`ifconfig`: `netmask 0x0`) is `127.0.0.1/0`.
+- **BSD netmasks.** macOS trims a netmask sockaddr after its last non-zero
+  byte (`255.0.0.0` arrives with `sa_len` 5), so a short one stands for the
+  zero-filled mask. The prefix is what `getifaddrs(3)` reports: on FreeBSD 16
+  that is `127.0.0.1/8` for `lo0`, a full-length `255.0.0.0`, where `ifconfig`
+  there prints `netmask 0x0`.
 - **Degrades when the platform will not answer.** An `OSError` from the native
   call gives hostname resolution, where **prefixes are fiction** (every address
   becomes `/32` or `/128` under an interface named `"<unknown>"`, with no flag
@@ -1234,7 +1236,8 @@ at least 3 there.
   above that MTU is lowered to it. Only when the MTU cannot be read is `high`
   the ceiling, and a result equal to it means **at least `high`**. The platform
   `ping` has a largest probe of its own: a 65500-byte payload on Windows, and
-  `net.inet.raw.maxdgram` on macOS and the BSDs (8192 on macOS 15.7). A local
+  `net.inet.raw.maxdgram` on macOS and the BSDs (8192 on macOS 15.7); a UDP
+  socket there stops at `net.inet.udp.maxdgram` (a 9216-byte payload). A local
   destination the search takes that far is reported at the loopback MTU (65535
   on Windows, 65536 on Linux, 16384 on macOS); any other path that reaches the
   limit is retried with `"udp"` and otherwise reported at the limit, meaning

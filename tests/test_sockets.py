@@ -1528,10 +1528,22 @@ def test_bind_error_hint_explains_wsaeinval():
 # --------------------------------------------------------------------------- #
 
 
+#: The functions themselves, for the tests of them: the fixture below replaces
+#: the module attributes for every test in this file.
+_real_icmp_packet_limit = _sockets._icmp_packet_limit
+_real_udp_packet_limit = _sockets._udp_packet_limit
+
+
 @pytest.fixture(autouse=True)
 def no_path_cap(monkeypatch):
-    """Make the outgoing-interface ceiling unknown, so a fake ping decides."""
+    """Make the outgoing-interface ceiling unknown, so a fake ping decides.
+
+    The limits of the probe tools are taken out as well: on macOS the real
+    ``sysctl`` answers 8192 and would cap every faked path above it.
+    """
     monkeypatch.setattr(_sockets, "_outgoing_path", lambda *a, **k: (None, False))
+    monkeypatch.setattr(_sockets, "_icmp_packet_limit", lambda overhead: 65535)
+    monkeypatch.setattr(_sockets, "_udp_packet_limit", lambda overhead: 65535)
 
 
 def _dual_stack_name(monkeypatch, v4="127.0.0.1", v6="::1"):
@@ -1715,7 +1727,7 @@ def test_the_bsd_icmp_limit_is_the_sysctl_value(fake_program, monkeypatch):
     fake = fake_program("sysctl", stdout="8192\n")
     monkeypatch.setattr(_sockets, "_IS_WINDOWS", False)
     monkeypatch.setattr(_sockets, "_IS_LINUX", False)
-    assert _sockets._icmp_packet_limit(28) == 8192
+    assert _real_icmp_packet_limit(28) == 8192
     assert fake.argv[-2:] == ["-n", "net.inet.raw.maxdgram"]
 
 
@@ -1726,13 +1738,53 @@ def test_the_bsd_icmp_limit_without_sysctl_is_the_ip_maximum(monkeypatch):
     monkeypatch.setattr(_sockets, "_IS_WINDOWS", False)
     monkeypatch.setattr(_sockets, "_IS_LINUX", False)
     monkeypatch.setattr(_sockets._proc, "run", missing)
-    assert _sockets._icmp_packet_limit(28) == 65535
+    assert _real_icmp_packet_limit(28) == 65535
+
+
+def test_the_bsd_udp_limit_is_the_sysctl_payload_plus_the_headers(
+    fake_program, monkeypatch
+):
+    fake = fake_program("sysctl", stdout="9216\n")
+    monkeypatch.setattr(_sockets, "_IS_WINDOWS", False)
+    monkeypatch.setattr(_sockets, "_IS_LINUX", False)
+    assert _real_udp_packet_limit(28) == 9244
+    assert fake.argv[-2:] == ["-n", "net.inet.udp.maxdgram"]
+
+
+def test_a_local_udp_search_that_ends_at_the_socket_limit_is_the_loopback_mtu(
+    monkeypatch,
+):
+    """Measured on macOS 15: the udp method stopped at 9244 on a 16384 loopback."""
+    seen = []
+
+    def udp_search(survives, low, high, first_hop, limit, local):
+        seen.append((first_hop, limit, local))
+        return _real_search_mtu(
+            lambda size: size <= limit, low, high, first_hop, limit, local
+        )
+
+    _real_search_mtu = _sockets._search_mtu
+    monkeypatch.setattr(_sockets, "_outgoing_path", lambda *a, **k: (16384, True))
+    monkeypatch.setattr(_sockets, "_udp_packet_limit", lambda overhead: 9244)
+    monkeypatch.setattr(_sockets, "_set_dont_fragment", lambda sock, family: True)
+    monkeypatch.setattr(_sockets, "_search_mtu", udp_search)
+    assert netimps.discover_mtu("127.0.0.1", method="udp", port=9) == 16384
+    assert seen == [(16384, 9244, True)]
+
+
+def test_a_literal_of_the_other_family_has_no_target():
+    """macOS answers an IPv4 literal asked for as IPv6 with its mapped form."""
+    from netimps import _ping
+
+    assert _ping._probe_targets("127.0.0.1", 9, True, socket.SOCK_STREAM) == []
+    assert _ping._probe_targets("::1", 9, False, socket.SOCK_STREAM) == []
+    assert _ping._probe_targets("127.0.0.1", 9, False, socket.SOCK_STREAM)
 
 
 def test_the_windows_ping_limit_is_65500_payload_bytes(monkeypatch):
     monkeypatch.setattr(_sockets, "_IS_WINDOWS", True)
-    assert _sockets._icmp_packet_limit(28) == 65528
-    assert _sockets._icmp_packet_limit(48) == 65535
+    assert _real_icmp_packet_limit(28) == 65528
+    assert _real_icmp_packet_limit(48) == 65535
 
 
 # --------------------------------------------------------------------------- #

@@ -329,10 +329,10 @@ probe says so in its prefix.
   pointer read became a one-interface answer; only `OSError` degrades, with the
   reason in `raw` and logged once at debug.
 
-- **On FreeBSD an address with a zero netmask is `/0`, not `/8`.** The kernel
-  trims a netmask sockaddr after its last non-zero byte and the bytes it omits
-  are zero; `127.0.0.1` on `lo0` (`ifconfig`: `netmask 0x0`) was reported as
-  `127.0.0.1/8`.
+- **A BSD netmask is read no further than its own length.** macOS trims a
+  netmask sockaddr after its last non-zero byte (`255.0.0.0` arrives as 5
+  bytes) and what follows belongs to the next structure. The bytes past
+  `sa_len` are taken as zero instead of being read.
 
 - **`retry`, `backoff_delays` and `Backoff` share one set of argument rules,
   checked when they are called.** `backoff_delays` was a generator, so

@@ -832,6 +832,12 @@ def _nxdomain_nslookup(fake_program):
     )
 
 
+#: Seconds given to a chain that ends in a fake ``nslookup``. The fake is a
+#: real process: on a slow host its interpreter took longer than 0.4 s to
+#: start (measured on an Intel Mac, Python 3.9), and the run was killed.
+_FAKE_PROGRAM_TIMEOUT = 1.5
+
+
 def _at(server, **kwargs):
     """The options that point dnspython, the wire backend and nslookup at ``server``."""
     return dict(ns="127.0.0.1", port=server.port, search=False, **kwargs)
@@ -857,7 +863,7 @@ def test_resolve_chain_falls_through_on_a_backend_that_could_not_ask(
     got = resolve(
         "silent.test",
         backends=["dnspython", "nslookup"],
-        timeout=0.4,
+        timeout=_FAKE_PROGRAM_TIMEOUT,
         **_at(server),
     )
     assert got == [IPv4Address("104.20.23.154"), IPv4Address("172.66.147.243")]
@@ -979,7 +985,9 @@ def _every_backend_fails(server, fake_program):
     reports no response."""
     fake = fake_program("nslookup", stdout=_NSLOOKUP_NO_RESPONSE)
     options = dict(
-        backends=["dnspython", "wire", "nslookup"], timeout=0.4, **_at(server)
+        backends=["dnspython", "wire", "nslookup"],
+        timeout=_FAKE_PROGRAM_TIMEOUT,
+        **_at(server),
     )
     return fake, options
 

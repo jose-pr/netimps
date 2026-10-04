@@ -309,6 +309,12 @@ def _probe_targets(
     else:
         family = _socket.AF_UNSPEC
 
+    literal = _try_parse(dst)
+    if literal is not None and ipv6 is not None and (literal.version == 6) != ipv6:
+        # An address of the other family has no answer in the one asked for.
+        # macOS would hand back the IPv4-mapped form of an IPv4 literal.
+        return []
+
     try:
         infos = _lookup(
             lambda: _socket.getaddrinfo(dst, port, family, socktype), timeout

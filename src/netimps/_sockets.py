@@ -2148,7 +2148,8 @@ def discover_mtu(
     Returns the MTU **including headers** (payload + 28 for IPv4 + ICMP), so it
     is directly comparable with :attr:`Interface.mtu`. The platform ``ping``
     has a largest probe of its own (a 65500-byte payload on Windows, the
-    ``net.inet.raw.maxdgram`` sysctl on macOS and the BSDs: 8192 on macOS 15.7).
+    ``net.inet.raw.maxdgram`` sysctl on macOS and the BSDs: 8192 on macOS 15.7),
+    and so has a UDP socket there (``net.inet.udp.maxdgram``: a 9216-byte payload).
     A destination on this host that the search takes that far is reported at
     the loopback interface's MTU, since no hop narrows the path; any other
     path that reaches it is retried with ``"udp"`` and is otherwise reported at
@@ -2277,6 +2278,15 @@ def _parse_sysctl_int(text: str) -> "Optional[int]":
     return int(match.group(1)) if match else None
 
 
+def _sysctl_int(name: str) -> "Optional[int]":
+    """The integer value of the ``sysctl`` *name*, or ``None`` if it cannot be read."""
+    try:
+        result = _proc.run("sysctl", ["-n", name], timeout=_ROUTE_TIMEOUT_SECONDS)
+    except (OSError, ValueError, TimeoutError):
+        return None
+    return _parse_sysctl_int(result.stdout) if result.returncode == 0 else None
+
+
 def _icmp_packet_limit(overhead: int) -> int:
     """The largest packet, headers included, that the platform ``ping`` can send.
 
@@ -2289,14 +2299,22 @@ def _icmp_packet_limit(overhead: int) -> int:
         return min(_IP_MAXIMUM, _WINDOWS_PING_MAX_PAYLOAD + overhead)
     if _IS_LINUX:
         return _IP_MAXIMUM
-    try:
-        result = _proc.run(
-            "sysctl", ["-n", "net.inet.raw.maxdgram"], timeout=_ROUTE_TIMEOUT_SECONDS
-        )
-    except (OSError, ValueError, TimeoutError):
-        return _IP_MAXIMUM
-    value = _parse_sysctl_int(result.stdout) if result.returncode == 0 else None
+    value = _sysctl_int("net.inet.raw.maxdgram")
     return min(_IP_MAXIMUM, value) if value else _IP_MAXIMUM
+
+
+def _udp_packet_limit(overhead: int) -> int:
+    """The largest packet, headers included, that a UDP socket here can send.
+
+    macOS and the BSDs refuse a UDP payload above ``net.inet.udp.maxdgram``
+    (9216 on macOS 15: a 9216-byte payload is echoed on loopback, whose MTU is
+    16384, and nothing larger is). Windows and Linux are bound by the IP
+    maximum alone.
+    """
+    if _IS_WINDOWS or _IS_LINUX:
+        return _IP_MAXIMUM
+    value = _sysctl_int("net.inet.udp.maxdgram")
+    return min(_IP_MAXIMUM, value + overhead) if value else _IP_MAXIMUM
 
 
 def _outgoing_path(
@@ -2450,7 +2468,8 @@ def _discover_mtu_udp(
         scout.close()
 
     first_hop, local = _outgoing_path(address, wants_six, src)
-    found, _ = _search_mtu(survives, low, high, first_hop, _IP_MAXIMUM, local)
+    limit = _udp_packet_limit(overhead)
+    found, _ = _search_mtu(survives, low, high, first_hop, limit, local)
     return found
 
 

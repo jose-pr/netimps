@@ -204,13 +204,15 @@ def test_the_icmp_lookup_is_bounded_too(monkeypatch, fake_program):
     real = socket.getaddrinfo
 
     def slow(*args, **kwargs):
-        time.sleep(2.0)
+        time.sleep(6.0)
         return real("127.0.0.1", *args[1:], **kwargs)
 
     monkeypatch.setattr(_ping._socket, "getaddrinfo", slow)
     started = time.perf_counter()
     netimps.ping("localhost", timeout=0.5)
-    assert time.perf_counter() - started < 1.5
+    # The lookup's 0.5 s, plus a fake program's start: well short of the 6 s
+    # an unbounded lookup takes, with room for a slow host.
+    assert time.perf_counter() - started < 4.0
 
 
 @pytest.mark.parametrize(

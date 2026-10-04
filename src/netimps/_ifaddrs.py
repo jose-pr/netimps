@@ -497,12 +497,13 @@ def _posix_is_up(flags: int) -> bool:
 def _bsd_mask_bytes(sa_len: int, address_offset: int, mask: bytes) -> bytes:
     """The netmask bytes a BSD ``sockaddr`` really carries, zero-filled to width.
 
-    The kernel trims a netmask sockaddr after its last non-zero byte, and
-    ``sa_len`` says how much is left: 0 for an all-zero mask (FreeBSD's
-    loopback, which ``ifconfig`` prints as ``netmask 0x0``), 5 for
-    ``255.0.0.0``. ``address_offset`` is where the address bytes begin inside
-    the sockaddr (4 for ``sockaddr_in``, 8 for ``sockaddr_in6``). Whatever the
-    struct overlay read past ``sa_len`` is not the mask and is replaced by zero.
+    macOS trims a netmask sockaddr after its last non-zero byte, and
+    ``sa_len`` says how much is left: 5 for ``255.0.0.0`` (measured on macOS
+    15.7: ``05 02 00 00 ff``, then the next structure), 0 for an all-zero mask.
+    FreeBSD 16 sends all 16 bytes. ``address_offset`` is where the address
+    bytes begin inside the sockaddr (4 for ``sockaddr_in``, 8 for
+    ``sockaddr_in6``). Whatever the struct overlay read past ``sa_len`` is not
+    the mask and is replaced by zero.
     """
     present = max(0, min(sa_len - address_offset, len(mask)))
     return bytes(mask[:present]) + bytes(len(mask) - present)
