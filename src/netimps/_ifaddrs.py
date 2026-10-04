@@ -19,7 +19,7 @@ resolved here rather than in every caller:
 Concern              Linux               macOS/BSD           Windows
 ===================  ==================  ==================  =================
 Interface name       ``eth0``            ``en0``             GUID + friendly
-Prefix src        netmask sockaddr    netmask sockaddr    ``OnLinkPrefixLength``
+Prefix source        netmask sockaddr    netmask sockaddr    ``OnLinkPrefixLength``
 Link-layer family    ``AF_PACKET`` (17)  ``AF_LINK`` (18)    ``PhysicalAddress``
 IPv6 scope           ``%1``              ``%en0``            ``%12``
 Loopback name        ``lo``              ``lo0``             ``Loopback Pseudo-Interface 1``
@@ -350,16 +350,16 @@ class Interface:
         caller still gets the link-local in preference to ``None``.
 
         Measured on a macOS loopback adapter, whose entries are
-        ``127.0.0.1/8``, ``::1/128``, ``fe80::1/64``: the old rule returned
-        ``fe80::1`` for ``ipv6=True`` where ``::1`` is wanted, and
-        ``bind(interface=...)`` then failed with "Can't assign requested
-        address". On a NIC listing ``fe80::`` before a global address it
-        returned the link-local in preference to the global one.
+        ``127.0.0.1/8``, ``::1/128``, ``fe80::1/64``: taking the first IPv6
+        entry returns ``fe80::1`` for ``ipv6=True`` where ``::1`` is wanted,
+        and ``bind(interface=...)`` then fails with "Can't assign requested
+        address". Likewise, on a NIC listing ``fe80::`` before a global
+        address, first-entry order picks the link-local over the global one.
 
-        Link-local covers ``fe80::/10`` and IPv4 ``169.254.0.0/16`` -- LINK_LOCAL_V4 is
-        the same problem wearing the other family's clothes, and an interface
-        holding both an LINK_LOCAL_V4 address and a DHCP lease should answer with the
-        lease.
+        Link-local covers ``fe80::/10`` and IPv4 ``169.254.0.0/16``
+        (``LINK_LOCAL_V4``): the same problem in the other family, and an
+        interface holding both a ``LINK_LOCAL_V4`` address and a DHCP lease
+        should answer with the lease.
 
         Named *primary* rather than *ip* because this is a **selection**, not
         "the" address: an interface routinely has several, and the full lists
@@ -608,10 +608,10 @@ class _SockaddrDl(Structure):
     leading ``sdl_len`` byte.
 
     ``sdl_data`` is **12 bytes, as the C struct declares it** -- ``sizeof`` is
-    20. It used to be declared at 46 (a 54-byte struct), which made every read
-    of it a 34-byte over-read past what ``getifaddrs`` allocated. It never
-    faulted, because getifaddrs hands back one contiguous arena, but it was
-    undefined behaviour a page boundary could have turned into a crash.
+    20. Declaring it at 46 (a 54-byte struct) would make every read of it a
+    34-byte over-read past what ``getifaddrs`` allocated: it would not fault,
+    because getifaddrs hands back one contiguous arena, but it is undefined
+    behaviour a page boundary could turn into a crash.
 
     The structure is *variable-length*: the interface name and the hardware
     address are packed into ``sdl_data`` one after the other, and ``sdl_len``
@@ -810,8 +810,8 @@ def _posix_interfaces(want_raw: bool) -> "List[Interface]":
                         )
                     prefix = _prefix_from_netmask(packed6)
                 # Link-local addresses are only meaningful with their scope.
-                # ip_interface rejects the %scope suffix, so build without it
-                # and note the scope in raw only.
+                # ip_interface rejects the %scope suffix, so build without it;
+                # the scope is not recorded.
                 built = _make_ip_interface(addr, prefix)
                 if built is not None:
                     iface.ips.append(built)
@@ -1029,8 +1029,8 @@ def _windows_interfaces(want_raw: bool) -> "List[Interface]":
                 "flags": int(node.Flags),
             }
 
-        # 0xFFFFFFFF is **not** an "unknown" sentinel, which is what this used to
-        # say. It is ULONG max, and it means *unbounded* -- the Windows loopback
+        # 0xFFFFFFFF is **not** an "unknown" sentinel. It is ULONG max, and it
+        # means *unbounded* -- the Windows loopback
         # pseudo-interface reports it because there is no link to constrain it.
         # Measured: that interface really does carry a 65507-octet UDP datagram,
         # the full protocol maximum, and Linux reports its own `lo` as the number
@@ -1124,7 +1124,7 @@ def _fallback_interfaces(
 
 
 def _mac(octets: bytes) -> "Optional[MACAddress]":
-    """Build a MACAddress, deferring the import to avoid a circular import.
+    """Build a MACAddress from raw octets.
 
     An **all-zero** address is normalised to ``None``: Linux reports the
     loopback MAC as ``00:00:00:00:00:00`` while macOS and Windows report no
@@ -1267,7 +1267,7 @@ def get_interfaces(
         ``if_type``, ...). **Not portable** -- outside the stability guarantee.
     :param cache: reuse a recent enumeration instead of making the syscall.
         ``False`` (the default) never caches and never reads a cached value, so
-        existing behaviour is untouched. ``True`` uses
+        every call enumerates afresh. ``True`` uses
         :data:`INTERFACE_CACHE_TTL` seconds, and a number is that TTL in
         seconds -- so **``cache=0`` enumerates now and reseeds the cache**, a
         TTL of zero being always stale. That is the only "force a refresh"
@@ -1459,7 +1459,7 @@ def iter_addresses(
     """Yield ``(interface, address)`` once per address, not once per adapter.
 
     :func:`get_interfaces` groups every address under its adapter, which is the
-    right shape for "describe this host". Consumers that filter or act *per
+    right shape for "describe this host". Callers that filter or act *per
     address* -- picking a bind target, excluding link-local, matching a subnet
     -- want the flattened view instead, and would otherwise write the same
     nested loop each time::
@@ -1475,7 +1475,7 @@ def iter_addresses(
         that family; ``None`` for both. Anything else raises
         :class:`ValueError` **when this function is called**, not on the first
         ``next()``: a generator that validates lazily reports a bad argument
-        from somewhere the traceback no longer names the caller.
+        from somewhere the traceback does not name the caller.
 
     The ``interface`` is the full :class:`Interface`, so its name, MAC and MTU
     stay reachable -- the flattening loses no information.

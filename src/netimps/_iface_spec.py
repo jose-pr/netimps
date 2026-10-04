@@ -20,8 +20,9 @@ must -- an address that no local interface claims can still be handed to the OS
 verbatim, while an interface *index* cannot be invented -- and only when
 ``strict=False`` says the caller will check the result itself.
 
-Re-exported from nothing -- this is used internally by ``_ping``,
-``_multicast`` and ``_sockets``.
+Used internally by ``_ping``, ``_multicast``, ``_sockets`` and ``_udp``. Only
+:data:`InterfaceLike` is re-exported from :mod:`netimps`; the two functions are
+not part of the public surface.
 """
 
 from __future__ import annotations
@@ -38,8 +39,8 @@ __all__ = ["interface_address", "interface_index"]
 #: The loose "which interface?" spec every ``src=``/``interface=`` parameter
 #: in the package accepts: an :class:`Interface`, a :class:`MACAddress` (or
 #: MAC string), an adapter name, an address, or ``None`` for "no preference".
-#: Kept private -- this documents an established, repeated parameter shape
-#: rather than something a caller constructs or imports directly.
+#: Re-exported from :mod:`netimps` for annotations: it names a parameter shape
+#: rather than something a caller constructs.
 InterfaceLike = Optional[Union[Interface, MACAddress, IPAddress, str]]
 
 
@@ -103,10 +104,10 @@ def interface_address(
         string), an adapter name, an address, or ``None``.
     :param want_ipv6: the family the caller can use -- ``False`` for IPv4,
         ``True`` for IPv6, ``None`` for "either". It picks which address of an
-        ``Interface`` to take **and** is checked against a bare address spec,
-        which it used to ignore: a wrong-family literal otherwise sailed
-        through to ``inet_aton`` or ``bind`` and failed there instead, naming
-        neither the spec nor the family that was wanted.
+        ``Interface`` to take **and** is checked against a bare address spec:
+        a wrong-family literal would otherwise sail through to ``inet_aton`` or
+        ``bind`` and fail there, naming neither the spec nor the family that
+        was wanted.
     :param strict: when True (the default) an unresolvable spec raises
         :class:`ValueError`; when False it returns the best answer it has and
         never raises.
@@ -117,11 +118,11 @@ def interface_address(
     A non-loopback address is preferred when an ``Interface`` has several; a
     loopback one is used only if that is genuinely all it has.
 
-    The ``strict`` split exists because the two original callers disagreed:
-    multicast raised on an unknown interface (a join to the wrong adapter
-    silently receives nothing, so failing loudly is right), while ``ping``
-    returned ``None`` and reported a falsy result. Both are preserved, and the
-    split now also decides how hard a bare *address* spec is checked:
+    The ``strict`` split exists because the callers disagree: multicast raises
+    on an unknown interface (a join to the wrong adapter silently receives
+    nothing, so failing loudly is right), while ``ping`` returns ``None`` and
+    reports a falsy result. The split also decides how hard a bare *address*
+    spec is checked:
 
     * ``strict=True`` -- the address must be of the wanted family and must be
       held by a local interface, the same rule :func:`interface_index` applies.
