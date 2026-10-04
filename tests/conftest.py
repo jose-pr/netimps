@@ -20,13 +20,22 @@ fixture, which documents itself in the test body.
 from __future__ import annotations
 
 import ipaddress
+import json
 import os
 import socket
 import subprocess
+import sys
 import urllib.parse
 import urllib.request
 
 import pytest
+
+from netimps import _proc
+
+#: Directories holding a fake program from :func:`fake_program`. A fake called
+#: ``nslookup`` is a local script that sends nothing, so the guard that refuses
+#: a real ``nslookup`` to an off-host name must not refuse it.
+_FAKE_DIRECTORIES = set()
 
 #: Names answered from the host's own configuration rather than a name server.
 _LOCAL_NAMES = frozenset(
@@ -199,8 +208,15 @@ def _install_query_guards(monkeypatch, refuse) -> None:
     def popen_init(self, args, *rest, **kwargs):
         argv = list(args) if isinstance(args, (list, tuple)) else [args]
         program = os.path.basename(str(argv[0])).lower()
-        if program.startswith("nslookup") and not all(
-            _stays_on_host(arg) for arg in map(str, argv[1:]) if not arg.startswith("-")
+        is_fake = os.path.normcase(os.path.dirname(str(argv[0]))) in _FAKE_DIRECTORIES
+        if (
+            program.startswith("nslookup")
+            and not is_fake
+            and not all(
+                _stays_on_host(arg)
+                for arg in map(str, argv[1:])
+                if not arg.startswith("-")
+            )
         ):
             refuse("subprocess.Popen(%r)" % (argv,))
         real_popen_init(self, args, *rest, **kwargs)
@@ -332,3 +348,143 @@ def no_such_host(monkeypatch):
         lambda host, *a, **k: fail("gethostbyaddr", real_gethostbyaddr, host, *a, **k),
     )
     return True
+
+
+# --------------------------------------------------------------------------- #
+# Fake programs                                                                #
+# --------------------------------------------------------------------------- #
+
+#: The script every fake runs. ``{config}`` is a Python literal; the call log is
+#: one JSON array of arguments per line, which is how a test reads back what the
+#: library actually passed.
+_FAKE_SCRIPT = """\
+import json, os, subprocess, sys, time
+
+CONFIG = {config!r}
+LOG = {log!r}
+HANG_PIDS = {pids!r}
+
+try:
+    with open(LOG, encoding="utf-8") as handle:
+        index = sum(1 for _ in handle)
+except OSError:
+    index = 0
+with open(LOG, "a", encoding="utf-8") as handle:
+    handle.write(json.dumps(sys.argv[1:]) + "\\n")
+
+
+def pick(key):
+    value = CONFIG[key]
+    if isinstance(value, list):
+        return value[min(index, len(value) - 1)]
+    return value
+
+
+if CONFIG["hang"]:
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(600)"]
+    )
+    with open(HANG_PIDS, "w") as handle:
+        handle.write(json.dumps([os.getpid(), child.pid]))
+    time.sleep(600)
+
+sys.stdout.buffer.write(pick("stdout"))
+sys.stdout.buffer.flush()
+sys.stderr.buffer.write(pick("stderr"))
+sys.stderr.buffer.flush()
+sys.exit(pick("returncode"))
+"""
+
+
+class FakeProgram:
+    """A program on ``PATH`` that records its arguments and prints what it was told."""
+
+    def __init__(self, directory, name):
+        self.directory = directory
+        self.name = name
+        self.log = directory / (name + ".calls")
+        self.pids = directory / (name + ".pids")
+
+    @property
+    def calls(self):
+        """Every argument list the fake was run with, oldest first."""
+        if not self.log.exists():
+            return []
+        lines = self.log.read_text(encoding="utf-8").splitlines()
+        return [json.loads(line) for line in lines]
+
+    @property
+    def argv(self):
+        """The arguments of the most recent run (the program itself is not in it)."""
+        calls = self.calls
+        assert calls, "%s was never run" % (self.name,)
+        return calls[-1]
+
+    @property
+    def hung_pids(self):
+        """Process ids of a ``hang=True`` fake and of the child it started."""
+        return json.loads(self.pids.read_text()) if self.pids.exists() else []
+
+
+def _as_bytes(value):
+    if isinstance(value, (list, tuple)):
+        return [_as_bytes(item) for item in value]
+    if isinstance(value, str):
+        return value.encode(_proc._ENCODING)
+    return value
+
+
+@pytest.fixture
+def fake_program(tmp_path, monkeypatch):
+    """Put a fake program first on ``PATH`` and return a handle to it.
+
+    ``fake_program("ping", stdout=..., returncode=...)`` writes an executable
+    named ``ping`` that prints ``stdout`` (``str``, encoded the way the runner
+    decodes, or raw ``bytes``) and ``stderr``, exits with ``returncode``, or
+    with ``hang=True`` starts a child and sleeps. Each of the three may be a
+    list: one entry per run, the last one repeating. The library runs the real
+    spawn, decode and timeout path against it; nothing is patched.
+
+    POSIX: a script with a ``#!`` line naming the running interpreter, mode
+    0o755. Windows: a ``.exe`` launcher built by ``distlib``, because a ``.cmd``
+    shim is refused by the runner and would not be what the library runs.
+    """
+    directory = tmp_path / "fake-bin"
+    directory.mkdir()
+    sources = tmp_path / "fake-src"
+    sources.mkdir()
+    _FAKE_DIRECTORIES.add(os.path.normcase(str(directory)))
+    monkeypatch.setenv("PATH", str(directory) + os.pathsep + os.environ.get("PATH", ""))
+    _proc.clear_cache()
+
+    def make(name, stdout="", stderr="", returncode=0, hang=False):
+        fake = FakeProgram(directory, name)
+        script = _FAKE_SCRIPT.format(
+            config={
+                "stdout": _as_bytes(stdout),
+                "stderr": _as_bytes(stderr),
+                "returncode": returncode,
+                "hang": hang,
+            },
+            log=str(fake.log),
+            pids=str(fake.pids),
+        )
+        if sys.platform == "win32":
+            distlib_scripts = pytest.importorskip("distlib.scripts")
+            source = sources / (name + ".py")
+            source.write_bytes(("#!python\n" + script).encode("utf-8"))
+            maker = distlib_scripts.ScriptMaker(
+                str(sources), str(directory), add_launchers=True
+            )
+            maker.clobber = True
+            maker.make(source.name)
+        else:
+            target = directory / name
+            target.write_bytes(("#!" + sys.executable + "\n" + script).encode("utf-8"))
+            target.chmod(0o755)
+        _proc.clear_cache()
+        return fake
+
+    yield make
+    _FAKE_DIRECTORIES.discard(os.path.normcase(str(directory)))
+    _proc.clear_cache()

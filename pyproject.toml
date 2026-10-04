@@ -33,7 +33,7 @@ dependencies = []
 dns = ['dnspython']
 # The CLI is optional: importing netimps must never require duho.
 cli = ['duho>=0.6.0,<0.7']
-dev = ['build', 'twine', 'hatchling', 'pytest', 'black', 'mypy<2', 'duho>=0.6.0,<0.7', 'dnspython']
+dev = ['build', 'twine', 'hatchling', 'pytest', 'black', 'mypy<2', 'duho>=0.6.0,<0.7', 'dnspython', 'distlib>=0.4.0,<0.5']
 docs = ['mkdocs', 'mkdocs-material', 'mkdocstrings[python]']
 
 [project.scripts]
