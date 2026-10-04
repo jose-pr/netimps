@@ -28,13 +28,16 @@ Patching only ``recvmsg`` would let that detection succeed and then fail on the
 *next* line, turning "this platform cannot do it" into "this library is
 broken". The patch is all four names or none.
 
-**What the patch deliberately does not do: fake Linux's byte layouts.** The
-cmsg payloads stay exactly as the platform produces them, because they genuinely
-differ -- Windows' ``IN_PKTINFO`` is ``{addr; ifindex}`` at 8 bytes, Linux's is
-``{ifindex; spec_dst; addr}`` at 12, and ``IP_PKTINFO`` is 19 here against 8
-there. Normalising the bytes would let POSIX-shaped parsing code read a
-*plausible wrong address* instead of failing honestly, which is the worse
-outcome. Socket constants are not portable on any other platform pair either.
+**Byte layouts.** The cmsg payloads genuinely differ by platform -- Windows'
+``IN_PKTINFO`` is ``{addr; ifindex}`` at 8 bytes, Linux's is ``{ifindex;
+spec_dst; addr}`` at 12, and ``IP_PKTINFO`` is 19 on Windows against 8 on Linux.
+:func:`recvmsg` and :func:`sendmsg` pass the platform's own bytes through. The
+patched ``sock.recvmsg`` is for POSIX-shaped code, so it re-lays the IPv4
+``IP_PKTINFO`` payload into the 12-byte POSIX layout (``ipi_spec_dst`` is zero,
+as on macOS), and the patched ``sock.sendmsg`` accepts either layout. Every
+other payload is left as the platform produced it, since POSIX-shaped parsing
+code reading a *plausible wrong address* is worse than failing honestly. Socket
+constants are not portable on any other platform pair either.
 :mod:`netimps._udp` owns the per-platform layout table; consult it rather than
 assuming.
 
@@ -109,7 +112,7 @@ def _native(candidate: "Any") -> "Any":
 #: function as ``socket.socket.recvmsg``, a ``hasattr`` check would find it and
 #: :func:`recvmsg` would call itself forever. Binding the native method up
 #: front removes the possibility rather than guarding against it. A function
-#: an earlier copy of this package installed is not native.
+#: another copy of this package installed is not native.
 _NATIVE_RECVMSG = _native(getattr(_socket.socket, "recvmsg", None))
 _NATIVE_SENDMSG = _native(getattr(_socket.socket, "sendmsg", None))
 _NATIVE_CMSG_LEN = _native(getattr(_socket, "CMSG_LEN", None))
@@ -338,9 +341,6 @@ def _from_posix_shape(
     return out
 
 
-#: What :func:`patch_socket_module` installed, so it can be undone exactly.
-#: Empty means nothing is installed, which is the state on every platform whose
-#: CPython already provides these.
 #: What ``SC_IOV_MAX`` is reported as where the platform has no ``sysconf``.
 #:
 #: **There is nothing to query.** Windows exposes no buffer-count limit: the
@@ -396,7 +396,7 @@ def _shim_sysconf(name: "Any") -> int:
     Measured: raising ``OSError`` for everything rescues asyncio and breaks
     ``ProcessPoolExecutor``; raising ``ValueError`` or ``AttributeError`` for
     everything does the reverse. So ``SC_IOV_MAX`` returns a value -- which is
-    now honest, since :func:`sendmsg` works on a stream socket via ``WSASend`` --
+    honest, since :func:`sendmsg` works on a stream socket via ``WSASend`` --
     and every other name raises :class:`ValueError`, which is both what POSIX
     ``sysconf`` does for an unrecognised name and what the other two callers
     already handle.
@@ -404,8 +404,7 @@ def _shim_sysconf(name: "Any") -> int:
     (``asyncio``'s guard is the outlier here. ``concurrent.futures`` catches
     ``AttributeError`` with the comment "sysconf not available or setting not
     available", so handling a missing ``sysconf`` is the established convention
-    and asyncio simply misses it. Worth reporting upstream; not something to wait
-    on.)
+    and asyncio does not handle it.)
     """
     try:
         return _SYSCONF_VALUES[name]
@@ -413,6 +412,9 @@ def _shim_sysconf(name: "Any") -> int:
         raise ValueError("unrecognized configuration name %r" % (name,))
 
 
+#: What :func:`patch_socket_module` installed, so it can be undone exactly.
+#: Empty means nothing is installed, which is the state on every platform whose
+#: CPython already provides these.
 _installed: "Dict[str, Any]" = {}
 
 
@@ -444,9 +446,10 @@ def patch_socket_module(
 
     Idempotent in both directions, and strictly additive: a name the platform
     already provides is never replaced, so on Linux and macOS this is a
-    verified no-op. A name an earlier copy of this package installed is taken
-    over, so the second import of the package in a process owns the patch. ``enable=False`` removes exactly what was installed,
-    leaving a natively-provided name alone.
+    verified no-op. A name another copy of this package installed is taken
+    over, so the second import of the package in a process owns the patch.
+    ``enable=False`` removes exactly what was installed, leaving a
+    natively-provided name alone.
 
     On a platform with no ``os.sysconf`` this also installs one -- see
     :func:`_shim_sysconf` for why that is part of the same patch rather than a

@@ -31,8 +31,8 @@ three differ:
 Note the v6 asymmetry -- the option you *set* is not the cmsg type you
 *match* -- and the reversed field order. Neither is a detail you can guess.
 **Windows has no ``IPV6_RECVPKTINFO`` at all**, and setting ``IPV6_PKTINFO``
-is what enables receipt there; asking only for the former silently disabled
-IPv6 pktinfo on that platform until it was measured on CI.
+is what enables receipt there; asking only for the former silently disables
+IPv6 pktinfo on that platform.
 
 The v4 struct, which is three different things
 ----------------------------------------------
@@ -281,13 +281,11 @@ def _pktinfo_options(family: int) -> "Tuple[int, Optional[int], Optional[int], s
 
     **Windows has no ``IPV6_RECVPKTINFO`` at all**: there ``IPV6_PKTINFO`` (19)
     is both the request and the carrier, and setting it is what enables receipt.
-    Asking only for ``IPV6_RECVPKTINFO`` therefore found ``None`` and silently
-    turned IPv6 pktinfo off on Windows -- measured on a CI runner, where
+    Asking only for ``IPV6_RECVPKTINFO`` therefore finds ``None`` and silently
+    turns IPv6 pktinfo off on Windows -- measured on a CI runner, where
     ``UDPEndpoint(bind("::", 0)).has_pktinfo`` was ``False`` while a raw
-    ``recvmsg`` on the same socket delivered the cmsg perfectly well. The
-    round-trip test passed anyway, by taking its own `not has_pktinfo`
-    early-exit branch, which is why the fallback below is explicit rather than
-    left to a reader to infer.
+    ``recvmsg`` on the same socket delivered the cmsg perfectly well. Hence the
+    fallback below is explicit.
 
     Either may be ``None`` where the platform exports neither; the caller
     turns that into a ``supports_*`` flag rather than an error.
@@ -396,11 +394,10 @@ class Datagram(NamedTuple):
         **Use this, not ``sender``, to answer a datagram.** On a dual-stack
         ``AF_INET6`` listener a v4 client's ``sender`` is the v6 4-tuple
         ``('::ffff:127.0.0.1', port, 0, 0)``, while ``reply_socket`` correctly
-        hands back an ``AF_INET`` socket -- and so the documented
-        ``reply.sendto(answer, packet.sender)`` raised ``TypeError: AF_INET
-        address must be a pair (host, port)``. Every caller had to unmap the
-        sender itself to match a family the library had chosen for them, which
-        is work the library should do::
+        hands back an ``AF_INET`` socket -- so ``reply.sendto(answer,
+        packet.sender)`` raises ``TypeError: AF_INET address must be a pair
+        (host, port)``. ``reply_address`` is the sender already in the family
+        the library chose, so the caller does not unmap it::
 
             with endpoint.reply_socket(packet) as reply:
                 reply.sendto(answer, packet.reply_address)
@@ -481,7 +478,7 @@ class UDPEndpoint:
         self._cmsg_size = 0
         self._iface_cache: "Dict[int, Optional[Interface]]" = {}
         self._iface_cache_at = 0.0
-        #: Created on the first `arecv`, so a synchronous consumer never pays
+        #: Created on the first `arecv`, so a synchronous caller never pays
         #: for it -- on Windows it owns a thread.
         self._notifier: "Any" = None
         self._closed = False
@@ -546,14 +543,12 @@ class UDPEndpoint:
     def _interface_for(self, index: int) -> "Optional[Interface]":
         """Resolve an arrival index to an :class:`Interface`, with a cache.
 
-        ``recv`` used to call :func:`get_interfaces` and scan it on **every**
-        datagram. Measured on Windows loopback with 300-octet packets:
-        **1.07 ms per packet** against 0.015 ms with ``resolve_interface=False``,
-        a 70x cost on the default path, and worse on a host with more adapters --
-        a consuming project measured 35-42 ms per enumeration. The sender
-        controls the packet rate in a server loop, so that cost is on the hot
-        path by definition, and the class docstring's own example uses the
-        default and reads ``.interface``: the documented usage was the slow one.
+        Calling :func:`get_interfaces` and scanning it on **every** datagram
+        costs, measured on Windows loopback with 300-octet packets, **1.07 ms
+        per packet** against 0.015 ms with ``resolve_interface=False`` -- a 70x
+        cost on the default path, and 35-42 ms per enumeration on a host with
+        many adapters. The sender controls the packet rate in a server loop, so
+        that cost is on the hot path by definition.
 
         Cached per endpoint, keyed by index, and refreshed on a **miss** as well
         as on a TTL. A miss is the interesting signal: an index this endpoint has
@@ -678,8 +673,8 @@ class UDPEndpoint:
         Both halves of the struct are filled where they resolve. Index alone
         is "this adapter, kernel picks the address"; address alone is "this
         address, kernel picks the adapter" -- and the outgoing struct is the
-        only place the interface can be named, which the previous
-        hardcoded-zero index never did.
+        only place the interface can be named; an index fixed at zero never
+        names one.
         """
         if not self.has_src_pinning:
             return None
@@ -810,9 +805,8 @@ class UDPEndpoint:
         raises :class:`ValueError` rather than reporting a success that did
         not happen.
 
-        **Windows is supported**, via ``WSASendMsg``; this used to say the
-        opposite, and did so for a while after it stopped being true. The one
-        gap there is pinning by interface *index alone*, which raises
+        **Windows is supported**, via ``WSASendMsg``. The one gap there is
+        pinning by interface *index alone*, which raises
         :class:`ValueError` rather than degrading, because Windows sends a zero
         source address literally where POSIX reads it as "kernel chooses".
 
@@ -856,11 +850,12 @@ class UDPEndpoint:
         listener's family cannot reach it, because the socket comes up with
         ``IPV6_V6ONLY=1`` on Windows and ``sendto`` to a mapped address is then
         refused outright (``WinError 10049``). Deciding from the sender means
-        the answer is the same with or without pktinfo, which is the point --
-        the no-pktinfo path was the one that silently never replied.
+        the answer is the same with or without pktinfo; a decision taken from
+        the arrival address would leave the no-pktinfo path silently never
+        replying.
 
         Falls back to the socket's own family when the sender cannot be parsed,
-        which is the old behaviour and the only thing left to guess with.
+        the only thing left to guess with.
         """
         from ._ip import unmap
 
@@ -924,17 +919,16 @@ class UDPEndpoint:
         broadcast or multicast destination, a link-local one whose scope is
         wrong) advances to the next *address*; a port that is merely held
         advances to the next *port* on the same address. Conflating them is a
-        silent correctness bug, and it was this method's: every ``OSError``
-        advanced the address, so an explicit ``port=`` already taken on the
-        arrival address fell through to the endpoint's own address and then the
-        wildcard **with the same port** -- and where that later bind succeeded,
-        the reply left from an address the client never addressed, which is the
-        one failure this method exists to prevent. So when the ports run out on
-        an address, this raises :class:`netimps.AddressInUseError` rather than
-        answering from somewhere else.
+        silent correctness bug: if every ``OSError`` advanced the address, an
+        explicit ``port=`` already taken on the arrival address would fall
+        through to the endpoint's own address and then the wildcard **with the
+        same port** -- and where that later bind succeeded, the reply would
+        leave from an address the client never addressed, the one failure this
+        method exists to prevent. So when the ports run out on an address, this
+        raises :class:`netimps.AddressInUseError` rather than answering from
+        somewhere else.
 
-        Three things make this worth a method, each found by measurement rather
-        than reasoning:
+        Three things make this worth a method, each established by measurement:
 
         - **A v4 arrival on a dual-stack listener is ``::ffff:a.b.c.d``**, and
           binding that needs an ``AF_INET6`` socket with ``IPV6_V6ONLY`` off --
@@ -1101,9 +1095,9 @@ class UDPEndpoint:
         awaiting the same endpoint would race for the same datagram regardless of
         how the waiting were arranged.
 
-        The socket's timeout is left as it was found: the read is made
-        non-blocking only for the duration of one call, so a synchronous
-        :meth:`recv` on the same endpoint behaves as before.
+        The socket's timeout is left as it is: the read is made non-blocking
+        only for the duration of one call, so a synchronous :meth:`recv` on the
+        same endpoint is unaffected.
 
         :raises RuntimeError: if the endpoint is closed, or is closed while this
             is waiting.
@@ -1208,7 +1202,7 @@ class UDPEndpoint:
         """The endpoint's readability notifier, created on first await.
 
         Lazy on purpose: ``asyncio`` is not imported at package import time -- see
-        the note in :mod:`netimps._aio` -- and a purely synchronous consumer
+        the note in :mod:`netimps._aio` -- and a purely synchronous caller
         should not pay for a thread it never uses.
         """
         if self._notifier is None:

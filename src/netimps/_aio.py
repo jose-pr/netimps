@@ -19,7 +19,7 @@ behaviour for a caller who passed a smaller one.
 
 ``asyncio`` is imported lazily by the caller, not at package import time: pulling
 it into ``netimps/__init__`` would force the import ordering that produced the
-``os.sysconf`` crash, and make an async dependency mandatory for consumers that
+``os.sysconf`` crash, and make an async dependency mandatory for callers that
 are only using value types.
 """
 
@@ -191,13 +191,13 @@ class ReadNotifier:
             if self._loop is loop:
                 return
             # **A second loop, so rebind rather than post to the first.**
-            # `_run` captured its loop for the life of the thread, so serving one
+            # `_run` captures its loop for the life of the thread, so serving one
             # endpoint from a new loop -- `asyncio.run(serve())` twice, or a
-            # server stopped and restarted -- sent readiness to a closed loop.
-            # Measured: the second run timed out while the thread died with an
-            # unhandled "Event loop is closed" from `call_soon_threadsafe`.
-            # Previously the only reset was `close()`, which also closes the
-            # socket, so there was no way to keep the endpoint and change loop.
+            # server stopped and restarted -- would send readiness to a closed
+            # loop. Measured: the second run timed out while the thread died
+            # with an unhandled "Event loop is closed" from
+            # `call_soon_threadsafe`. `close()` also closes the socket, so it is
+            # no way to keep the endpoint and change loop.
             self._retire_thread()
 
         self._loop = loop

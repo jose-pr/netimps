@@ -16,7 +16,7 @@ Shapes match CPython's exactly -- ``recvmsg`` returns
 ``(data, ancdata, msg_flags, address)`` and ``sendmsg`` takes
 ``(buffers, ancdata, flags, address)`` -- so a caller cannot tell ours from the
 native one apart from the platform it is running on. That is deliberate: the
-alternative is every consumer growing its own ``if win32`` fork.
+alternative is every caller growing its own ``if win32`` fork.
 
 Things measured on real sockets rather than assumed, each of which contradicts
 what a reader would reasonably guess from the POSIX equivalents:
@@ -221,8 +221,7 @@ def available() -> bool:
     """Whether this module's bindings loaded.
 
     Always ``True`` once the module imports -- the import itself is what fails
-    on a platform without ``ws2_32``. It exists so callers can express intent
-    without a bare ``try: import``.
+    on a platform without ``ws2_32``.
     """
     return True
 
