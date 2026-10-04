@@ -31,6 +31,7 @@ from typing import Optional, Union
 from ._ifaddrs import Interface
 from ._ip import IPAddress
 from ._mac import MACAddress
+from ._parse import is_valid, parse, try_parse
 
 __all__ = ["interface_address", "interface_index"]
 
@@ -51,7 +52,6 @@ def _without_zone(address: "IPAddress") -> "IPAddress":
     *interface*, not the address, so it is stripped before any lookup and kept
     only in what is returned to the caller.
     """
-    from . import IPAddress, parse
 
     if not getattr(address, "scope_id", None):
         return address
@@ -123,7 +123,7 @@ def interface_address(
       IPv6 socket into a v4-mapped one, and rejects the reverse with its own
       message.
     """
-    from . import IPAddress, MACAddress, interface_for, is_valid, try_parse
+    from ._sockets import interface_for
     from ._ifaddrs import Interface, get_interfaces
 
     if interface is None:
@@ -227,7 +227,7 @@ def interface_index(interface: "InterfaceSpec", strict: bool = True) -> "Optiona
     scoped literal failed the lookup outright -- ``ipaddress`` keeps the zone
     as part of the address, so ``fe80::1%12`` matches no enumerated address.
     """
-    from . import IPAddress, MACAddress, interface_for, is_valid, try_parse
+    from ._sockets import interface_for
     from ._ifaddrs import Interface, get_interfaces
 
     if interface is None:

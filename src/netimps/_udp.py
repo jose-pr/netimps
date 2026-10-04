@@ -106,6 +106,8 @@ from ._msg import CMSG_SPACE as _cmsg_space
 from ._msg import recvmsg as _recvmsg
 from ._msg import sendmsg as _sendmsg
 from ._msg import supports_recvmsg as _supports_recvmsg
+from ._multicast import is_multicast
+from ._parse import parse, try_parse
 
 __all__ = ["UdpEndpoint", "Datagram"]
 
@@ -257,7 +259,6 @@ def _unpack_pktinfo(
     too short to be one: a truncated struct is treated as absent rather than
     guessed at, and the caller keeps scanning the remaining messages.
     """
-    from . import try_parse
 
     if level == _socket.IPPROTO_IP and ctype in _V4_PKTINFO_TYPES:
         size = _struct.calcsize(_PKTINFO_V4)
@@ -338,7 +339,6 @@ class Datagram(NamedTuple):
         else is returned unchanged, so this is the right thing to pass on a
         single-family listener too.
         """
-        from . import IPAddress, try_parse
         from ._ip import unmap
 
         sender = self.sender
@@ -715,7 +715,6 @@ class UdpEndpoint:
         Falls back to the socket's own family when the sender cannot be parsed,
         which is the old behaviour and the only thing left to guess with.
         """
-        from . import IPAddress, try_parse
         from ._ip import unmap
 
         sender = datagram.sender
@@ -746,7 +745,6 @@ class UdpEndpoint:
         :func:`netimps.is_broadcast` is for. Passing ``interface`` keeps that
         check off the enumerating path.
         """
-        from . import is_multicast
         from ._ifaddrs import is_broadcast
 
         if local.is_unspecified or local.is_multicast:
@@ -830,7 +828,6 @@ class UdpEndpoint:
         :raises AddressInUseError: every port was held on an otherwise bindable
             address. Deliberately *not* a fallback to a different address.
         """
-        from . import IPAddress, parse
         from ._ip import unmap
 
         # **The sender's real family decides the reply socket's**, not the

@@ -33,14 +33,19 @@ from ._iface_spec import interface_index as _interface_index
 from ._exceptions import AddressInUseError
 from ._ifaddrs import Interface
 from ._ip import (
+    LOOPBACK_V4,
+    LOOPBACK_V6,
     AddressLike,
     IPAddress,
     IPAddressLike,
     IPInterface,
     IPNetwork,
     _dst_argument,
+    get_ip,
 )
 from ._mac import MACAddress
+from ._parse import parse, try_parse
+from ._ping import ping
 from ._scheme import coerce_port as _coerce_port
 from typing import Any, Iterable, Iterator, List, NamedTuple, Optional, Tuple, Union
 
@@ -481,7 +486,6 @@ def _classify_interface_query(query: _InterfaceQuery) -> "Tuple[str, Any]":
     """Return the lookup kind and normalised value, or ``("invalid", None)``."""
     import ipaddress as _ipaddress
 
-    from . import IPAddress, IPNetwork, MACAddress, try_parse
     from ._ifaddrs import Interface
 
     if isinstance(query, Interface):
@@ -666,7 +670,6 @@ def is_local_address(
         loopback address short-circuits before any enumeration, so the cache
         only matters for the addresses that actually reach the adapter scan.
     """
-    from . import IPAddress, parse
 
     wanted = parse(address, IPAddress)
     if wanted.is_loopback:
@@ -736,7 +739,6 @@ def get_source_ip(
     The returned address carries no ``%zone``: the zone identifies the adapter
     rather than the address, and :func:`interface_for` is the way back to it.
     """
-    from . import parse
 
     dst = _dst_argument(dst)
     for family, sockaddr in _resolve_targets(dst, port, ipv6, _socket.SOCK_DGRAM):
@@ -1184,7 +1186,6 @@ def _posix_next_hop(dst: str, ipv6: bool = False) -> "Optional[_NextHop]":
     # /proc/net/route omits loopback entirely on many kernels, so a lookup for
     # 127.0.0.1 would fall through to the default route (mask 0) and report the
     # LAN gateway. Loopback is on-link by definition; answer it directly.
-    from . import LOOPBACK_V4, try_parse
 
     parsed_dest = try_parse(dst)
     if parsed_dest is not None and parsed_dest in LOOPBACK_V4:
@@ -1291,7 +1292,6 @@ def _parse_route_get_output(text: str) -> "Optional[_NextHop]":
     all. Returns ``None`` only when there is no ``interface:`` either, i.e.
     when nothing was matched.
     """
-    from . import try_parse
 
     gateway = None
     name = None
@@ -1323,7 +1323,6 @@ def _bsd_next_hop(dst: str, ipv6: bool = False) -> "Optional[_NextHop]":
     and ``stdin`` is ``DEVNULL`` because a library must never consume its
     caller's. Any failure is ``None``: unknown, not on-link.
     """
-    from . import LOOPBACK_V4, LOOPBACK_V6, try_parse
 
     # Loopback is on-link by definition, so answer it without spawning
     # anything -- and without depending on how this platform's `route` chooses
@@ -1396,7 +1395,6 @@ def get_route(
     ``None``/``0`` rather than an error. A network passed as ``dst`` still
     raises :class:`TypeError`.
     """
-    from . import get_ip, try_parse
 
     dst = _dst_argument(dst)
     parsed_dest = get_ip(dst, ipv6)
@@ -1919,7 +1917,6 @@ def discover_mtu(
     if method == "udp":
         return _discover_mtu_udp(dst, port, low, high, timeout, ping_kwargs.get("ipv6"))
 
-    from . import ping
     from ._ping import supports_dont_fragment
 
     if not supports_dont_fragment(dst, ping_kwargs.get("ipv6")):
@@ -2098,7 +2095,6 @@ def _ip_header_bytes(dst) -> int:
     over-reporting an MTU causes drops while under-reporting only wastes a
     little headroom.
     """
-    from . import try_parse
 
     parsed = try_parse(dst)
     if parsed is None:

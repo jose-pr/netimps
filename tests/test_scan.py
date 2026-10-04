@@ -338,7 +338,7 @@ def test_probe_tries_every_resolved_address(monkeypatch):
         tried.append(dst)
         return dst == "127.0.0.1"
 
-    monkeypatch.setattr(netimps, "tcp_check", fake_tcp_check)
+    monkeypatch.setattr(netimps._scan, "tcp_check", fake_tcp_check)
 
     assert _probe(["::1", "127.0.0.1"], 80, 1.0) is True
     assert tried == ["::1", "127.0.0.1"]
@@ -382,7 +382,7 @@ def test_scan_hosts_with_an_empty_ports_list_probes_nothing(monkeypatch):
         probed.append(port)
         return False
 
-    monkeypatch.setattr(netimps, "tcp_check", fake_tcp_check)
+    monkeypatch.setattr(netimps._scan, "tcp_check", fake_tcp_check)
 
     assert scan_hosts("127.0.0.1/32", ports=[], timeout=0.5) == []
     assert probed == []

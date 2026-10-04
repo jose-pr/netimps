@@ -37,7 +37,9 @@ from typing import List, Optional, Union
 
 from ._iface_spec import InterfaceSpec, interface_address as _interface_address
 from ._iface_spec import interface_index as _interface_index
-from ._ip import AddressLike
+from ._ifaddrs import get_interfaces
+from ._ip import AddressLike, IPAddress
+from ._parse import try_parse
 
 __all__ = ["multicast_socket", "join_group", "leave_group", "is_multicast"]
 
@@ -64,7 +66,6 @@ def is_multicast(address: "AddressLike") -> bool:
 
     Never raises: anything unparseable is ``False``.
     """
-    from . import IPAddress, try_parse
 
     from ._ip import _dst_argument
 
@@ -123,7 +124,6 @@ def _default_v6_scope(group: str) -> int:
     """
     if not _NEEDS_EXPLICIT_V6_SCOPE:
         return 0
-    from . import try_parse
 
     parsed = try_parse(group)
     if parsed is None or parsed.version != 6 or not parsed.is_multicast:
@@ -136,8 +136,6 @@ def _default_v6_scope(group: str) -> int:
     # interface to be meaningful.
     if parsed.packed[1] & 0x0F > _LINK_LOCAL_SCOPE:
         return 0
-
-    from . import get_interfaces
 
     for iface in get_interfaces():
         if iface.is_loopback or not iface.index:

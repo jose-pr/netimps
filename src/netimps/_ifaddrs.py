@@ -76,6 +76,8 @@ from typing import (
     Tuple,
     Union,
 )
+from ._ip import unmap
+from ._parse import try_parse
 
 __all__ = [
     "Interface",
@@ -898,7 +900,6 @@ def _mac(octets: bytes) -> "Optional[MACAddress]":
     ``MACAddress(b"\\x00" * 6)`` itself stays perfectly valid -- this is a
     normalisation of what the OS reported, not a change to the type.
     """
-    from . import MACAddress
 
     if not any(octets):
         return None
@@ -1157,7 +1158,6 @@ def is_broadcast(
 
     Never raises: an address it cannot parse is not a broadcast.
     """
-    from . import try_parse, unmap
     from ._ip import IPAddress, IPv4Address
 
     parsed = address if isinstance(address, (IPv4Address,)) else None

@@ -546,7 +546,7 @@ def test_discover_mtu_ignores_the_kernel_by_default(monkeypatch):
     monkeypatch.setattr(
         _sockets, "get_pmtu", lambda *a, **k: pytest.fail("default must probe")
     )
-    monkeypatch.setattr(netimps, "ping", _fake_ping(1500))
+    monkeypatch.setattr(netimps._sockets, "ping", _fake_ping(1500))
     assert netimps.discover_mtu("10.0.0.1") == 1500
 
 
@@ -567,7 +567,7 @@ def _fake_ping(limit):
 
 def test_discover_mtu_finds_the_boundary(monkeypatch):
     monkeypatch.setattr(netimps._sockets, "ping", _fake_ping(1500), raising=False)
-    monkeypatch.setattr(netimps, "ping", _fake_ping(1500))
+    monkeypatch.setattr(netimps._sockets, "ping", _fake_ping(1500))
     assert netimps.discover_mtu("10.0.0.1") == 1500
 
 
@@ -580,20 +580,22 @@ def test_discover_mtu_accepts_interface_object(monkeypatch):
         return netimps.PingResult((size or 0) + 28 <= 1500, dst)
 
     monkeypatch.setattr(netimps._sockets, "ping", fake_ping, raising=False)
-    monkeypatch.setattr(netimps, "ping", fake_ping)
+    monkeypatch.setattr(netimps._sockets, "ping", fake_ping)
     assert netimps.discover_mtu(IPv4Interface("10.0.0.1/24")) == 1500
     assert all(d == "10.0.0.1" for d in seen)
 
 
 @pytest.mark.parametrize("limit", [576, 1280, 1420, 1500, 9000])
 def test_discover_mtu_across_common_values(monkeypatch, limit):
-    monkeypatch.setattr(netimps, "ping", _fake_ping(limit))
+    monkeypatch.setattr(netimps._sockets, "ping", _fake_ping(limit))
     assert netimps.discover_mtu("10.0.0.1") == limit
 
 
 def test_discover_mtu_returns_none_when_nothing_answers(monkeypatch):
     """A firewalled host must not read as a tiny MTU."""
-    monkeypatch.setattr(netimps, "ping", lambda *a, **k: netimps.PingResult(False, "x"))
+    monkeypatch.setattr(
+        netimps._sockets, "ping", lambda *a, **k: netimps.PingResult(False, "x")
+    )
     assert netimps.discover_mtu("10.0.0.1") is None
 
 
@@ -605,7 +607,7 @@ def test_discover_mtu_short_circuits_at_the_ceiling(monkeypatch):
         calls.append(size)
         return netimps.PingResult(True, dst)
 
-    monkeypatch.setattr(netimps, "ping", ping)
+    monkeypatch.setattr(netimps._sockets, "ping", ping)
     assert netimps.discover_mtu("10.0.0.1", low=576, high=9000) == 9000
     assert len(calls) == 2, "one probe at the floor, one at the ceiling"
 
@@ -625,7 +627,7 @@ def test_discover_mtu_result_includes_headers(monkeypatch):
             survived.append(size)
         return netimps.PingResult(ok, dst)
 
-    monkeypatch.setattr(netimps, "ping", ping)
+    monkeypatch.setattr(netimps._sockets, "ping", ping)
     result = netimps.discover_mtu("10.0.0.1")
     assert result == 1500
     # The reported MTU is the largest surviving payload plus the 28-byte
@@ -906,7 +908,7 @@ def test_discover_mtu_forwards_ping_kwargs(monkeypatch):
         seen.append(kw)
         return netimps.PingResult((size or 0) + 28 <= 1500, dst)
 
-    monkeypatch.setattr(netimps, "ping", ping)
+    monkeypatch.setattr(netimps._sockets, "ping", ping)
     netimps.discover_mtu("10.0.0.1", tries=3, ipv6=False)
     assert seen and all(k == {"tries": 3, "ipv6": False} for k in seen)
 

@@ -24,8 +24,10 @@ import socket as _socket
 from concurrent.futures import ThreadPoolExecutor as _ThreadPool
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
-from ._ip import AddressLike, IPAddress, IPNetworkLike, _dst_argument
-from ._scheme import coerce_port
+from ._ip import AddressLike, IPAddress, IPNetwork, IPNetworkLike, _dst_argument
+from ._parse import parse, try_parse
+from ._scheme import coerce_port, get_default_port
+from ._sockets import tcp_check
 
 __all__ = ["scan_ports", "scan_hosts", "PORT_RANGES"]
 
@@ -131,7 +133,6 @@ def _probe_addresses(host: "AddressLike") -> "List[str]":
     that does not resolve yields an empty list -- the scan then finds nothing,
     which is what it found before, after one lookup instead of thousands.
     """
-    from . import try_parse
 
     dst = _dst_argument(host)
     if try_parse(dst, IPAddress) is not None:
@@ -158,7 +159,6 @@ def _probe(addresses: "Sequence[str]", port: int, timeout: float) -> bool:
     The scan worker. Takes already-resolved literals so no probe touches the
     resolver -- see :func:`_probe_addresses`.
     """
-    from . import tcp_check
 
     return any(tcp_check(address, port, timeout) for address in addresses)
 
@@ -183,7 +183,6 @@ def _resolve_ports(ports) -> "Sequence[int]":
     iterable stays empty -- it means "nothing to scan", never "the default
     set".
     """
-    from . import get_default_port
 
     if isinstance(ports, str):
         if ports in PORT_RANGES:
@@ -330,7 +329,6 @@ def scan_hosts(
     Refuses networks larger than /16 (or IPv6 /112): a /8 sweep is 16 million
     hosts, which is a mistake rather than an intention.
     """
-    from . import IPNetwork, parse
 
     net = parse(network, IPNetwork)
     if net.version == 4 and net.prefixlen < 16:

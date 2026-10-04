@@ -501,7 +501,7 @@ def test_resolve_is_a_pass_through(monkeypatch):
         seen["kwargs"] = kwargs
         return ["sentinel"]
 
-    monkeypatch.setattr(netimps, "resolve", fake_resolve)
+    monkeypatch.setattr(netimps._fqdn, "resolve", fake_resolve)
     result = Fqdn("www.example.com").resolve(rdtype="aaaa", strict=True)
     assert result == ["sentinel"]
     assert seen["query"] == "www.example.com"
@@ -513,7 +513,9 @@ def test_resolve_passes_the_fully_qualified_form_through(monkeypatch):
     survive the delegation rather than being normalised away."""
     seen = {}
     monkeypatch.setattr(
-        netimps, "resolve", lambda query, **kw: seen.setdefault("query", query) and []
+        netimps._fqdn,
+        "resolve",
+        lambda query, **kw: seen.setdefault("query", query) and [],
     )
     Fqdn("example.com.").resolve()
     assert seen["query"] == "example.com."
@@ -527,15 +529,17 @@ def test_ping_is_a_pass_through(monkeypatch):
         seen["kwargs"] = kwargs
         return "pong"
 
-    monkeypatch.setattr(netimps, "ping", fake_ping)
+    monkeypatch.setattr(netimps._fqdn, "ping", fake_ping)
     assert Fqdn("example.com").ping(count=2) == "pong"
     assert seen == {"dst": "example.com", "kwargs": {"count": 2}}
 
 
 def test_ip_returns_the_first_answer_or_none(monkeypatch):
-    monkeypatch.setattr(netimps, "resolve", lambda query, **kw: ["first", "second"])
+    monkeypatch.setattr(
+        netimps._fqdn, "resolve", lambda query, **kw: ["first", "second"]
+    )
     assert Fqdn("example.com").ip() == "first"
-    monkeypatch.setattr(netimps, "resolve", lambda query, **kw: [])
+    monkeypatch.setattr(netimps._fqdn, "resolve", lambda query, **kw: [])
     assert Fqdn("example.com").ip() is None
 
 
@@ -544,7 +548,7 @@ def test_ip_does_not_cache_unlike_host(monkeypatch):
     on it would be a lie about freshness."""
     calls = []
     monkeypatch.setattr(
-        netimps, "resolve", lambda query, **kw: calls.append(query) or ["a"]
+        netimps._fqdn, "resolve", lambda query, **kw: calls.append(query) or ["a"]
     )
     f = Fqdn("example.com")
     f.ip()

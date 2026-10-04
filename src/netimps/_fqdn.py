@@ -61,6 +61,9 @@ from __future__ import annotations
 
 import sys as _sys
 from typing import Any, Iterable, Iterator, List, Optional, Tuple, Union
+from ._dns import resolve
+from ._parse import is_valid
+from ._ping import ping
 
 __all__ = ["Fqdn", "FqdnLike"]
 
@@ -178,7 +181,6 @@ class Fqdn:
         # real problem: "10.0.0.1" would otherwise pass every label check and
         # produce a nonsense "name". Routed through the package's own parser
         # rather than a second address detector.
-        from . import is_valid
         from ._ip import IPAddress
 
         candidate = ".".join(labels)
@@ -444,13 +446,11 @@ class Fqdn:
         fully-qualified form is passed on as such, so a name built with a
         trailing dot keeps bypassing the search list.
         """
-        from . import resolve
 
         return resolve(str(self), **kwargs)
 
     def ping(self, **kwargs: "Any") -> "Any":
         """Ping this name. Straight through to :func:`netimps.ping`."""
-        from . import ping
 
         return ping(str(self), **kwargs)
 

@@ -272,7 +272,7 @@ def collapse(networks: "Iterable[IPNetworkLike]") -> "List[IPNetwork]":
     collapsed independently and returned v4 first. Raises :class:`ValueError`
     on malformed input.
     """
-    from . import parse as _parse
+    from ._parse import parse as _parse
 
     v4: "List[IPv4Network]" = []
     v6: "List[IPv6Network]" = []
@@ -308,7 +308,7 @@ def subtract(
     superset yields ``[]``. Mixed families are handled independently: an IPv6
     exclusion never affects IPv4 output.
     """
-    from . import parse as _parse
+    from ._parse import parse as _parse
 
     remaining = collapse(networks)
     for item in remove:
@@ -540,7 +540,7 @@ class Host:
     @property
     def is_address(self) -> bool:
         """True if the value is already an IP literal -- no DNS needed."""
-        from . import is_valid
+        from ._parse import is_valid
 
         return is_valid(self.value, IPAddress)
 
@@ -584,7 +584,7 @@ class Host:
             self._resolved = None
             return None
 
-        from . import get_ip, try_parse
+        from ._parse import try_parse
 
         literal = try_parse(self.value, IPAddress)
         self._resolved = literal if literal is not None else get_ip(self.value)
@@ -709,7 +709,7 @@ def unmap(value: "Union[str, IPAddress]") -> "IPAddress":
 
     :raises ValueError: if ``value`` is not an address at all.
     """
-    from . import parse
+    from ._parse import parse
 
     address = (
         value

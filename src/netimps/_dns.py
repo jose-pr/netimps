@@ -44,6 +44,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from . import _dnswire
 from ._exceptions import ResolutionError, ResolutionTimeoutError
 from ._ip import AddressLike, _dst_argument
+from ._parse import try_parse
 
 __all__ = [
     "resolve",
@@ -70,7 +71,6 @@ def _native_record(record):
     stripped from TXT strings -- the forms callers actually want.
     """
     text = str(record)
-    from . import try_parse
 
     address = try_parse(text)
     if address is not None:
@@ -93,7 +93,6 @@ def _auto_rdtype(query: str) -> str:
     an explicit ``rdtype="a"`` on an address still attempts a literal (and
     empty) A lookup rather than being silently overridden.
     """
-    from . import try_parse
 
     return "ptr" if try_parse(query) is not None else "a"
 
@@ -300,7 +299,6 @@ def _bounded_lookup(lookup: "Callable[[], Any]", timeout: Optional[float]) -> "A
 def _resolve_system_once(
     query: str, family: int, timeout: Optional[float]
 ) -> "List[Any]":
-    from . import try_parse as _try_parse
 
     def _lookup():
         return _socket.getaddrinfo(query, None, family=family, type=_socket.SOCK_STREAM)
@@ -313,7 +311,7 @@ def _resolve_system_once(
     seen = []
     for info in infos:
         address = info[4][0]
-        parsed = _try_parse(address)
+        parsed = try_parse(address)
         if parsed is not None and parsed not in seen:
             seen.append(parsed)
     return seen
@@ -477,7 +475,6 @@ def _parse_nslookup_output(text: str, rdtype: str) -> "tuple":
       continuation lines entirely -- verified against live Windows output,
       where that silently dropped every address but the first.
     """
-    from . import try_parse as _try_parse
 
     lines = text.splitlines()
     # nslookup prints the query's own resolver ("Server:", "Address:") first,
@@ -516,7 +513,7 @@ def _parse_nslookup_output(text: str, rdtype: str) -> "tuple":
         else:
             in_addresses_block = False
             continue
-        parsed = _try_parse(value)
+        parsed = try_parse(value)
         if parsed is None or parsed in results:
             continue
         # Windows can print both families under one "Addresses:" block even

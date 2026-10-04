@@ -81,6 +81,75 @@ from ._ip import (
 )
 from ._parse import is_valid, parse, try_parse
 
+# The public spellings of everything below; the _-prefixed modules are
+# implementation detail and must not be imported from outside the package.
+from ._mac import MACAddress, MACLike
+from ._scheme import (
+    get_default_port,
+    get_default_scheme,
+    register_port,
+)
+from ._ifaddrs import (
+    INTERFACE_CACHE_TTL,
+    Interface,
+    clear_interface_cache,
+    interface_enumerations,
+    get_interfaces,
+    is_broadcast,
+    iter_addresses,
+)
+from ._dns import (
+    resolve,
+    resolve_dnspython,
+    resolve_system,
+    resolve_nslookup,
+    resolve_wire,
+    resolve_doh,
+)
+from ._ping import PingResult, ping
+from ._scan import PORT_RANGES, scan_hosts, scan_ports
+from ._multicast import (
+    is_multicast,
+    join_group,
+    leave_group,
+    multicast_socket,
+)
+from ._fqdn import Fqdn, FqdnLike
+from ._retry import Backoff, backoff_delays, retry
+from ._msg import (
+    CMSG_LEN,
+    CMSG_SPACE,
+    patch_socket_module,
+    recvmsg,
+    sendmsg,
+    socket_patched,
+    supports_recvmsg,
+)
+from ._msg import _patch_requested as _msg_patch_requested
+
+from ._udp import Datagram, UdpEndpoint, supports_pktinfo
+from ._sockets import (
+    bind,
+    max_udp_payload,
+    SocketOption,
+    disable_connreset,
+    set_buffer_size,
+    discover_mtu,
+    get_pmtu,
+    get_tcp_mss,
+    bind_error_hint,
+    interface_for,
+    interfaces_for,
+    is_local_address,
+    Route,
+    get_free_port,
+    get_source_ip,
+    hop_count,
+    get_route,
+    tcp_check,
+    wait_for_port,
+)
+
 __all__ = [
     # Types: the v4/v6 unions you annotate with, plus the stdlib concretes.
     "IPAddress",
@@ -215,93 +284,17 @@ __version__ = _installed_version()
 #: Fully-qualified (or short) name of the host running this process.
 HOST_DN = _platform.node()
 
-# ---------------------------------------------------------------------------
-# Address classification / resolution helpers
-# ---------------------------------------------------------------------------
-
-
-# Imported last, and deliberately so: these submodules call back into this one
-# (parse, try_parse, is_valid), so they must load after the definitions above.
-# The names below are the public spellings -- the _-prefixed modules are
-# implementation detail and must not be imported from outside the package.
-from ._mac import MACAddress, MACLike  # noqa: E402
-from ._scheme import (  # noqa: E402
-    get_default_port,
-    get_default_scheme,
-    register_port,
-)
-from ._ifaddrs import (  # noqa: E402
-    INTERFACE_CACHE_TTL,
-    Interface,
-    clear_interface_cache,
-    interface_enumerations,
-    get_interfaces,
-    is_broadcast,
-    iter_addresses,
-)
-from ._dns import (  # noqa: E402
-    resolve,
-    resolve_dnspython,
-    resolve_system,
-    resolve_nslookup,
-    resolve_wire,
-    resolve_doh,
-)
-from ._ping import PingResult, ping  # noqa: E402
-from ._scan import PORT_RANGES, scan_hosts, scan_ports  # noqa: E402
-from ._multicast import (  # noqa: E402
-    is_multicast,
-    join_group,
-    leave_group,
-    multicast_socket,
-)
-from ._fqdn import Fqdn, FqdnLike  # noqa: E402
-from ._retry import Backoff, backoff_delays, retry  # noqa: E402
-from ._msg import (  # noqa: E402
-    CMSG_LEN,
-    CMSG_SPACE,
-    patch_socket_module,
-    recvmsg,
-    sendmsg,
-    socket_patched,
-    supports_recvmsg,
-)
-from ._msg import _patch_requested as _msg_patch_requested  # noqa: E402
-
 # The patch is for *other people's* code: `_udp` calls `_msg` directly, so
 # netimps' own behaviour is identical whether or not this runs. That is
 # deliberate -- opting out below must not quietly cost `UdpEndpoint` its
 # pktinfo support.
 #
-# Third-party code is the reason it is installed this early: a module that reads
+# Third-party code is the reason it runs at import time: a module that reads
 # `socket.CMSG_SPACE` into a constant at *its* import time (which is the normal
-# way to probe it) sees None if it is imported before this line.
+# way to probe it) sees None if it is imported before `import netimps` has run.
 #
 # Opt out with NETIMPS_NO_SOCKET_PATCH=1 before the first import, or call
 # `patch_socket_module(False)` afterwards. See `_msg` for why this is default-on
 # and why it installs four names rather than one.
 if _msg_patch_requested():
     patch_socket_module()
-
-from ._udp import Datagram, UdpEndpoint, supports_pktinfo  # noqa: E402
-from ._sockets import (  # noqa: E402
-    bind,
-    max_udp_payload,
-    SocketOption,
-    disable_connreset,
-    set_buffer_size,
-    discover_mtu,
-    get_pmtu,
-    get_tcp_mss,
-    bind_error_hint,
-    interface_for,
-    interfaces_for,
-    is_local_address,
-    Route,
-    get_free_port,
-    get_source_ip,
-    hop_count,
-    get_route,
-    tcp_check,
-    wait_for_port,
-)

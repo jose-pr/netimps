@@ -21,6 +21,7 @@ from typing import List, Optional, Tuple
 
 from ._iface_spec import InterfaceSpec, interface_address as _interface_address
 from ._ip import AddressLike, IPAddress, _dst_argument
+from ._parse import try_parse as _try_parse
 
 __all__ = ["ping", "PingResult"]
 
@@ -158,7 +159,6 @@ def _expected_addresses(dst: str, ipv6: "Optional[bool]") -> "List[IPAddress]":
     Returns ``[]`` when nothing resolves, which callers read as "no
     expectation to verify against" rather than as a failure.
     """
-    from . import try_parse as _try_parse
 
     literal = _try_parse(dst)
     if literal is not None:
@@ -375,8 +375,6 @@ def _wants_ipv6(
     """
     if ipv6 is not None:
         return bool(ipv6)
-
-    from . import try_parse as _try_parse
 
     literal = _try_parse(dst)
     if literal is not None:
@@ -622,8 +620,6 @@ def ping(
     if not dst:
         return PingResult(False, dst, attempts=0)
     dst = _dst_argument(dst)
-
-    from . import try_parse as _try_parse
 
     # A destination that begins with "-" is read by the binary as an option,
     # not a host. Windows `ping -?` then prints usage and exits 0, which used to
