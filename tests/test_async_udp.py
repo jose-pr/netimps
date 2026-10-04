@@ -555,7 +555,7 @@ def test_aclose_waits_for_the_thread_without_blocking_the_loop(factory):
     async def body():
         endpoint = UDPEndpoint(bind("127.0.0.1", 0))
         notifier = ReadNotifier(endpoint.socket)
-        notifier._thread = SlowThread()
+        notifier_thread = notifier._thread = SlowThread()
         endpoint._notifier = notifier
         ticks = []
 
@@ -566,16 +566,17 @@ def test_aclose_waits_for_the_thread_without_blocking_the_loop(factory):
 
         watcher = asyncio.ensure_future(ticker())
         await asyncio.sleep(0)
-        start = time.monotonic()
         await endpoint.aclose()
-        elapsed = time.monotonic() - start
+        # Judged by the stand-in's own clock reading: the 50 ms began when it
+        # was built, a little before this coroutine could start a timer.
+        outlasted = not notifier_thread.is_alive()
         watcher.cancel()
         with pytest.raises(asyncio.CancelledError):
             await watcher
-        return elapsed, len(ticks), endpoint.socket.fileno()
+        return outlasted, len(ticks), endpoint.socket.fileno()
 
-    elapsed, ticks, fileno = _run(body, factory)
-    assert elapsed >= 0.05, "aclose() returned before the thread had left"
+    outlasted, ticks, fileno = _run(body, factory)
+    assert outlasted, "aclose() returned before the thread had left"
     assert ticks > 3, "the loop was blocked while aclose() waited"
     assert fileno == -1
 
