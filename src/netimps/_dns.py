@@ -135,8 +135,8 @@ def _auto_rdtype(query: str) -> str:
     An address literal (v4 or v6) means the caller wants the reverse name --
     an ``"a"``/``"aaaa"`` lookup *of* an address is nonsensical, so ``"ptr"``
     is the only reading that makes the request meaningful. Anything else is
-    treated as a hostname, defaulting to ``"a"`` exactly as before this was
-    configurable. Only consulted when ``rdtype`` is not given explicitly --
+    treated as a hostname, defaulting to ``"a"``. Only consulted when
+    ``rdtype`` is not given explicitly --
     an explicit ``rdtype="a"`` on an address still attempts a literal (and
     empty) A lookup rather than being silently overridden.
     """
@@ -262,8 +262,8 @@ def resolve_dnspython(
         because it is the argument callers actually vary. ``None`` (default)
         auto-selects: ``"ptr"`` when ``query`` is an address literal (an
         ``"a"``/``"aaaa"`` lookup *of* an address makes no sense), ``"a"``
-        otherwise -- the same default as before this was configurable. Pass
-        an explicit ``rdtype`` to opt out of the auto-selection.
+        otherwise. Pass an explicit ``rdtype`` to opt out of the
+        auto-selection.
     :param ns: optional nameserver, or list of nameservers, to query instead of
         the system resolver. When omitted, the system resolver configuration
         (``/etc/resolv.conf``, or the Windows equivalent) supplies both the
@@ -383,9 +383,8 @@ def _bounded_lookup(lookup: "Callable[[], Any]", timeout: Optional[float]) -> "A
 
     **One mechanism for every record type.** :func:`socket.getaddrinfo` and
     :func:`socket.gethostbyaddr` are both blocking C calls with no timeout of
-    their own, so both need this; the ``"ptr"`` branch used to call
-    ``gethostbyaddr`` directly on the calling thread and was measured at 4.6s
-    against a documented 0.1s deadline.
+    their own, so both need this: called directly on the calling thread,
+    ``gethostbyaddr`` was measured at 4.6s against a 0.1s deadline.
 
     A *daemon* thread, joined through a queue rather than a
     ThreadPoolExecutor. The executor looks like the obvious fit and is the
@@ -608,8 +607,8 @@ def resolve_system(
 
     if rdtype == "ptr":
         # Bounded by the same daemon-thread helper as the address path:
-        # gethostbyaddr has no timeout of its own either, and calling it
-        # directly (as this branch used to) ignored `timeout` outright.
+        # gethostbyaddr has no timeout of its own either, so calling it
+        # directly would ignore `timeout` outright.
         try:
             hostname, _aliases, _addrs = _bounded_lookup(
                 _partial(_socket.gethostbyaddr, query), timeout
@@ -723,7 +722,7 @@ def _parse_nslookup_output(text: str, rdtype: str) -> "tuple":
 
       A parser keyed on "does this line start with 'address'" misses those
       continuation lines entirely -- verified against live Windows output,
-      where that silently dropped every address but the first.
+      where it keeps only the first address.
     """
 
     lines = text.splitlines()
@@ -812,7 +811,7 @@ def _check_nslookup_query(query: str, role: str = "query") -> None:
     where it reads names to look up from **stdin**. Measured: that drained the
     calling program's stdin and sent each line to the configured nameserver as
     a DNS query name. The subprocess gets :data:`subprocess.DEVNULL` for stdin
-    now (the right default for anything a library spawns), which closes the
+    (the right default for anything a library spawns), which closes the
     exfiltration, but a leading ``-`` is still rejected rather than escaped --
     there is nowhere safe to put it, and a lookup that silently became an
     option is not a lookup.
@@ -1290,8 +1289,8 @@ def resolve(
         :class:`IPv6Interface` (its ``.ip`` is used), not just a string.
     :param rdtype: DNS record type. ``None`` (default) auto-selects: ``"ptr"``
         when ``query`` is an address literal (an ``"a"``/``"aaaa"`` lookup
-        *of* an address makes no sense), ``"a"`` otherwise -- the same
-        default as before this was configurable. Pass an explicit ``rdtype``
+        *of* an address makes no sense), ``"a"`` otherwise. Pass an explicit
+        ``rdtype``
         to opt out. ``"a"``/``"aaaa"``/``"ptr"`` reach every backend; other
         types are ``dnspython``-only (see :func:`resolve_dnspython`).
         ``("a", "aaaa")`` asks for both families at once: the OS resolver
@@ -1515,7 +1514,7 @@ def _resolve_chain(
         # rather than answering "no records" for a backend that never ran.
         raise ResolutionError(_NEEDS_DNS)
     if not attempted:
-        # Name what excluded them: with `port=`/`tcp=` now excluding `system`
+        # Name what excluded them: with `port=`/`tcp=` excluding `system`
         # too, "cannot serve rdtype='a'" on its own would be a puzzle.
         excluded = []
         if ns:
@@ -1543,7 +1542,7 @@ def _resolve_chain(
         raise last_error
     # Every applicable backend failed to *attempt* -- a resolver outage, not an
     # answer. Returning [] is the default because that is what a caller writing
-    # `if not resolve(host):` has always got, and because the distinction
+    # `if not resolve(host):` expects, and because the distinction
     # between "no such name" and "could not ask" is one most callers do not act
     # on differently. `strict=True` is for the ones that do.
     return [], False

@@ -28,9 +28,9 @@ __all__ = ["ping", "PingResult"]
 class PingResult:
     """Outcome of a :func:`ping`, usable directly as a boolean.
 
-    ``ping()`` has always answered "did it reply?", so this stays truthy on
-    success and falsy on failure -- ``if ping(host):`` keeps working -- while
-    carrying the details a caller would otherwise re-run ``ping`` to scrape.
+    ``ping()`` answers "did it reply?", so this is truthy on success and falsy
+    on failure -- ``if ping(host):`` works -- while carrying the details a
+    caller would otherwise re-run ``ping`` to scrape.
 
     Attributes:
         ok: whether the destination replied.
@@ -126,7 +126,7 @@ class PingResult:
 
 #: Which ``ping`` grammar this host speaks. **Three values, not two.**
 #:
-#: The old ``os.name == "nt"`` split treated every POSIX platform as Linux, and
+#: An ``os.name == "nt"`` split would treat every POSIX platform as Linux, and
 #: they are not: of the six flags this module emits, *five* mean something
 #: different or nothing at all on BSD. ``-W`` is milliseconds there rather than
 #: seconds, ``-t`` is an overall deadline rather than the TTL (``-m`` is the
@@ -168,8 +168,8 @@ def _reply_needle(address: "IPAddress") -> "_re.Pattern":
         64 bytes from 127.0.0.1: icmp_seq=1 ttl=64 ...      (Linux)
         16 bytes from ::1, icmp_seq=0 hlim=64 ...           (BSD ping6)
 
-    BSD uses a **comma**, which the old colon-only needle could never match, so
-    a healthy v6 reply there verified as falsy.
+    BSD uses a **comma**, which a colon-only needle never matches, so a healthy
+    v6 reply there would verify as falsy.
 
     The lookbehind stops an address matching inside a longer one -- ``::1`` must
     not be found inside ``2001:db8::1`` -- which matters because the whole point
@@ -292,11 +292,10 @@ def _probe_targets(
 ):
     """``(family, sockaddr)`` pairs to probe ``dst`` on, in resolver order.
 
-    Both probe methods used to hardcode ``AF_INET``, so a v6 destination
-    failed inside ``connect``/``sendto`` and the ``OSError`` was reported as
-    "unreachable"/"no reply" -- a wrong *falsy answer* rather than an error,
-    with ``ipv6=`` silently ignored. Resolving here keeps the family a
-    property of the destination (and of ``ipv6=``) rather than of the code.
+    The family is a property of the destination and of ``ipv6=``, not of the
+    code: a socket of the other family fails inside ``connect``/``sendto`` and
+    the ``OSError`` reads as "unreachable"/"no reply" -- a wrong *falsy answer*
+    rather than an error, with ``ipv6=`` silently ignored.
 
     Returns ``[]`` when nothing resolves, or the lookup outlasts ``timeout``
     (``None``: no bound), which the callers treat as a failure to reach rather
@@ -327,9 +326,8 @@ def _probe_targets(
 def _configure_probe(sock, family, source, ttl):
     """Apply ``src=``/``ttl=`` to a tcp/udp probe socket.
 
-    Both used to be accepted by :func:`ping` and then dropped for these two
-    methods -- the docstring documented ``src`` as "this never silently
-    reroutes", which was true only of the ICMP path.
+    Both apply to these two methods as they do to the ICMP path, so ``src``
+    never silently reroutes on any of them.
     """
     if source is not None:
         # Port 0: pin the address, let the kernel pick the port.
@@ -463,8 +461,7 @@ def supports_dont_fragment(
     fragments an oversized probe, the peer reassembles it and replies, every
     size "survives", and the binary search returns its own ceiling.
 
-    BSD's ``ping`` does have a DF flag -- ``-D`` -- despite a long-standing
-    comment here claiming otherwise. Its ``ping6`` is the one case with no
+    BSD's ``ping`` has a DF flag, ``-D``. Its ``ping6`` is the one case with no
     verified flag, so that is the combination this reports as unsupported.
     """
     if _PLATFORM != "bsd":
@@ -537,8 +534,8 @@ def _ping_command(
         # No verified DF flag for ping6; ping(dont_fragment=True) rejects the
         # combination up front rather than silently sending fragmentable probes.
     else:
-        # -W here is MILLISECONDS, not seconds. Passing the Linux value gave
-        # macOS a 1ms deadline and made `timeout=` inert.
+        # -W here is MILLISECONDS, not seconds: the Linux value would give
+        # macOS a 1ms deadline and make `timeout=` inert.
         options = ["-c", "1", "-W", str(max(1, int(_math.ceil(timeout * 1000)))), "-n"]
         if ttl is not None:
             options.extend(["-m", str(ttl)])
@@ -546,7 +543,7 @@ def _ping_command(
             options.append("-D")
     if source is not None:
         # -S on both. -I exists but is multicast-only and is *rejected* for a
-        # unicast destination, which made every src= ping falsy here.
+        # unicast destination, which would make every src= ping falsy here.
         options.extend(["-S", source])
     if size is not None:
         options.extend(["-s", str(size)])
@@ -597,11 +594,13 @@ def ping(
         (:class:`IPv4Network`/:class:`IPv6Network`) raises :class:`TypeError`
         -- it has no single address to ping.
     :param tries: attempts before giving up. Values below 1 are treated as 1.
-    :param timeout: seconds to wait per attempt. POSIX ``ping`` only accepts a
-        whole number of seconds, so sub-second values are rounded **up** to 1 --
-        never down to 0, which some implementations read as "wait forever". It
-        also bounds the lookup of a hostname ``dst``, which happens once before
-        the first attempt.
+    :param timeout: seconds to wait per attempt. Linux ``ping -W`` takes whole
+        seconds, so sub-second values are rounded **up** to 1 -- never down to
+        0, which some implementations read as "wait forever". Windows ``-w``
+        and BSD/macOS ``-W`` take milliseconds (rounded up to 1 ms); BSD
+        ``ping6`` has no wait flag and the subprocess deadline bounds it. The
+        timeout also bounds the lookup of a hostname ``dst``, which happens
+        once before the first attempt.
     :param ipv6: force the IPv6 or IPv4 family. Applies to **all three**
         ``method`` values: it selects the ``-6``/``-4`` flag for ICMP and the
         address family the ``tcp``/``udp`` probes resolve and connect with.
@@ -636,9 +635,10 @@ def ping(
         wire, which is why that is the number a 1500-MTU link tops out at.
         Verified on Windows against the DF boundary (1472 passes, 1473 does
         not); ``ping(8)`` documents ``-s`` as "data bytes" identically.
-    :param ttl: initial hop limit (``-i`` on Windows, ``-t`` on POSIX -- the
-        letters are **swapped** between platforms, a classic src of scripts
-        that silently do the wrong thing).
+    :param ttl: initial hop limit (``-i`` on Windows, ``-t`` on Linux, ``-m`` on
+        macOS/BSD ``ping`` and ``-h`` on ``ping6`` -- the letters differ between
+        platforms, a classic source of scripts that silently do the wrong
+        thing).
 
         A ``ttl`` too small to reach the target yields ``False`` on every
         platform. That takes explicit work on Windows, whose ``ping`` exits
@@ -663,16 +663,17 @@ def ping(
 
         The UDP probe connects its socket before sending, so the ICMP
         port-unreachable is delivered on POSIX as well as Windows -- an
-        unconnected socket never receives one on Linux/BSD, which made this
-        method under-report liveness there for exactly the case it exists
+        unconnected socket never receives one on Linux/BSD, which would make
+        this method under-report liveness there for exactly the case it exists
         for. Silence still means "no answer": UDP cannot tell a filtered
         port from an absent host.
     :param port: destination port for ``tcp``/``udp``. Required for those, and
         ignored for ICMP.
-    :param dont_fragment: set the DF bit (Windows ``-f``, Linux ``-M do``).
-        Combined with ``size``, the standard manual MTU probe: the largest
-        ``size`` that still succeeds is the path MTU minus 28. Unsupported on
-        macOS/BSD ping, where it is ignored.
+    :param dont_fragment: set the DF bit (Windows ``-f``, Linux ``-M do``,
+        macOS/BSD ``ping`` ``-D``). Combined with ``size``, the standard manual
+        MTU probe: the largest ``size`` that still succeeds is the path MTU
+        minus 28. BSD ``ping6`` has no verified DF flag, so the combination
+        raises :class:`ValueError` instead of sending fragmentable probes.
 
     An empty ``dst`` gives a falsy result. A missing ``ping`` binary or a
     non-zero exit also yield a falsy :class:`PingResult` -- *reachability*
@@ -684,7 +685,7 @@ def ping(
     ``tcp``/``udp`` probe with no ``port``, ``dont_fragment`` on a method or
     platform that cannot set it, and a ``dst`` beginning with ``-``. That last
     one matters more than it looks: the binary reads such a destination as an
-    option, and Windows ``ping -?`` prints usage and **exits 0**, which used to
+    option, and Windows ``ping -?`` prints usage and **exits 0**, which would
     be reported as a successful ping of a host that was never contacted.
 
     .. note::
@@ -699,7 +700,7 @@ def ping(
     dst = text
 
     # A destination that begins with "-" is read by the binary as an option,
-    # not a host. Windows `ping -?` then prints usage and exits 0, which used to
+    # not a host. Windows `ping -?` then prints usage and exits 0, which would
     # come back as a *truthy* PingResult for a host that was never contacted --
     # a false positive, which is the worse direction for a liveness check.
     if dst.startswith("-"):
@@ -712,9 +713,8 @@ def ping(
         raise ValueError("method must be 'icmp', 'tcp' or 'udp', got %r" % (lowered,))
     method = _cast("Literal['icmp', 'tcp', 'udp']", lowered)
 
-    # Validate every argument the same way for every method. These used to be
-    # checked only on the ICMP path, so the same bad value raised for one method
-    # and was silently accepted by another.
+    # Validate every argument the same way for every method, so one bad value
+    # cannot raise for one method and be silently accepted by another.
     if size is not None and size < 0:
         raise ValueError("size must be non-negative, got %r" % (size,))
     if ttl is not None and not 1 <= ttl <= 255:
@@ -747,7 +747,7 @@ def ping(
         prober = _tcp_ping if method == "tcp" else _udp_ping
         probe_size = size or 0
         # `ipv6=`, `src=` and `ttl=` apply to these methods too, not just to the
-        # ICMP binary -- they used to be accepted and dropped on the floor.
+        # ICMP binary.
         probe_src = _try_parse(dst)
         last = None
         for attempt in range(1, max(1, tries) + 1):
