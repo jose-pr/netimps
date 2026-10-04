@@ -257,7 +257,7 @@ __all__ = [
     "discover_mtu",
     "max_udp_payload",
     "get_tcp_mss",
-    "HOST_DN",
+    "get_hostname",
     # Phase 2: New exported aliases
     "InterfaceLike",
     "InterfaceQuery",
@@ -289,8 +289,20 @@ def _installed_version() -> str:
 
 __version__ = _installed_version()
 
-#: Fully-qualified (or short) name of the host running this process.
-HOST_DN = _platform.node()
+
+def get_hostname(*, fqdn: bool = False) -> str:
+    """The hostname of the running process.
+
+    By default, returns the bare hostname (via :func:`platform.node`).
+    With ``fqdn=True``, returns the fully-qualified domain name via
+    :func:`socket.getfqdn`.
+    """
+    if fqdn:
+        import socket
+
+        return socket.getfqdn()
+    return _platform.node()
+
 
 # The patch is for *other people's* code: `_udp` calls `_msg` directly, so
 # netimps' own behaviour is identical whether or not this runs. That is
