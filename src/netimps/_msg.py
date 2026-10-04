@@ -529,11 +529,38 @@ def _patched_sendmsg(
 def _patch_requested() -> bool:
     """Whether the import-time patch is wanted.
 
-    Read once, at import. ``NETIMPS_SOCKET_PATCH`` set to anything other
-    than an explicit falsey spelling disables it, so ``=1``, ``=true`` and
-    ``=yes`` all work and ``=0`` does not accidentally disable it.
+    Read once, at import. ``NETIMPS_SOCKET_PATCH`` accepts explicit spellings:
+    "1", "true", "yes", "on" (patch), or "0", "false", "no", "off" (no patch),
+    case-insensitive. Unset or empty strings default to patch.
+
+    Raises ``ValueError`` if set to an unrecognized value or if the deprecated
+    ``NETIMPS_NO_SOCKET_PATCH`` variable is set.
     """
-    value = _os.environ.get("NETIMPS_SOCKET_PATCH")
-    if value is None:
+    # Check for deprecated variable
+    if "NETIMPS_NO_SOCKET_PATCH" in _os.environ:
+        raise ValueError(
+            "NETIMPS_NO_SOCKET_PATCH is no longer supported. "
+            "Use NETIMPS_SOCKET_PATCH=0 to disable the patch."
+        )
+
+    value = _os.environ.get("NETIMPS_SOCKET_PATCH", "").strip().lower()
+
+    # Unset or empty: patch (True)
+    if not value:
         return True
-    return value.strip().lower() in ("", "0", "false", "no", "off")
+
+    # Recognized true spellings: patch
+    if value in ("1", "true", "yes", "on"):
+        return True
+
+    # Recognized false spellings: don't patch
+    if value in ("0", "false", "no", "off"):
+        return False
+
+    # Anything else is an error
+    raise ValueError(
+        f"NETIMPS_SOCKET_PATCH must be one of "
+        f"'1'/'true'/'yes'/'on' (to patch) or "
+        f"'0'/'false'/'no'/'off' (to not patch), "
+        f"got {value!r}"
+    )

@@ -419,22 +419,44 @@ def test_the_patch_never_replaces_a_native_name():
 
 
 def test_opt_out_is_readable_from_the_environment(monkeypatch):
-    """`NETIMPS_SOCKET_PATCH` is read once, at import, and these spellings.
+    """`NETIMPS_SOCKET_PATCH` is read once, at import, with explicit spellings.
 
     Tested on the predicate rather than by re-importing netimps: the decision
     has to be makeable before the first import, so there is no way to exercise
     the real path twice in one process.
+
+    Unset or empty: patch (True). "1", "true", "yes", "on": patch (True).
+    "0", "false", "no", "off": do not patch (False). Anything else: ValueError.
     """
     from netimps._msg import _patch_requested
 
     monkeypatch.delenv("NETIMPS_SOCKET_PATCH", raising=False)
+    monkeypatch.delenv("NETIMPS_NO_SOCKET_PATCH", raising=False)
+    # Unset: patch
     assert _patch_requested() is True
-    for value in ("1", "true", "TRUE", "yes", "on", "anything"):
+    # Empty: patch
+    monkeypatch.setenv("NETIMPS_SOCKET_PATCH", "")
+    assert _patch_requested() is True
+    # True spellings (case-insensitive): patch
+    for value in ("1", "true", "TRUE", "True", "yes", "YES", "on", "ON"):
+        monkeypatch.setenv("NETIMPS_SOCKET_PATCH", value)
+        assert _patch_requested() is True, "%r should enable the patch" % (value,)
+    # False spellings (case-insensitive): do not patch
+    for value in ("0", "false", "FALSE", "no", "NO", "off", "OFF"):
         monkeypatch.setenv("NETIMPS_SOCKET_PATCH", value)
         assert _patch_requested() is False, "%r should disable the patch" % (value,)
-    for value in ("0", "false", "no", "off", ""):
+    # Invalid values: raise ValueError
+    for value in ("maybe", "nope", "2"):
         monkeypatch.setenv("NETIMPS_SOCKET_PATCH", value)
-        assert _patch_requested() is True, "%r should not disable the patch" % (value,)
+        with pytest.raises(ValueError, match="NETIMPS_SOCKET_PATCH must be one of"):
+            _patch_requested()
+    # Old variable: raise ValueError
+    monkeypatch.delenv("NETIMPS_SOCKET_PATCH", raising=False)
+    monkeypatch.setenv("NETIMPS_NO_SOCKET_PATCH", "1")
+    with pytest.raises(
+        ValueError, match="NETIMPS_NO_SOCKET_PATCH is no longer supported"
+    ):
+        _patch_requested()
 
 
 # --------------------------------------------------------------------------- #
@@ -764,7 +786,7 @@ def test_opting_out_leaves_both_modules_untouched():
     )
     if not IS_WINDOWS:
         pytest.skip("on POSIX both names are native, so there is nothing to opt out of")
-    rc, out, err = _fresh(code, env={"NETIMPS_SOCKET_PATCH": "1"})
+    rc, out, err = _fresh(code, env={"NETIMPS_SOCKET_PATCH": "0"})
     assert rc == 0, err
     assert out == "ok"
 
