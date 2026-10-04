@@ -647,9 +647,9 @@ path is usable. Address records only: `rdtype` must be `"a"`, `"aaaa"` or
   the candidate list from the system resolver's search config (reusing
   `dnspython`'s `resolv.conf`/registry parsing if it's installed; `[]` —
   literal name only — if not). `timeout` bounds **each** `nslookup` run.
-- **Raises `ValueError` before `nslookup` is run** for a `query` that
-  starts with `-`, is empty or whitespace-only, or contains whitespace or
-  control characters. `nslookup` has **no `--` end-of-options separator**, so
+- **Raises `ValueError` before `nslookup` is run** for a `query`, an `ns` or a
+  `search` domain that starts with `-`, is empty or whitespace-only, or
+  contains whitespace or control characters. `nslookup` has **no `--` end-of-options separator**, so
   such a query cannot be escaped into position: the binary reads it as an
   option, finds no name argument, and drops into *interactive* mode — where it
   reads names to look up from **stdin**. Measured: that drained the calling
@@ -680,14 +680,23 @@ native-value contract as the other backends.
   chain inside the reply is followed.
 - **`source`**: the local address to send from, or a list with one per family;
   a server whose family has none is skipped (and named in the error).
-- **`timeout`** bounds the whole resolution; each server gets its share of
-  what is left, so a dead first server cannot starve the next.
+- **`timeout`** bounds the whole resolution, TCP reads included; each server
+  gets its share of what is left, so a dead first server cannot starve the next.
 - **`search`**: a list of domains tries an unqualified `query` under each, then
   as given; `True`/`False` ask for `query` as given (no system search list).
 - NXDOMAIN and "no record of this type" are `[]`; no server answering (or only
   SERVFAIL/REFUSED) is `ResolutionError`.
+- **A reply is untrusted input.** Over UDP a datagram with another id or
+  another question is discarded and the wait goes on to the deadline; the read
+  buffer is the 1,232 bytes the query advertises (EDNS). A short MX or SRV
+  record is an unreadable reply (`DNSDecodeError` as the `__cause__`), a name
+  follows at most 32 compression pointers, and every byte of a decoded name
+  outside letters, digits, hyphen and underscore is written `\DDD` (decimal),
+  so a PTR answer carries no newline, escape, NUL or dot inside a label.
+- A nameserver port outside 1-65535, or not ASCII digits, is a `ValueError`
+  before a socket is made.
 
-**`resolve_doh(query, url, *, rdtype=None, timeout=5.0, fetch=None)`**
+**`resolve_doh(query, url, *, rdtype=None, timeout=5.0, fetch=None, allow_http=False)`**
 
 DNS over HTTPS (RFC 8484): the same DNS message POSTed to `url` as
 `application/dns-message`. **Not part of `resolve()`'s chain** -- a caller that
@@ -695,8 +704,14 @@ names a DoH endpoint wants that answer alone.
 
 - **`fetch(url, body, headers, timeout) -> bytes`** sends the request, so a
   caller with its own HTTP stack (a proxy, a CA bundle) routes DoH through it;
-  `None` uses `urllib.request`. An `OSError`/`ValueError` from it, an HTTP
-  error, or a reply that is not `application/dns-message` is `ResolutionError`.
+  `None` uses `urllib.request`, which follows **no redirect** (a 3xx is an HTTP
+  error) and reads **at most 65,536 bytes**. An `OSError`/`ValueError` from it,
+  an HTTP error, a body over the limit, a reply to another query, or a reply
+  that is not `application/dns-message` is `ResolutionError`.
+- **`url` must be `https://`** unless `allow_http=True`; anything else is a
+  `ValueError` before a request is made. Messages show the URL without its
+  credentials, query string or fragment, so a token in the URL stays out of
+  logs.
 - `rdtype` as `resolve_wire`; NXDOMAIN is `[]`, another error rcode
   `ResolutionError`.
 

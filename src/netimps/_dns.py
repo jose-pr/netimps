@@ -56,6 +56,7 @@ from typing import (
 
 from . import _dnswire, _proc
 from ._exceptions import (
+    DNSDecodeError,
     NetimpsValueError,
     ResolutionError,
     ResolutionTimeoutError,
@@ -766,8 +767,11 @@ def _system_search_domains() -> "List[str]":
     return []
 
 
-def _check_nslookup_query(query: str) -> None:
+def _check_nslookup_query(query: str, role: str = "query") -> None:
     """Raise :class:`ValueError` unless ``query`` can only be read as a name.
+
+    ``role`` names what is being checked in the message: the query, the
+    nameserver or a search domain all reach ``nslookup`` as arguments.
 
     ``nslookup`` has **no ``--`` end-of-options separator**, so a ``query``
     starting with ``-`` cannot be escaped into position: the binary parses it
@@ -785,17 +789,17 @@ def _check_nslookup_query(query: str) -> None:
     reaches interactive mode by the same route.
     """
     if not query.strip():
-        raise NetimpsValueError("query must be a non-empty hostname or address")
+        raise NetimpsValueError("%s must be a non-empty hostname or address" % (role,))
     if query.startswith("-"):
         raise NetimpsValueError(
-            "refusing to look up %r: a leading '-' is read as an nslookup "
+            "refusing %s %r: a leading '-' is read as an nslookup "
             "option, not a name, and nslookup has no '--' separator to "
-            "escape it with" % (query,)
+            "escape it with" % (role, query)
         )
     if any(ch.isspace() or ord(ch) < 0x20 or ord(ch) == 0x7F for ch in query):
         raise NetimpsValueError(
-            "refusing to look up %r: a hostname or address cannot contain "
-            "whitespace or control characters" % (query,)
+            "refusing %s %r: a hostname or address cannot contain "
+            "whitespace or control characters" % (role, query)
         )
 
 
@@ -985,6 +989,12 @@ def resolve_nslookup(
     """
     query = _dst_argument(query)
     _check_nslookup_query(query)
+    if ns:
+        _check_nslookup_query(ns, "nameserver")
+    if isinstance(search, (list, tuple)):
+        for domain in search:
+            if domain.strip("."):
+                _check_nslookup_query(domain, "search domain")
     if not rdtype:
         rdtype = _auto_rdtype(query)
     rdtype = rdtype.lower()
@@ -1623,6 +1633,12 @@ def lookup_fqdn(
 # --- the DNS protocol, standard library only ---------------------------------
 
 
+def _port_number(text: str, entry: str) -> int:
+    if not (text.isascii() and text.isdigit()):
+        raise ValueError("nameserver %r: port %r is not a number" % (entry, text))
+    return int(text)
+
+
 def _servers(
     ns: "Optional[Union[str, List[str]]]", port: int
 ) -> "List[Tuple[str, int]]":
@@ -1649,12 +1665,16 @@ def _servers(
         entry = entry.strip()
         if entry.startswith("["):
             host, _, rest = entry[1:].partition("]")
-            number = int(rest[1:]) if rest.startswith(":") else port
+            number = _port_number(rest[1:], entry) if rest.startswith(":") else port
         elif entry.count(":") == 1:
             host, _, rest = entry.partition(":")
-            number = int(rest)
+            number = _port_number(rest, entry)
         else:
             host, number = entry, port
+        if not 1 <= number <= 65535:
+            raise ValueError(
+                "nameserver %r: port %d is outside 1-65535" % (entry, number)
+            )
         try:
             _ipaddress.ip_address(host.split("%")[0])
         except ValueError:
@@ -1685,7 +1705,14 @@ def _exchange(
     tcp: bool,
     source: "Optional[str]",
 ) -> bytes:
+    """One query and its reply, within ``timeout`` seconds in all.
+
+    Over UDP a datagram that is not a reply to this query (another id, another
+    question) is discarded and the wait goes on until the deadline; the buffer
+    is what the query advertised, :data:`_dnswire.EDNS_PAYLOAD`.
+    """
     host, port = server
+    deadline = _time.monotonic() + timeout
     family = _socket.AF_INET6 if ":" in host else _socket.AF_INET
     sock = _socket.socket(family, _socket.SOCK_STREAM if tcp else _socket.SOCK_DGRAM)
     try:
@@ -1695,17 +1722,34 @@ def _exchange(
         sock.connect((host, port))
         if not tcp:
             sock.send(payload)
-            return sock.recv(65535)
+            while True:
+                sock.settimeout(_remaining(deadline))
+                data = sock.recv(_dnswire.EDNS_PAYLOAD)
+                if _dnswire.is_reply_to(payload, data):
+                    return data
+        sock.settimeout(_remaining(deadline))
         sock.sendall(_struct.pack("!H", len(payload)) + payload)
-        size = _struct.unpack("!H", _recv_exactly(sock, 2))[0]
-        return _recv_exactly(sock, size)
+        size = _struct.unpack("!H", _recv_exactly(sock, 2, deadline))[0]
+        data = _recv_exactly(sock, size, deadline)
+        if not _dnswire.is_reply_to(payload, data):
+            raise DNSDecodeError("reply to another query")
+        return data
     finally:
         sock.close()
 
 
-def _recv_exactly(sock: "_socket.socket", count: int) -> bytes:
+def _remaining(deadline: float) -> float:
+    """Seconds until ``deadline``, or ``socket.timeout`` once it has passed."""
+    left = deadline - _time.monotonic()
+    if left <= 0:
+        raise _socket.timeout("timed out")
+    return left
+
+
+def _recv_exactly(sock: "_socket.socket", count: int, deadline: float) -> bytes:
     data = b""
     while len(data) < count:
+        sock.settimeout(_remaining(deadline))
         piece = sock.recv(count - len(data))
         if not piece:
             raise OSError("connection closed after %d of %d bytes" % (len(data), count))
@@ -1890,31 +1934,66 @@ def resolve_wire(
     raise ResolutionError("no nameserver answered: %s" % (last,)) from last
 
 
+#: The most a DoH reply may carry: the DNS message limit is 65,535 octets
+#: (RFC 1035 section 4.2.2), and one more byte shows the limit was passed.
+_DOH_MAX_BYTES = 65536
+
+
+def _shown_url(url: str) -> str:
+    """``url`` without its credentials, query string and fragment, for messages."""
+    from urllib.parse import urlsplit, urlunsplit
+
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    if ":" in host:
+        host = "[%s]" % host
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    netloc = host + (":%d" % port if port else "")
+    return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
+
+
 def _urllib_fetch(
     url: str, body: bytes, headers: "dict", timeout: Optional[float]
 ) -> bytes:
     import urllib.error
     import urllib.request
 
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        """A redirect is an HTTP error: the POST is not replayed elsewhere."""
+
+        def redirect_request(self, *args: "Any", **kwargs: "Any") -> "Any":
+            return None
+
+    shown = _shown_url(url)
     request = urllib.request.Request(url, data=body, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urllib.request.build_opener(_NoRedirect).open(
+            request, timeout=timeout
+        ) as response:
             kind = (
                 response.headers.get("Content-Type", "").split(";")[0].strip().lower()
             )
             if kind != "application/dns-message":
                 raise ResolutionError(
                     "%s answered %s, not application/dns-message"
-                    % (url, kind or "nothing")
+                    % (shown, kind or "nothing")
                 )
-            return response.read()
+            data = response.read(_DOH_MAX_BYTES + 1)
+            if len(data) > _DOH_MAX_BYTES:
+                raise ResolutionError(
+                    "%s answered a body larger than %d bytes" % (shown, _DOH_MAX_BYTES)
+                )
+            return data
     except urllib.error.HTTPError as exc:
-        raise ResolutionError("%s answered HTTP %d" % (url, exc.code)) from exc
+        raise ResolutionError("%s answered HTTP %d" % (shown, exc.code)) from exc
     except (urllib.error.URLError, OSError) as exc:
         reason = getattr(exc, "reason", exc)
         if isinstance(exc, _socket.timeout) or isinstance(reason, _socket.timeout):
-            raise ResolutionTimeoutError("%s: %s" % (url, reason)) from exc
-        raise ResolutionError("%s: %s" % (url, reason)) from exc
+            raise ResolutionTimeoutError("%s: %s" % (shown, reason)) from exc
+        raise ResolutionError("%s: %s" % (shown, reason)) from exc
 
 
 @overload
@@ -1925,6 +2004,7 @@ def resolve_doh(
     rdtype: "Literal['a', 'A']",
     timeout: Optional[float] = 5.0,
     fetch: "Optional[Callable[[str, bytes, dict, Optional[float]], bytes]]" = None,
+    allow_http: bool = False,
 ) -> "List[IPv4Address]": ...
 
 
@@ -1936,6 +2016,7 @@ def resolve_doh(
     rdtype: "Literal['aaaa', 'AAAA']",
     timeout: Optional[float] = 5.0,
     fetch: "Optional[Callable[[str, bytes, dict, Optional[float]], bytes]]" = None,
+    allow_http: bool = False,
 ) -> "List[IPv6Address]": ...
 
 
@@ -1947,6 +2028,7 @@ def resolve_doh(
     rdtype: "Literal['ptr', 'PTR']",
     timeout: Optional[float] = 5.0,
     fetch: "Optional[Callable[[str, bytes, dict, Optional[float]], bytes]]" = None,
+    allow_http: bool = False,
 ) -> "List[str]": ...
 
 
@@ -1958,6 +2040,7 @@ def resolve_doh(
     rdtype: Optional[str] = None,
     timeout: Optional[float] = 5.0,
     fetch: "Optional[Callable[[str, bytes, dict, Optional[float]], bytes]]" = None,
+    allow_http: bool = False,
 ) -> "List[Any]": ...
 
 
@@ -1968,6 +2051,7 @@ def resolve_doh(
     rdtype: Optional[str] = None,
     timeout: Optional[float] = 5.0,
     fetch: "Optional[Callable[[str, bytes, dict, Optional[float]], bytes]]" = None,
+    allow_http: bool = False,
 ) -> "List[Any]":
     """Resolve ``query`` with DNS over HTTPS (RFC 8484): the DNS message
     POSTed to ``url`` as ``application/dns-message``.
@@ -1978,9 +2062,13 @@ def resolve_doh(
 
     :param fetch: ``fetch(url, body, headers, timeout) -> bytes`` sends the
         request -- so a caller with its own HTTP stack (a proxy, a CA bundle)
-        uses it. ``None``: :mod:`urllib.request`. An ``OSError`` or
-        ``ValueError`` from it is a :class:`ResolutionError`.
+        uses it. ``None``: :mod:`urllib.request`, which follows no redirect and
+        reads at most 65,536 bytes. An ``OSError`` or ``ValueError`` from it is
+        a :class:`ResolutionError`.
     :param rdtype: as :func:`resolve_wire`.
+    :param allow_http: accept an ``http://`` URL. Without it anything but
+        ``https`` is a :class:`ValueError` before a request is made: a DNS
+        answer over plain HTTP can be rewritten on the path.
 
     Contract as the other backends: native values, ``[]`` for NXDOMAIN or no
     record of the type, :class:`ResolutionError` when the endpoint could not
@@ -1988,8 +2076,18 @@ def resolve_doh(
     timeout), with an unreadable reply as the error's ``__cause__``
     (:class:`DNSDecodeError`). A ``query`` the codec cannot encode (an empty or
     over-long label) raises :class:`DNSDecodeError` itself, before anything is
-    sent. Not part of :func:`resolve`'s chain.
+    sent. Not part of :func:`resolve`'s chain. A reply body over 65,536 bytes, a
+    redirect and an HTTP error status are :class:`ResolutionError`; messages
+    name the URL without its credentials or query string.
     """
+    from urllib.parse import urlsplit
+
+    scheme = urlsplit(url).scheme.lower()
+    if scheme != "https" and not (allow_http and scheme == "http"):
+        raise ValueError(
+            "DNS over HTTPS needs an https:// URL, got scheme %r; pass "
+            "allow_http=True for a plain-http endpoint" % (scheme,)
+        )
     query = _dst_argument(query)
     name, rdtype = _question(query, rdtype)
     payload = _dnswire.build_query(name, rdtype, 0)
@@ -1997,17 +2095,22 @@ def resolve_doh(
         "Content-Type": "application/dns-message",
         "Accept": "application/dns-message",
     }
+    shown = _shown_url(url)
     try:
         body = (fetch or _urllib_fetch)(url, payload, headers, timeout)
+        if not _dnswire.is_reply_to(payload, body):
+            raise DNSDecodeError("reply to another query")
         reply = _dnswire.parse_response(body, 0)
     except ResolutionError:
         raise
     except _socket.timeout as exc:
-        raise ResolutionTimeoutError("DNS over HTTPS via %s: %s" % (url, exc)) from exc
+        raise ResolutionTimeoutError(
+            "DNS over HTTPS via %s: %s" % (shown, exc)
+        ) from exc
     except (OSError, ValueError) as exc:
-        raise ResolutionError("DNS over HTTPS via %s: %s" % (url, exc)) from exc
+        raise ResolutionError("DNS over HTTPS via %s: %s" % (shown, exc)) from exc
     if reply.rcode == _dnswire.NXDOMAIN:
         return []
     if reply.rcode != _dnswire.NOERROR:
-        raise ResolutionError("%s answered rcode %d" % (url, reply.rcode))
+        raise ResolutionError("%s answered rcode %d" % (shown, reply.rcode))
     return reply.records(name, rdtype)

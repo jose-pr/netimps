@@ -228,15 +228,17 @@ def doh():
 
 
 def test_doh_answers(doh):
-    assert netimps.resolve_doh("alias.test", doh) == [ipaddress.IPv4Address("10.0.0.5")]
-    assert netimps.resolve_doh("missing.test", doh) == []
+    assert netimps.resolve_doh("alias.test", doh, allow_http=True) == [
+        ipaddress.IPv4Address("10.0.0.5")
+    ]
+    assert netimps.resolve_doh("missing.test", doh, allow_http=True) == []
     assert _DoH.seen[0] == ("application/dns-message", "application/dns-message")
 
 
 def test_doh_wrong_content_type_is_an_error(doh):
     _DoH.kind = "text/html"
     with pytest.raises(netimps.ResolutionError, match="text/html"):
-        netimps.resolve_doh("host.test", doh)
+        netimps.resolve_doh("host.test", doh, allow_http=True)
 
 
 def test_doh_through_the_callers_fetch(doh):
@@ -254,7 +256,9 @@ def test_doh_through_the_callers_fetch(doh):
 
 def test_doh_unreachable_is_an_error():
     with pytest.raises(netimps.ResolutionError):
-        netimps.resolve_doh("host.test", "http://127.0.0.1:1/dns-query", timeout=2)
+        netimps.resolve_doh(
+            "host.test", "http://127.0.0.1:1/dns-query", timeout=2, allow_http=True
+        )
 
 
 def test_dnspython_takes_the_source_too(server):

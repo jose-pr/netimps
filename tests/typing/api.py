@@ -418,6 +418,10 @@ assert_type(resolve_wire("h", "aaaa", source="192.0.2.1"), List[IPv6Address])
 assert_type(resolve_doh("h", "https://dns.example/q", rdtype="a"), List[IPv4Address])
 assert_type(resolve_doh("h", "https://dns.example/q"), List[Any])
 assert_type(has_dns(), bool)
+assert_type(
+    resolve_doh("h", "http://dns.example/q", rdtype="a", allow_http=True),
+    List[IPv4Address],
+)
 
 # Options are keyword-only, and the options `discover_mtu` forwards to `ping`
 # are named rather than swallowed by a `**kwargs`.

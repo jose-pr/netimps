@@ -35,6 +35,10 @@ NOERROR, SERVFAIL, NXDOMAIN, REFUSED = 0, 2, 3, 5
 #: avoids fragmentation on any path.
 EDNS_PAYLOAD = 1232
 
+#: Compression pointers one name may follow. A real name uses one or two; the
+#: cap keeps a hostile reply from making every record walk a long chain.
+MAX_POINTERS = 32
+
 
 def encode_name(name: str) -> bytes:
     """``name`` as DNS labels (IDNA for a non-ASCII label)."""
@@ -71,13 +75,15 @@ def read_labels(data: bytes, pos: int) -> Tuple[List[bytes], int]:
     """The labels of the name at ``pos``, compression pointers followed, and
     the offset just past the name in the record.
 
-    A pointer to an offset already visited is a loop. The name is capped at
-    255 octets (RFC 1035 3.1) and a label at 63, so a hostile message cannot
-    make this run long or allocate much.
+    A pointer to an offset already visited is a loop, and a name follows at most
+    :data:`MAX_POINTERS` pointers. The name is capped at 255 octets (RFC 1035
+    3.1) and a label at 63, so a hostile message cannot make this run long or
+    allocate much.
     """
     labels: List[bytes] = []
     end = None
     visited = set()
+    pointers = 0
     size = 1  # the root's length byte
     while True:
         if pos >= len(data):
@@ -92,6 +98,11 @@ def read_labels(data: bytes, pos: int) -> Tuple[List[bytes], int]:
             if pos in visited:
                 raise DNSDecodeError("compression loop")
             visited.add(pos)
+            pointers += 1
+            if pointers > MAX_POINTERS:
+                raise DNSDecodeError(
+                    "name follows more than %d compression pointers" % MAX_POINTERS
+                )
             continue
         if length > 63:
             raise DNSDecodeError("label longer than 63 bytes")
@@ -106,11 +117,31 @@ def read_labels(data: bytes, pos: int) -> Tuple[List[bytes], int]:
         pos += 1 + length
 
 
+#: Bytes a label keeps as they are. The underscore stays because service and
+#: key labels (``_sip._tcp``, ``_domainkey``) carry it.
+_PLAIN = frozenset(b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
+
+
+def _label_text(label: bytes) -> str:
+    """``label`` as text, every byte outside letters, digits, hyphen and
+    underscore written as ``\\DDD`` (decimal), so a name from the network
+    carries no control byte, no space and no dot inside a label."""
+    return "".join(chr(b) if b in _PLAIN else "\\%03d" % b for b in label)
+
+
 def _read_name(data: bytes, pos: int) -> Tuple[str, int]:
     """The name at ``pos`` (compression pointers followed) and the offset just
     past it in the record."""
     labels, end = read_labels(data, pos)
-    return ".".join(label.decode("ascii", "replace") for label in labels), end
+    return ".".join(_label_text(label) for label in labels), end
+
+
+def _name_in_record(data: bytes, pos: int, record_end: int) -> str:
+    """The name at ``pos``, which has to end inside the record that holds it."""
+    name, end = _read_name(data, pos)
+    if end > record_end:
+        raise DNSDecodeError("name runs past its record")
+    return name
 
 
 def _rdata(data: bytes, rtype: int, start: int, length: int) -> Any:
@@ -120,15 +151,24 @@ def _rdata(data: bytes, rtype: int, start: int, length: int) -> Any:
     if rtype == 28 and length == 16:
         return ipaddress.IPv6Address(raw)
     if rtype in (2, 5, 12):
-        return _read_name(data, start)[0]
+        return _name_in_record(data, start, start + length)
     if rtype == 15:
+        if length < 3:
+            raise DNSDecodeError("MX record shorter than 3 bytes")
         return "%d %s" % (
             struct.unpack("!H", raw[:2])[0],
-            _read_name(data, start + 2)[0],
+            _name_in_record(data, start + 2, start + length),
         )
     if rtype == 33:
+        if length < 7:
+            raise DNSDecodeError("SRV record shorter than 7 bytes")
         priority, weight, port = struct.unpack("!HHH", raw[:6])
-        return "%d %d %d %s" % (priority, weight, port, _read_name(data, start + 6)[0])
+        return "%d %d %d %s" % (
+            priority,
+            weight,
+            port,
+            _name_in_record(data, start + 6, start + length),
+        )
     if rtype == 16:
         parts, pos = [], 0
         while pos < len(raw):
@@ -180,6 +220,21 @@ class Response(object):
                 return []
             wanted = str(alias[0]).rstrip(".").lower()
         return []
+
+
+def is_reply_to(query: bytes, data: bytes) -> bool:
+    """Whether ``data`` is a reply carrying ``query``'s id and its one question
+    (the name compared without case), as RFC 5452 section 9.1 asks a client to
+    check before it believes a datagram."""
+    if len(data) < 12 or data[:2] != query[:2] or not data[2] & 0x80:
+        return False
+    if struct.unpack("!H", data[4:6])[0] != 1:
+        return False
+    try:
+        end = read_labels(query, 12)[1] + 4
+    except DNSDecodeError:  # pragma: no cover -- the query is the library's own
+        return False
+    return data[12:end].lower() == query[12:end].lower()
 
 
 def parse_response(data: bytes, ident: Optional[int] = None) -> Response:

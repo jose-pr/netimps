@@ -194,15 +194,16 @@ def _install_query_guards(monkeypatch, refuse) -> None:
 
             monkeypatch.setattr(dns_resolver.Resolver, method, resolve_wrapper)
 
-    real_urlopen = urllib.request.urlopen
+    real_open = urllib.request.OpenerDirector.open
 
-    def urlopen(url, *args, **kwargs):
-        target = getattr(url, "full_url", url)
+    def opener_open(self, fullurl, *args, **kwargs):
+        target = getattr(fullurl, "full_url", fullurl)
         if not _stays_on_host(urllib.parse.urlsplit(target).hostname):
-            refuse("urllib.request.urlopen(%r)" % (target,))
-        return real_urlopen(url, *args, **kwargs)
+            refuse("urllib.request.OpenerDirector.open(%r)" % (target,))
+        return real_open(self, fullurl, *args, **kwargs)
 
-    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    # `urlopen` and any opener built with `build_opener` both end here.
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", opener_open)
 
     real_popen_init = subprocess.Popen.__init__
 

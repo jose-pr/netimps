@@ -6,6 +6,7 @@ they wrote against the builtin (or against the package base) stops matching.
 """
 
 import socket
+import struct
 import threading
 from pathlib import Path
 
@@ -174,16 +175,26 @@ def test_doh_raises_the_decode_error_for_a_name_it_cannot_encode():
 
 
 def test_wire_chains_an_unreadable_reply_as_the_cause():
-    """A server answering with junk is "no server answered", with the codec's
-    reason as the cause."""
+    """A reply to this query that the codec cannot read is "no server
+    answered", with the codec's reason as the cause. A datagram that is not a
+    reply to the query is discarded instead, and the wait goes on."""
     junk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     junk.bind(("127.0.0.1", 0))
     junk.settimeout(2)
 
     def _answer():
         try:
-            _data, peer = junk.recvfrom(4096)
-            junk.sendto(b"\x00\x01", peer)
+            data, peer = junk.recvfrom(4096)
+            end = _dnswire.read_labels(data, 12)[1] + 4
+            # A reply to this query (its id and question) that stops inside
+            # the first record.
+            unreadable = (
+                data[:2]
+                + struct.pack("!HHHHH", 0x8180, 1, 1, 0, 0)
+                + data[12:end]
+                + b"\xc0\x0c\x00"
+            )
+            junk.sendto(unreadable, peer)
         except OSError:
             pass
 

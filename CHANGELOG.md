@@ -228,6 +228,12 @@ probe says so in its prefix.
   the same for a request only `dnspython` could serve (a record type the other
   backends do not read) instead of returning `[]`. New `has_dns() -> bool`.
 
+- **`resolve_doh(..., allow_http=False)`.** A URL that is not `https://` is a
+  `ValueError` before a request is made; `allow_http=True` accepts plain
+  `http://`. The default fetch follows no redirect (a 3xx is a
+  `ResolutionError`), reads at most 65,536 bytes of a reply, and names the URL
+  in messages without its credentials, query string or fragment.
+
 ### Removed
 
 - **`get_ip(address, ipv6=None)`.** `Host(x).ip()` is the same
@@ -236,6 +242,16 @@ probe says so in its prefix.
   `addr` command use it; `Host(x).resolve()` gives `(fqdn, ip)`.
 
 ### Fixed
+
+- **A DNS reply is bounded.** A short MX or SRV record is a `DNSDecodeError`
+  (it escaped as `struct.error`); a name follows at most 32 compression
+  pointers (one 65,000-byte reply cost 9.6 s of CPU); the UDP buffer is the
+  1,232 bytes the query advertises; a datagram with another id or question is
+  discarded instead of ending the query; the TCP read carries the whole
+  deadline (a byte every 0.3 s held `timeout=0.5` for 12 s); a nameserver port
+  outside 1-65535 is a `ValueError`; and bytes outside letters, digits, hyphen
+  and underscore in a decoded name are written `\DDD`. `resolve_nslookup`
+  refuses an `ns` or search domain that `nslookup` would read as an option.
 
 - **The programs the library runs are looked up in the absolute `PATH`
   entries only.** On Windows `shutil.which` searched the working directory

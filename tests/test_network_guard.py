@@ -76,7 +76,7 @@ def test_the_doh_backend_cannot_reach_an_off_host_endpoint(resolver_escapes):
             "x.example", "https://%s/dns-query" % OFF_HOST, timeout=0.2
         ),
     )
-    assert seen and "urllib.request.urlopen" in seen[0]
+    assert seen and "urllib.request" in seen[0]
 
 
 def test_the_nslookup_backend_cannot_run_against_an_off_host_name(resolver_escapes):
