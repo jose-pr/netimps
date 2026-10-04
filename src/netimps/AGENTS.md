@@ -53,7 +53,7 @@ seconds, never milliseconds.
 **Every `dst`-typed parameter accepts `HostLike`** — a hostname string, an
 address string, an existing `IPv4Address`/`IPv6Address`, a `Host`, an `FQDN`,
 or an `IPv4Interface`/`IPv6Interface` (its `.ip` is used, dropping the `/prefix`,
-which every consumer of a destination -- a subprocess argument, a socket
+which every user of a destination -- a subprocess argument, a socket
 call, a DNS query -- would otherwise read as garbage). A network
 (`IPv4Network`/`IPv6Network`) raises `TypeError`, since it has no single
 address to send to. **Anything else raises `TypeError`**, `None` included: it
@@ -66,8 +66,8 @@ forms.
 `0-65535` and `TypeError` for a non-`int` — including `bool`, and including a
 service-name string such as `"http"`, which must go through
 `get_default_port` first. The socket layer would otherwise mask the value to
-16 bits, so `port + 65536` silently answered about `port`. The two *table*
-lookups, `get_default_port`/`get_default_scheme`, still return `None` instead:
+16 bits, so `port + 65536` would silently answer about `port`. The two *table*
+lookups, `get_default_port`/`get_default_scheme`, return `None` instead:
 "no such entry" is the honest answer from a lookup, not an error.
 
 **Several parameters are named `ipv6=`** and mean one thing throughout --
@@ -333,14 +333,14 @@ a `bool` or `None`. `repr` is a constructor call that rebuilds an equal value.
 
 **`iter_addresses(interfaces=None, *, family=None)`** — the flattened
 `(interface, address)` view, yielded once per address rather than per adapter,
-for consumers that filter or act per address. The full `Interface` comes along,
+for callers that filter or act per address. The full `Interface` comes along,
 so nothing is lost. Pass an existing enumeration in a loop; it is a syscall.
 
 - **`family` is `4` or `AF_INET`, `6` or `AF_INET6`**, the same two spellings
   everywhere a family is taken (`bind`, `get_free_port`, `has_pktinfo`,
   `iter_addresses`). Anything else raises `ValueError` **from the call itself**,
   not from the first `next()`: a generator that validates lazily reports a bad
-  argument from a traceback that no longer names the caller. `AF_INET6` is 10 on
+  argument from a traceback that does not name the caller. `AF_INET6` is 10 on
   Linux, 23 on Windows and 30 on macOS, so compare against the constant, never a
   literal.
 
@@ -430,10 +430,10 @@ so nothing is lost. Pass an existing enumeration in a loop; it is a syscall.
   scope id is preserved (`"[fe80::1%eth0]:80"` → `("fe80::1%eth0", 80)`).
 
   Raises `ValueError` for empty input, an unclosed bracket, a port that is not
-  an integer in `0-65535`, and — this one is new — **an unbracketed string with
-  two or more colons that is not a valid IPv6 address**. `"host:80:extra"` and
-  a half-typed address used to come back whole as the *host*, so the caller
-  looked up a name that cannot exist instead of being told what was wrong.
+  an integer in `0-65535`, and **an unbracketed string with two or more colons
+  that is not a valid IPv6 address**. `"host:80:extra"` and a half-typed
+  address raise rather than come back whole as the *host*, which would send the
+  caller to look up a name that cannot exist.
 
 ## Scheme ↔ port registry
 
@@ -456,11 +456,11 @@ Where several schemes share a port the **canonical** one is returned (1080 →
 
 - **The services database is asked for TCP first, then UDP.** A protocol-less
   `getservbyname`/`getservbyport` picks per platform, so port 514 answered
-  `shell`/`cmd` on one host and `syslog` on another. The TCP entry now wins
-  everywhere, and the answers are identical across platforms; nothing in the
-  built-in table changes.
+  `shell`/`cmd` on one host and `syslog` on another. The TCP entry wins
+  everywhere, so the answers are identical across platforms; the built-in
+  table is unaffected.
 - **Re-registering a scheme *moves* it.** After `register_port("myproto", 8888)`
-  an earlier `register_port("myproto", 9999)` no longer maps `9999` back to
+  a prior `register_port("myproto", 9999)` stops mapping `9999` back to
   `myproto` — the registry would otherwise state both facts at once. If another
   scheme still claims the vacated port it inherits the slot (earliest
   registration first, the same rule the initial index uses).
@@ -553,7 +553,7 @@ record type `List[Any]`. A type checker selects the overload from the literal.
 
 `rdtype=None` (default) **auto-selects**: `"ptr"` when `query` is an address
 literal (an `"a"`/`"aaaa"` lookup *of* an address makes no sense), `"a"`
-otherwise -- the same default as before this was configurable::
+otherwise::
 
     resolve("example.com")   # rdtype auto -> "a"  -> ['93.184.216.34']
     resolve("8.8.8.8")       # rdtype auto -> "ptr" -> ['dns.google']
@@ -591,7 +591,7 @@ resort. `backends` also accepts a single name as a plain string
 - The result is `[]` when **every applicable backend answered empty**, and
   also when every one of them failed to *attempt* — a resolver outage reads
   the same as a name that does not exist, which is what `if not resolve(h):`
-  has always meant. Pass **`strict=True`** to tell them apart: it re-raises
+  expects. Pass **`strict=True`** to tell them apart: it re-raises
   the last backend's `ResolutionError` in that case, and only that case. It
   does not turn an empty answer into an error.
   If the chain holds no backend that could even be tried, `ValueError` names
@@ -916,7 +916,7 @@ at least 3 there.
   `ValueError` is raised for an unknown `method`, a negative `size`, a `ttl`
   outside `1-255`, a `tcp`/`udp` probe with no `port`, a `dont_fragment` that
   cannot be honoured, and a `dst` beginning with `-` — the binary reads that as
-  an option, and Windows `ping -?` prints usage and **exits 0**, which used to
+  an option, and Windows `ping -?` prints usage and **exits 0**, which would
   be reported as a successful ping of a host never contacted.
 - `PingResult` is **hashable**, over `(ok, dst, rtt, ttl)`. One asymmetry
   to know about: it compares equal to a `bool` but does not hash like one, so
@@ -953,9 +953,9 @@ at least 3 there.
   > On POSIX it sets `SO_REUSEADDR` **only for a stream socket**, where it
   > permits binding an address still in `TIME_WAIT`. `TIME_WAIT` is a TCP
   > concept: on a *datagram* socket the option's one remaining effect on Linux
-  > is to permit duplicate bindings of **live** sockets, so it is set no longer.
-  > Measured on WSL before the fix — a second `bind()` of the same live UDP
-  > `addr:port` with default arguments succeeded and the datagram went to the
+  > is to permit duplicate bindings of **live** sockets, so it is not set for
+  > datagram sockets. Measured on WSL with the option set — a second `bind()`
+  > of the same live UDP `addr:port` succeeded and the datagram went to the
   > **second** socket, with the holder getting no error. `socket(7)` is explicit
   > that the exception is an active *listening* socket, and a UDP socket never
   > listens. Share a UDP port deliberately with `reuse_port=True`
@@ -975,25 +975,28 @@ at least 3 there.
   > **An explicit `(SOL_SOCKET, SO_REUSEADDR, nonzero)` in `options=` counts as
   > `allow_address_takeover=True`.** It has to: Windows refuses `SO_REUSEADDR` on
   > a socket that already carries `SO_EXCLUSIVEADDRUSE`, reporting a bare
-  > `WSAEINVAL` that names neither option — so once this function began setting
-  > `SO_EXCLUSIVEADDRUSE` for both values of `reuse_address`, the stdlib-shaped
-  > spelling of "share this address" stopped working. A zero value is still an
-  > explicit opt-*out* and is not read as a request. `bind_error_hint` now
-  > explains `WSAEINVAL`, since on its own it is undiagnosable.
-  > **On Windows this is set for *both* values of `reuse_address`.** It used to
-  > be set only for `True`, which left `reuse_address=False` setting *nothing* --
-  > and nothing is the unsafe state there: a *more specific* `SO_REUSEADDR` bind
-  > takes traffic from a non-exclusive wildcard holder. Reproduced: a thief on
-  > `127.0.0.1` received the datagram while the holder on `0.0.0.0` got nothing
-  > and no error. So the flag that read as "strictest" was the least strict one
-  > available. `reuse_address` now governs POSIX `SO_REUSEADDR` only;
+  > `WSAEINVAL` that names neither option — and this function sets
+  > `SO_EXCLUSIVEADDRUSE` for both values of `reuse_address`, so without the
+  > rule the stdlib-shaped spelling of "share this address" would not work. A
+  > zero value is an explicit opt-*out* and is not read as a request.
+  > `bind_error_hint` explains `WSAEINVAL`, since on its own it is
+  > undiagnosable.
+  > **On Windows `SO_EXCLUSIVEADDRUSE` is set for *both* values of
+  > `reuse_address`.** Setting it only for `True` would leave
+  > `reuse_address=False` setting *nothing* -- and nothing is the unsafe state
+  > there: a *more specific* `SO_REUSEADDR` bind takes traffic from a
+  > non-exclusive wildcard holder. Reproduced: a thief on `127.0.0.1` received
+  > the datagram while the holder on `0.0.0.0` got nothing and no error. So the
+  > flag that reads as "strictest" would be the least strict one available.
+  > `reuse_address` governs POSIX `SO_REUSEADDR` only;
   > `allow_address_takeover=True` is the single way to opt into a takeover.
 - **`AddressInUseError(NetimpsError, OSError)`** — what `bind()` raises when the address is
-  taken, on every platform and interpreter. The same situation used to surface
-  three ways: `PermissionError`/errno 13 on Windows 3.14, `OSError`/errno 10013
-  on 3.9, `OSError`/errno 10048 without `allow_address_takeover`. The first is
-  actively misleading — Windows has no privileged ports, so a `PermissionError`
-  there describes a mechanism that does not exist.
+  taken, on every platform and interpreter. The platforms surface that
+  situation three ways: `PermissionError`/errno 13 on Windows 3.14,
+  `OSError`/errno 10013 on 3.9, `OSError`/errno 10048 without
+  `allow_address_takeover`. The first is actively misleading — Windows has no
+  privileged ports, so a `PermissionError` there describes a mechanism that
+  does not exist.
 
   `errno` is `EADDRINUSE`, the message is `bind_error_hint()`'s text, and the
   original exception is chained as `__cause__` (so `winerror` is still
@@ -1145,9 +1148,9 @@ at least 3 there.
   consults the routing table. The answer depends on `dst`: with a VPN up, a
   public probe returns the tunnel address and a LAN probe the physical one.
   Correct where hostname resolution picks a VM adapter. `ipv6=` selects the
-  family; it used to be guessed with `":" in dst`, and **a hostname never
-  contains a colon**, so every name was probed as IPv4 and a v6-only one
-  answered `None`. The returned address carries **no `%zone`** — the zone
+  family; it is not guessed from `":" in dst`, because **a hostname never
+  contains a colon** and every name would be probed as IPv4, a v6-only one
+  answering `None`. The returned address carries **no `%zone`** — the zone
   identifies the adapter, and `get_interface` is the way back to it.
 - **`get_free_port(src="127.0.0.1", *, family=None) -> int`** — bind port 0 and
   read it back. `src` is any `HostLike` and `family` follows it as `bind`'s
@@ -1164,9 +1167,10 @@ at least 3 there.
   `0-65535` (`ValueError`) or not an `int` (`TypeError`).
 
   **`timeout` bounds the whole call**, across every address `dst` resolves to.
-  It used to be handed to `socket.create_connection`, which applies it once
-  *per resolved address* after an unbounded `getaddrinfo`, so a name with N
-  addresses could take N × `timeout`. `timeout=0` is **floored** to 0.05s
+  `socket.create_connection` would apply it once *per resolved address* after
+  an unbounded `getaddrinfo`, so a name with N addresses could take
+  N × `timeout`; here resolution happens once and the connects share one
+  deadline. `timeout=0` is **floored** to 0.05s
   rather than taken literally: `settimeout(0)` means non-blocking, which
   reported every open port as closed. `timeout=None` blocks.
 - **`wait_for_port(dst, port, *, deadline=30.0, interval=0.1, timeout=None)`**
@@ -1185,8 +1189,8 @@ at least 3 there.
   — that is available unprivileged everywhere, unlike the full path. Never
   raises for an unknown route; unknown pieces are `None`/`0`. A network as
   `dst` still raises `TypeError`. A hostname goes through `getaddrinfo`, so
-  `ipv6=` selects which of its records the route is computed for — the
-  IPv4-only `gethostbyname` used before meant an AAAA-only name reached no
+  `ipv6=` selects which of its records the route is computed for;
+  `gethostbyname` is IPv4-only, so through it an AAAA-only name would reach no
   lookup at all.
 
   Both families are looked up on every supported platform: `GetBestRoute2` on
@@ -1199,18 +1203,17 @@ at least 3 there.
 
   > **`Route.on_link` is `Optional[bool]`**: `True` when no gateway is needed,
   > `False` when one is, and **`None` when the next hop could not be looked up
-  > at all**. It used to be `gateway is None`, which turned "we never looked"
-  > into a confident `True` — on macOS, where the lookup had no source to read,
-  > `get_route("1.1.1.1")` reported `on_link=True` from a `192.168.64.3/24`
-  > host. `None` is falsy, so `if route.on_link:` still takes the safe branch;
-  > `route.on_link is True` is now a question with an answer, and
+  > at all**. `gateway is None` would turn "we never looked" into a confident
+  > `True` — on macOS, where the lookup has no source to read,
+  > `get_route("1.1.1.1")` from a `192.168.64.3/24` host would report
+  > `on_link=True`. `None` is falsy, so `if route.on_link:` takes the safe
+  > branch; `route.on_link is True` is a question with an answer, and
   > `route.on_link is False` really means "through a router". A present
   > `gateway` wins over the recorded flag, since it is proof on its own.
   >
-  > **Test `on_link` itself** — there is no `.gateway is None` workaround to
-  > write any more, and that spelling was exactly the confusion. `Route` is
-  > **hashable**, and `__eq__` compares `dst`, `src`, `gateway`,
-  > `interface_index` and `on_link`.
+  > **Test `on_link` itself**, not `.gateway is None`, which cannot tell
+  > on-link from unknown. `Route` is **hashable**, and `__eq__` compares `dst`,
+  > `src`, `gateway`, `interface_index` and `on_link`.
 - **`count_hops(dst, *, max_hops=30, timeout=1.0, allow_traceroute=True, ipv6=None)`**
   — uses raw-socket probes when permitted, otherwise drives the system
   `traceroute`/`tracert`, so it **works unprivileged**. Only the hop number and
@@ -1218,9 +1221,10 @@ at least 3 there.
   program gives `None`.
   `allow_traceroute=False` requires the in-process path and raises
   `PermissionError` instead. `ipv6=` picks the family and the probes follow
-  (ICMPv6 with `IPV6_UNICAST_HOPS`, and the platform's v6 traceroute); the
-  IPv4-only lookup used before returned `None` for a v6 destination, read as
-  "never answered" rather than "never asked". **`None` means "no answer", never
+  (ICMPv6 with `IPV6_UNICAST_HOPS`, and the platform's v6 traceroute);
+  `gethostbyname` is IPv4-only, so through it a v6 destination would return
+  `None`, read as "never answered" rather than "never asked". **`None` means
+  "no answer", never
   "unreachable"** — firewalls routinely drop ICMP even for an elevated process.
 - **`discover_mtu(dst, *, low=576, high=9000, timeout=1.0, src=None, port=80, probe=True, method="icmp", tries=1, ipv6=None, ttl=None)`**
   — **measures** the path MTU by binary-searching probes, so packets really
@@ -1289,13 +1293,13 @@ at least 3 there.
     learn a *path* MTU.
   - macOS/BSD expose no IPv4 equivalent either, so v4 there is `None` too.
 
-  > **This used to return `None` everywhere**, Linux included, because
-  > `IP_MTU`, `IP_MTU_DISCOVER` and `IP_PMTUDISC_DO` are **not exported by
-  > CPython on any platform** (measured on 3.13 and 3.14) and the code guarded
-  > on `getattr(socket, "IP_MTU", None)`. The Linux numbers are named from
-  > `<linux/in.h>` instead. `IPV6_PATHMTU` also returns a `struct ip6_mtuinfo`
-  > — a `sockaddr_in6` followed by the MTU — not the bare int `IP_MTU` gives
-  > back, so reading it as an int decoded the address family as the MTU.
+  > **A `getattr(socket, "IP_MTU", None)` guard returns `None` everywhere**,
+  > Linux included, because `IP_MTU`, `IP_MTU_DISCOVER` and `IP_PMTUDISC_DO`
+  > are **not exported by CPython on any platform** (measured on 3.13 and
+  > 3.14). The Linux numbers are named from `<linux/in.h>` instead.
+  > `IPV6_PATHMTU` also returns a `struct ip6_mtuinfo` — a `sockaddr_in6`
+  > followed by the MTU — not the bare int `IP_MTU` gives back, so reading it
+  > as an int would decode the address family as the MTU.
 
 > **These answer different questions.** On one real host the local link was
 > 9000, `get_pmtu` returned `None`, and `discover_mtu` found the true 1500 — a
@@ -1320,8 +1324,9 @@ where they collide. `scan_hosts(port=...)` is shorthand for `ports=[port]` and
 accepts a scheme name too; passing both raises `ValueError`.
 
 - **Every port is validated to `0-65535`** and raises `ValueError` otherwise,
-  instead of being masked to 16 bits — `scan_ports(host, [p + 65536])` used to
-  answer about `p`. An unknown scheme or range name raises `ValueError` too.
+  instead of being masked to 16 bits, which would make
+  `scan_ports(host, [p + 65536])` answer about `p`. An unknown scheme or range
+  name raises `ValueError` too.
 - **An explicitly empty `ports` means "nothing to scan"** and returns `[]`. It
   does **not** fall back to the 36-port `"common"` set, which would sweep a
   network the caller just said to probe on no ports; `scan_hosts`
@@ -1434,7 +1439,7 @@ ordered. Built from a dotted string or from separate labels, **leftmost first**:
   Digit-heavy real names are fine: `4.3.2.1.in-addr.arpa` and `0.pool.ntp.org`
   both parse. The check runs after IDNA mapping, so fullwidth digits and the
   ideographic full stops (U+3002, U+FF0E, U+FF61) that spell `127.0.0.1` are
-  refused too; those full stops separate labels.
+  also refused; those full stops separate labels.
 - **A label is printable ASCII (0x21 to 0x7E) without a dot, and holds none of
   `: / ? # [ ] @`.** A space, a control character or a URL
   (`FQDN("http://example.com")`) raises `NetimpsValueError`. The wire entry
@@ -1638,7 +1643,7 @@ own, never as the platform's.
 > **Installing this patch changes what *other* libraries infer.** It is additive
 > in *names* and therefore not additive in *behaviour*: code that tests
 > `hasattr(socket.socket, "recvmsg")` or `getattr(socket, "CMSG_SPACE", None)` to
-> decide whether it is on POSIX now gets the POSIX answer on Windows. The
+> decide whether it is on POSIX gets the POSIX answer on Windows. The
 > normalisation above is what keeps such code from misparsing the payload, but it
 > cannot fix a caller that reads a field Windows does not report — `ipi_spec_dst`
 > comes back `0.0.0.0`, exactly as it already does on macOS.
@@ -1646,9 +1651,7 @@ own, never as the platform's.
 > Known affected: **pydhcp 0.6.1 and earlier**, which read `ipi_spec_dst` for
 > their `SERVER_IDENTIFIER`. **Measured, they receive but allocate and reply to
 > nothing** — a zero-filled `spec_dst` does not degrade a caller that resolves
-> its interface from that field, it silences it. (An earlier version of this box
-> said "degrade to `0.0.0.0` rather than crashing", which was inferred from the
-> field's value rather than measured against it.) `UDPEndpoint` is the
+> its interface from that field, it silences it. `UDPEndpoint` is the
 > supported way to get that address correctly on every platform. Set
 > `NETIMPS_SOCKET_PATCH=0` to opt out entirely.
 
@@ -1712,7 +1715,7 @@ own, never as the platform's.
   layout table.
 
   The `cmsg_type` is left alone — 19 on Windows, 8 on Linux, 26 on macOS — so a
-  consumer comparing against `socket.IP_PKTINFO` matches the local number. v6
+  caller comparing against `socket.IP_PKTINFO` matches the local number. v6
   `in6_pktinfo` is never touched: `{addr, ifindex}`, 20 bytes, identical on all
   three.
 - **Through `netimps.recvmsg()` the layouts genuinely differ.** Measured on CI
@@ -1779,8 +1782,8 @@ wrapped socket expires, on every supported Python (before 3.10
   49 and 50) **and** the struct layout (`in_pktinfo` is index-then-addresses,
   `in6_pktinfo` is the 16-byte address **first**, then the index). An IPv6
   endpoint therefore reports a real `interface_index`, `interface` and
-  `destination`, where it used to report `0`/`None`/`None` while claiming
-  `has_pktinfo`.
+  `destination`; reporting `0`/`None`/`None` while claiming `has_pktinfo`
+  would be the failure of reading the v4 option on a v6 socket.
 - **Two honest flags, decided once at construction from the socket's own
   family.** `has_pktinfo` — `recv` will report the arrival interface;
   `False`, never an optimistic `True`, whenever the option for *this* family is
@@ -1800,9 +1803,9 @@ wrapped socket expires, on every supported Python (before 3.10
   is sent unpinned: the kernel refuses a zero source there (errno 22), and
   unpinned is what Linux and macOS make of one. IPv6 on FreeBSD works as on
   macOS.
-- **Windows is supported, as of the Winsock backend.** Both flags are `True`
-  there for v4, v6 **and** dual-stack `::`, on 3.9 through 3.14, via
-  `WSARecvMsg`/`WSASendMsg` — see **Ancillary data** above. `UDPEndpoint` calls
+- **Windows is supported, through `WSARecvMsg`/`WSASendMsg`.** Both flags are `True`
+  there for v4, v6 **and** dual-stack `::`, on 3.9 through 3.14 — see
+  **Ancillary data** above. `UDPEndpoint` calls
   that backend *directly* rather than the patched stdlib method, so
   `NETIMPS_SOCKET_PATCH=0` does not cost it pktinfo. The per-platform
   `in_pktinfo` layout difference is handled internally; this is the wrapper that
@@ -1831,7 +1834,7 @@ wrapped socket expires, on every supported Python (before 3.10
 - **`pktinfo=False` governs receiving only.** Sending needs no socket option,
   so `send(src=)` is still honoured on an endpoint built with it.
 - **`send(src=)` pins the interface index as well as the source address.** The
-  old code hardcoded `ipi_ifindex=0` and so only ever pinned an address. It
+  A fixed `ipi_ifindex=0` would only ever pin an address. It
   raises `ValueError` for a `src` that names no local address or interface
   (silently sending from another adapter is the failure mode `src` exists to
   prevent) and for an IPv6 `src` on an `AF_INET` endpoint — Linux *accepts and
@@ -1887,10 +1890,10 @@ wrapped socket expires, on every supported Python (before 3.10
 
   **A second loop rebinds.** Serving one endpoint from a new loop —
   `asyncio.run(serve())` twice, or a server stopped and started again — retires
-  the old thread and starts another. It previously captured the first loop for
-  the thread's lifetime, so the second run received nothing and the thread died
-  posting to a closed loop, with the traceback going to stderr where no caller
-  could see it.
+  the old thread and starts another. A thread keeps the loop it started with, so
+  without the rebind the second run would receive nothing and the thread would
+  die posting to a closed loop, with the traceback going to stderr where no
+  caller could see it.
 
   **`asyncio` is imported lazily**, never by `import netimps`. A caller using
   only the value types pays nothing for it.
@@ -1945,16 +1948,17 @@ wrapped socket expires, on every supported Python (before 3.10
 
   > **The *sender's* family decides the reply socket's, not the listener's**, and
   > `datagram.reply_address` is what you pass to `sendto`. A dual-stack
-  > `AF_INET6` listener sees a v4 client as `::ffff:a.b.c.d`, and both halves of
-  > that went wrong. With pktinfo, the `AF_INET` socket was right but
-  > `datagram.sender` was still the v6 4-tuple, so the `sendto` shown above
-  > raised `TypeError: AF_INET address must be a pair (host, port)`. Without
-  > pktinfo there was no `destination`, both fallbacks used the *listener's*
-  > family, and the resulting `AF_INET6` socket has `IPV6_V6ONLY=1` on Windows
-  > (the platform default, which `bind()` does not clear) — so `sendto` to a
-  > mapped address failed with `WinError 10049` and the exchange silently never
-  > started. Deciding from the sender makes the answer the same with or without
-  > pktinfo, and `reply_address` gives the peer in the family that was chosen.
+  > `AF_INET6` listener sees a v4 client as `::ffff:a.b.c.d`, and deciding
+  > from anything else goes wrong in both halves. With pktinfo the `AF_INET`
+  > socket is right but `datagram.sender` is still the v6 4-tuple, so the
+  > `sendto` shown above raises `TypeError: AF_INET address must be a pair
+  > (host, port)`. Without pktinfo there is no `destination`; falling back to
+  > the *listener's* family gives an `AF_INET6` socket with `IPV6_V6ONLY=1` on
+  > Windows (the platform default, which `bind()` does not clear) — so `sendto`
+  > to a mapped address fails with `WinError 10049` and the exchange silently
+  > never starts. Deciding from the sender makes the answer the same with or
+  > without pktinfo, and `reply_address` gives the peer in the family that was
+  > chosen.
 
   Falls back to the endpoint's own bound address, then the wildcard: a reply from
   the wrong address still beats no reply. The own-address fallback is skipped
@@ -1971,21 +1975,23 @@ wrapped socket expires, on every supported Python (before 3.10
   > **A held port and an unusable address are different failures, and they move
   > in different directions.** An address that cannot be bound at all advances to
   > the next *address*; a port that is merely held advances to the next *port* on
-  > the same address. Conflating them was a real bug here: every `OSError`
-  > advanced the address, so a taken `port=` fell through to the endpoint's own
-  > address **with the same port**, and where that bind succeeded the reply left
-  > from an address the client never addressed — the one failure this method
-  > exists to prevent. Measured on Windows 11 ARM64: holding `10.6.0.223:57014`
+  > the same address. Conflating them is a silent correctness bug: if every
+  > `OSError` advanced the address, a taken `port=` would fall through to the
+  > endpoint's own address **with the same port**, and where that bind
+  > succeeded the reply would leave from an address the client never
+  > addressed — the one failure this method exists to prevent. Measured on
+  > Windows 11 ARM64: holding `10.6.0.223:57014`
   > and replying to a datagram that arrived there returned a socket on
   > `127.0.0.1:57014`. So when the ports run out on an otherwise bindable
   > address, this raises **`AddressInUseError`** and binds nothing, rather than
   > answering from somewhere else.
 - **The arrival interface is cached per endpoint**, so the default path is not
-  the slow one. `recv()` used to call `get_interfaces()` and scan it for *every*
-  datagram: measured 1.07 ms per packet against 0.015 with
+  the slow one. Calling `get_interfaces()` and scanning it for *every*
+  datagram costs 1.07 ms per packet against 0.015 with
   `resolve_interface=False`, a 70x cost, and 35–42 ms per enumeration on a host
-  with many adapters. Now an `index -> Interface` cache refreshed on a miss and
-  on a 30-second TTL — 0.017 ms per packet, one enumeration for ten datagrams.
+  with many adapters. So `recv()` keeps an `index -> Interface` cache refreshed
+  on a miss and on a 30-second TTL — 0.017 ms per packet, one enumeration for
+  ten datagrams.
   A miss triggers a refresh because an unseen index means the adapter set
   changed; negative results are cached so a vanished index does not re-enumerate
   forever. `resolve_interface=False` still skips it entirely and never
@@ -2014,7 +2020,7 @@ wrapped socket expires, on every supported Python (before 3.10
   data than the buffer held. When it is `True` and the interface fields are
   empty, they are empty because something was dropped. The buffer is sized for
   four cmsgs rather than one, so an unrelated option on the raw socket
-  (`SO_TIMESTAMP`, `IPV6_RECVHOPLIMIT`) no longer silently swallows the
+  (`SO_TIMESTAMP`, `IPV6_RECVHOPLIMIT`) does not silently swallow the
   pktinfo — measured on Linux, where a one-slot buffer kept the timestamp and
   discarded the pktinfo.
 - **A dual-stack `AF_INET6` socket needs only its own option.** An IPv4 arrival
@@ -2214,10 +2220,9 @@ Aliases: `resolve|dns`, `check|tcp`, `addr|parse`, `source|src`.
   **stderr**, so `--json` stays parseable exactly where a script needs it most:
   on failure stdout is empty and the exit code carries the verdict.
 - **The positional argument is required** for `ping`, `resolve`, `check` (both
-  of its two), `mtu`, `scan`, `addr` and `split`. It used to default to `""`,
-  so `netimps ping` answered about the empty string; a missing one is now
-  argparse's usage error on stderr with exit 2. `route` and `source` still
-  default to `8.8.8.8`.
+  of its two), `mtu`, `scan`, `addr` and `split`, so `netimps ping` is not an
+  answer about the empty string; a missing one is argparse's usage error on
+  stderr with exit 2. `route` and `source` default to `8.8.8.8`.
 - **Exit codes are meaningful**: `0` success, `1` "the answer was no"
   (unreachable, closed, no records), `2` a **caller** error — a bad argument, a
   missing positional, `--method tcp` with no `--port`, or a scheme with no port
