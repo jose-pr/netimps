@@ -107,8 +107,15 @@ def _install_query_guards(monkeypatch, refuse) -> None:
     ``getaddrinfo`` and its siblings are only one road to a name server.
     ``resolve_wire`` and ``dnspython`` open their own sockets, ``resolve_doh``
     goes through ``urllib`` and ``resolve_nslookup`` runs a program, so each is
-    patched where it leaves the process. Loopback is always allowed: the DNS
-    tests talk to a fake server on it.
+    patched where it leaves the process.
+
+    Two rules. An off-host DNS port may not be connected or sent to at all.
+    A loopback DNS port may be connected to -- a port scan of loopback does
+    that and sends nothing -- but nothing may be *sent* to it:
+    ``127.0.0.53:53`` is systemd-resolved's stub and ``127.0.0.1:53`` a local
+    dnsmasq, and both forward a query off the host. The fake servers the DNS
+    tests talk to listen on loopback at an ephemeral port, which neither rule
+    touches.
 
     ``refuse(what)`` records the escape and raises :class:`ResolverEscape`.
     The record matters because ``resolve_dnspython`` turns any exception into a
@@ -121,7 +128,7 @@ def _install_query_guards(monkeypatch, refuse) -> None:
             isinstance(address, tuple)
             and len(address) >= 2
             and address[1] in _DNS_PORTS
-            and not _stays_on_host(address[0])
+            and (method == "sendto" or not _stays_on_host(address[0]))
         ):
             refuse("socket.%s(%r)" % (method, address))
 
@@ -133,6 +140,20 @@ def _install_query_guards(monkeypatch, refuse) -> None:
             return _real(self, *args, **kwargs)
 
         monkeypatch.setattr(socket.socket, method, wrapper)
+
+    for method in ("send", "sendall"):
+        real_method = getattr(socket.socket, method)
+
+        def payload_wrapper(self, *args, _real=real_method, _name=method, **kwargs):
+            try:
+                peer = self.getpeername()
+            except OSError:
+                peer = None
+            if isinstance(peer, tuple) and len(peer) >= 2 and peer[1] in _DNS_PORTS:
+                refuse("socket.%s() to %r" % (_name, peer))
+            return _real(self, *args, **kwargs)
+
+        monkeypatch.setattr(socket.socket, method, payload_wrapper)
 
     try:
         from dns import resolver as dns_resolver
@@ -147,7 +168,14 @@ def _install_query_guards(monkeypatch, refuse) -> None:
                     str(getattr(server, "address", server))
                     for server in (self.nameservers or [])
                 ]
-                if not (servers and all(_stays_on_host(s) for s in servers)):
+                ports = getattr(self, "nameserver_ports", None) or {}
+                default_port = getattr(self, "port", 53)
+                on_host = servers and all(
+                    _stays_on_host(server)
+                    and ports.get(server, default_port) not in _DNS_PORTS
+                    for server in servers
+                )
+                if not on_host:
                     refuse(
                         "dns.resolver.Resolver.resolve(%r, nameservers=%r)"
                         % (query, servers)

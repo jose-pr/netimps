@@ -58,7 +58,9 @@ def test_the_dnspython_backend_cannot_reach_an_off_host_server(resolver_escapes)
 
 
 def test_the_dnspython_backend_cannot_use_the_system_nameservers(resolver_escapes):
-    """With no `ns` it reads the OS's own servers, which are off-host."""
+    """With no `ns` it reads the OS's own servers. Those are off-host, or a
+    loopback stub on port 53 that forwards off-host (systemd-resolved's
+    `127.0.0.53`); the guard has to refuse both."""
     pytest.importorskip("dns")
     seen = _provoke(
         resolver_escapes,
@@ -94,18 +96,40 @@ def test_the_default_chain_cannot_reach_a_name_server(resolver_escapes):
     assert seen
 
 
-def test_loopback_is_still_allowed(resolver_escapes):
-    """The DNS tests talk to a fake server on loopback; that must stay open."""
+def test_loopback_off_the_dns_port_is_still_allowed(resolver_escapes):
+    """The DNS tests talk to a fake server on loopback at an ephemeral port;
+    that must stay open."""
     probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         probe.bind(("127.0.0.1", 0))
         probe.sendto(b"x", ("127.0.0.1", probe.getsockname()[1]))
     finally:
         probe.close()
+    assert resolver_escapes == []
+
+
+def test_connecting_to_the_loopback_dns_port_is_allowed_and_sending_is_not(
+    resolver_escapes,
+):
+    """A port scan of loopback connects to port 53 and sends nothing, which is
+    harmless. A payload is a query, and a stub listening there would forward
+    it off the host."""
     sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        # Port 53 on loopback is the case the guard keys on.
         sender.connect(("127.0.0.1", 53))
+        assert resolver_escapes == []
+        seen = _provoke(resolver_escapes, lambda: sender.send(b"x"))
+        assert seen and "socket.send" in seen[0]
     finally:
         sender.close()
-    assert resolver_escapes == []
+
+
+def test_a_loopback_resolver_on_the_dns_port_is_refused(resolver_escapes):
+    """`127.0.0.53:53` is a forwarder, not a destination: a query sent there
+    leaves the host. Loopback at any other port is where the fake servers
+    listen, and stays allowed."""
+    seen = _provoke(
+        resolver_escapes,
+        lambda: netimps.resolve_wire("x.example", ns="127.0.0.53", timeout=0.2),
+    )
+    assert seen and "socket." in seen[0]
