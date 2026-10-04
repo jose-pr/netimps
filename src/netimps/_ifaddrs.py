@@ -80,7 +80,7 @@ from typing import (
     Tuple,
     Union,
 )
-from ._ip import IPAddressLike, unmap
+from ._ip import IPAddressLike, _family_argument, unmap
 from ._parse import try_parse
 
 __all__ = [
@@ -1470,28 +1470,20 @@ def iter_addresses(
     :param interfaces: reuse an existing enumeration instead of calling
         :func:`get_interfaces` again. Worth passing in a loop, since
         enumeration is a syscall.
-    :param family: ``4`` or ``6`` to yield only that family; ``None`` for both.
-        This is the **short form**, not ``socket.AF_INET``/``AF_INET6`` --
-        unlike :func:`netimps.bind` and :func:`netimps.get_free_port`, which
-        take the ``AF_*`` constants. Anything else raises :class:`ValueError`
-        **when this function is called**, not on the first ``next()``: a
-        generator that validates lazily reports a bad argument from somewhere
-        the traceback no longer names the caller.
+    :param family: ``4`` or ``AF_INET``, ``6`` or ``AF_INET6`` to yield only
+        that family; ``None`` for both. Anything else raises
+        :class:`ValueError` **when this function is called**, not on the first
+        ``next()``: a generator that validates lazily reports a bad argument
+        from somewhere the traceback no longer names the caller.
 
     The ``interface`` is the full :class:`Interface`, so its name, MAC and MTU
     stay reachable -- the flattening loses no information.
     """
-    if family not in (None, 4, 6):
-        hint = ""
-        if family == _socket.AF_INET:
-            hint = " -- that is socket.AF_INET; this parameter wants 4"
-        elif family == _socket.AF_INET6:
-            hint = " -- that is socket.AF_INET6; this parameter wants 6"
-        raise ValueError(
-            "family must be 4, 6 or None (the short form, not socket.AF_INET/"
-            "AF_INET6), got %r%s" % (family, hint)
-        )
-    return _iter_addresses(interfaces, family)
+    normalised = _family_argument(family)
+    version = (
+        None if normalised is None else (4 if normalised == _socket.AF_INET else 6)
+    )
+    return _iter_addresses(interfaces, version)
 
 
 def _iter_addresses(

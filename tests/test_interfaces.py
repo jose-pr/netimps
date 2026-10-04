@@ -479,12 +479,23 @@ def test_iter_addresses_validates_family_eagerly():
         iter_addresses(family=99)  # deliberately not wrapped in list()
 
 
-def test_iter_addresses_family_error_names_both_conventions():
-    """``family=`` takes 4/6 here and AF_* next door; say so in the message."""
-    with pytest.raises(ValueError, match=r"socket\.AF_INET6.*wants 6"):
-        iter_addresses(family=socket.AF_INET6)
-    with pytest.raises(ValueError, match=r"socket\.AF_INET.*wants 4"):
-        iter_addresses(family=socket.AF_INET)
+def test_iter_addresses_accepts_both_spellings_of_a_family():
+    """``family=`` takes 4/6 and the platform's AF_* alike."""
+    ifaces = [
+        Interface(
+            name="eth0",
+            ips=[
+                ipaddress.ip_interface("10.0.0.5/24"),
+                ipaddress.ip_interface("fe80::1/64"),
+            ],
+        )
+    ]
+    assert [str(a) for _i, a in iter_addresses(ifaces, family=socket.AF_INET)] == [
+        "10.0.0.5/24"
+    ]
+    assert [str(a) for _i, a in iter_addresses(ifaces, family=socket.AF_INET6)] == [
+        "fe80::1/64"
+    ]
 
 
 def test_iter_addresses_still_yields_pairs():
@@ -596,9 +607,9 @@ def test_interface_spec_honours_a_zone_suffix(one_adapter):
     address and every scoped literal failed the lookup outright.
     """
     # Numeric zone (Linux, Windows): the index the OS itself wrote.
-    assert _iface_spec.interface_index("fe80::1%37") == 37
+    assert _iface_spec.interface_index("2001:db8::10%37") == 37
     # Named zone (macOS, BSD).
-    assert _iface_spec.interface_index("fe80::1%fake0") == 37
+    assert _iface_spec.interface_index("2001:db8::10%fake0") == 37
     # The address keeps its zone; only the lookup drops it.
     resolved = _iface_spec.interface_address("2001:db8::10%fake0", want_ipv6=True)
     assert str(resolved) == "2001:db8::10%fake0"
@@ -1407,3 +1418,142 @@ def test_a_short_bsd_netmask_is_the_zero_filled_mask_it_stands_for(
 def test_a_zero_length_netmask_is_prefix_zero():
     mask = _ifaddrs._bsd_mask_bytes(0, 4, b"\xff\x00\x00\x00")
     assert _ifaddrs._prefix_from_netmask(mask) == 0
+
+
+# --------------------------------------------------------------------------- #
+# Lookups: one zone matcher, names and indexes, one spelling of a family       #
+# --------------------------------------------------------------------------- #
+
+
+def test_the_classifiers_read_an_interface_object_as_its_address():
+    """``IPv4Interface`` is an ``IPv4Address`` subclass, so it was compared as
+    an interface (address *and* network) and never equalled the broadcast."""
+    nic = Interface("x", 1, ips=[ipaddress.ip_interface("10.0.0.5/24")])
+    entry = ipaddress.ip_interface("10.0.0.255/24")
+    assert netimps.is_broadcast(entry, nic) is True
+    assert netimps.is_unicast(entry, nic) is False
+    assert netimps.is_broadcast(ipaddress.ip_interface("10.0.0.7/24"), nic) is False
+    assert netimps.is_unicast(ipaddress.ip_interface("10.0.0.7/24"), nic) is True
+    assert netimps.is_multicast(ipaddress.ip_interface("224.0.0.1/24")) is True
+    assert netimps.is_wildcard(ipaddress.ip_interface("0.0.0.0/0")) is True
+    assert netimps.is_broadcast(0xFFFFFFFF) is True
+    assert netimps.is_broadcast(b"\xff\xff\xff\xff") is True
+    assert netimps.is_unicast(0xFFFFFFFF) is False
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        "2001:db8::10%fake0",
+        "2001:db8::10%37",
+        "2001:db8::10",
+        "2001:db8::10%nosuchadapter",
+        "2001:db8::10%999",
+        "2001:db8::11%37",
+        "192.0.2.10",
+        "fake0",
+        "02:00:00:00:00:01",
+    ],
+)
+def test_interface_index_and_get_interface_agree_on_every_spec(one_adapter, spec):
+    """Two lookups of one spec must give one answer."""
+    found = netimps.get_interface(spec)
+    index = _iface_spec.interface_index(spec, strict=False)
+    assert (found is None) == (index is None)
+    if found is not None:
+        assert index == found.index
+    else:
+        with pytest.raises(ValueError):
+            _iface_spec.interface_index(spec)
+
+
+@pytest.mark.parametrize("spec", ["2001:db8::10%nosuchadapter", "2001:db8::10%999"])
+def test_a_zone_that_names_no_adapter_holding_the_address_is_refused(one_adapter, spec):
+    with pytest.raises(ValueError, match="no local interface holds address"):
+        _iface_spec.interface_index(spec)
+    with pytest.raises(ValueError, match="no local interface holds address"):
+        _iface_spec.interface_address(spec, want_ipv6=True)
+    assert _iface_spec.interface_index(spec, strict=False) is None
+    assert netimps.get_interface(spec) is None
+    assert list(netimps.iter_interfaces(spec)) == []
+
+
+def test_the_real_loopback_zone_is_refused_when_it_names_nothing():
+    """``::1%nosuchadapter`` was the loopback index with the zone ignored."""
+    if not any(i.is_loopback and i.ipv6 for i in get_interfaces()):
+        pytest.skip("no IPv6 loopback here")
+    assert _iface_spec.interface_index("::1", strict=False)
+    assert _iface_spec.interface_index("::1%nosuchadapter", strict=False) is None
+    assert _iface_spec.interface_index("::1%999999", strict=False) is None
+
+
+def test_get_interface_finds_an_interface_by_name_and_by_index(one_adapter):
+    assert netimps.get_interface("fake0") == one_adapter
+    assert netimps.get_interface(index=37) == one_adapter
+    assert netimps.get_interface("nosuch") is None
+    assert netimps.get_interface(index=38) is None
+    assert list(netimps.iter_interfaces("fake0")) == [one_adapter]
+    assert list(netimps.iter_interfaces(index=37)) == [one_adapter]
+    # An int stays an address: it is ambiguous, so the index has its own keyword.
+    assert netimps.get_interface(37) is None
+
+
+def test_the_real_loopback_comes_back_by_name_and_by_index():
+    loopback = next((i for i in get_interfaces() if i.is_loopback), None)
+    if loopback is None or loopback.name == "<unknown>" or not loopback.index:
+        pytest.skip("no native enumeration here")
+    assert netimps.get_interface(loopback.name) == loopback
+    assert netimps.get_interface(index=loopback.index) == loopback
+
+
+def test_get_interface_index_argument_is_checked(one_adapter):
+    with pytest.raises(TypeError):
+        netimps.get_interface()
+    with pytest.raises(TypeError):
+        netimps.get_interface("fake0", index=37)
+    with pytest.raises(ValueError):
+        netimps.get_interface(index=0)
+    with pytest.raises(TypeError):
+        netimps.get_interface(index="37")  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        netimps.get_interface(index=True)
+
+
+def test_a_family_is_one_thing_however_it_is_spelled():
+    assert netimps.has_pktinfo(4) is netimps.has_pktinfo(socket.AF_INET)
+    assert netimps.has_pktinfo(6) is netimps.has_pktinfo(socket.AF_INET6)
+    both = list(iter_addresses())
+    assert list(iter_addresses(family=4)) == list(iter_addresses(family=socket.AF_INET))
+    assert list(iter_addresses(family=6)) == list(
+        iter_addresses(family=socket.AF_INET6)
+    )
+    assert len(list(iter_addresses(family=4))) + len(
+        list(iter_addresses(family=6))
+    ) == len(both)
+    for bad in (5, 0, "v4", "AF_INET", True, 2.0, [4]):
+        with pytest.raises(ValueError):
+            netimps.has_pktinfo(bad)
+        with pytest.raises(ValueError):
+            iter_addresses(family=bad)
+        with pytest.raises(ValueError):
+            netimps.bind("127.0.0.1", 0, family=bad)
+        with pytest.raises(ValueError):
+            netimps.get_free_port(family=bad)
+
+
+def test_bind_and_get_free_port_take_the_short_family():
+    sock = netimps.bind("127.0.0.1", 0, family=4)
+    try:
+        assert sock.family == socket.AF_INET
+    finally:
+        sock.close()
+    assert netimps.get_free_port("127.0.0.1", family=4) > 0
+    if socket.has_ipv6:
+        try:
+            v6 = netimps.bind("::1", 0, family=6)
+        except OSError:
+            pytest.skip("no IPv6 loopback")
+        try:
+            assert v6.family == socket.AF_INET6
+        finally:
+            v6.close()

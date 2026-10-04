@@ -484,6 +484,36 @@ def _parse_port(raw: str, original: object) -> int:
     return _port_number(int(raw), original)
 
 
+def _family_argument(family: object, *, required: bool = False) -> "Optional[int]":
+    """``socket.AF_INET`` or ``socket.AF_INET6`` for a family spelled either way.
+
+    A family is ``4`` or ``6``, or the platform's ``AF_INET``/``AF_INET6``
+    (``AF_INET6`` is 10 on Linux, 23 on Windows and 30 on macOS, so it is never
+    compared against a literal). ``None`` means "either" unless ``required``.
+
+    :raises ValueError: for anything else, a ``bool`` and a misspelt family
+        included, rather than answering about a family nobody asked for.
+    """
+    if family is None and not required:
+        return None
+    if isinstance(family, int) and not isinstance(family, bool):
+        if family in (4, _socket.AF_INET):
+            return _socket.AF_INET
+        if family in (6, _socket.AF_INET6):
+            return _socket.AF_INET6
+    raise ValueError(
+        "family must be 4, 6, socket.AF_INET or socket.AF_INET6%s, got %r"
+        % ("" if required else " (or None)", family)
+    )
+
+
+def _required_family(family: object) -> int:
+    """:func:`_family_argument` where ``None`` is not an answer."""
+    resolved = _family_argument(family, required=True)
+    assert resolved is not None
+    return resolved
+
+
 def _as_address(value: object) -> "IPAddress":
     """The address ``value`` stands for, for the classifiers.
 
@@ -495,10 +525,12 @@ def _as_address(value: object) -> "IPAddress":
     """
     from ._parse import parse
 
-    if isinstance(value, (IPv4Address, IPv6Address)):
-        return value
+    # An interface first: ``IPv4Interface`` subclasses ``IPv4Address``, and
+    # returned as such it would compare as address *and* network.
     if isinstance(value, (IPv4Interface, IPv6Interface)):
         return value.ip
+    if isinstance(value, (IPv4Address, IPv6Address)):
+        return value
     if isinstance(value, (IPv4Network, IPv6Network)):
         raise TypeError("expected an address, not a network (%r)" % (value,))
     if isinstance(value, (Host, FQDN)):

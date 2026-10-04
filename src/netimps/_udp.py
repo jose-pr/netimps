@@ -119,7 +119,14 @@ from typing import (
 from . import _freebsd
 from ._iface_spec import InterfaceLike
 from ._ifaddrs import INTERFACE_CACHE_TTL, Interface
-from ._ip import HostLike, IPAddress, IPv4Address, IPv6Address, _dst_argument
+from ._ip import (
+    HostLike,
+    IPAddress,
+    IPv4Address,
+    IPv6Address,
+    _dst_argument,
+    _required_family,
+)
 from ._msg import CMSG_SPACE as _cmsg_space
 from ._msg import recvmsg as _recvmsg
 from ._msg import sendmsg as _sendmsg
@@ -1343,10 +1350,15 @@ def has_pktinfo(family: int = _socket.AF_INET) -> bool:
     The answer is **cached per family** for the life of the process, since it is
     a property of the platform and the interpreter rather than of any socket.
 
+    *family* is ``4`` or ``AF_INET``, ``6`` or ``AF_INET6``; anything else raises
+    :class:`ValueError`, since a silent ``False`` for a misspelt family is a
+    wrong answer.
+
     Returns ``False`` rather than raising if a socket of that family cannot even
     be created -- a v6 answer on a host with IPv6 disabled is "no", not an
     error.
     """
+    family = _required_family(family)
     cached = _PKTINFO_SUPPORT.get(family)
     if cached is not None:
         return cached

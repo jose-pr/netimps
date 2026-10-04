@@ -109,8 +109,10 @@ netimps.is_valid("::1", IPAddress)       # True
 netimps.get_source_ip("8.8.8.8")         # IPv4Address('192.0.2.10')
 netimps.get_route("8.8.8.8").gateway     # IPv4Address('192.0.2.1')
 
-# Exact assignment, subnet membership, or MAC ownership
+# Exact assignment, subnet membership, MAC ownership, name or index
 netimps.get_interface("192.0.2.10")      # first matching Interface, or None
+netimps.get_interface("Wi-Fi")           # by adapter name
+netimps.get_interface(index=10)          # by interface index
 list(netimps.iter_interfaces(parse("192.0.2.0/24", IPNetwork)))
 netimps.is_local_address("127.0.0.1")    # True without interface discovery
 

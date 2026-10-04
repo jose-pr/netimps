@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`get_interface` and `iter_interfaces` look an interface up by name and by
+  index**: `get_interface("eth0")` for text that is no address, network or MAC,
+  and `get_interface(index=3)` (a keyword, since an `int` query is an address).
+  `Datagram.interface_index` and `Route.interface_index` now have a way back to
+  an `Interface`.
+
 - **`Interface.is_up`**: `True` when the interface is usable (`IFF_UP` and
   `IFF_RUNNING` on POSIX, the operational status on Windows), `False` when it is
   not, `None` when the system did not say; part of equality, the hash and the
@@ -277,6 +283,25 @@ probe says so in its prefix.
   `addr` command use it; `Host(x).resolve()` gives `(fqdn, ip)`.
 
 ### Fixed
+
+- **`is_broadcast` and `is_unicast` read an interface object as its address.**
+  `IPv4Interface` is an `IPv4Address` subclass and was compared as address and
+  network, so `is_broadcast(IPv4Interface("10.0.0.255/24"), nic)` was false and
+  `is_unicast` of it true; every classifier now reduces an interface to its
+  `.ip` first.
+
+- **One zone rule for `interface_index`, `interface_address` and
+  `get_interface`.** `interface_index("::1%nosuchadapter")` was the loopback
+  index with the zone ignored and `("::1%999")` was 999 unchecked, while
+  `get_interface` found nothing for both. A zone must name the adapter that
+  holds the address, and a strict lookup of one that does not raises. The
+  address in an interface spec must be held locally: `fe80::1%12` for an
+  address no adapter holds is no longer index 12.
+
+- **A family is `4` or `AF_INET`, `6` or `AF_INET6`, wherever one is taken.**
+  `has_pktinfo(4)` answered `False` and `iter_addresses(family=AF_INET)` raised;
+  `bind`, `get_free_port`, `has_pktinfo` and `iter_addresses` now share one
+  reader, and anything else raises `ValueError`.
 
 - **Windows no longer lists addresses it cannot bind.** An address the system
   marks tentative or duplicate is left out of `Interface.ips`: the four

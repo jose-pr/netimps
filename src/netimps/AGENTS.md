@@ -112,7 +112,7 @@ too. The named networks `LOOPBACK_V4`, `LINK_LOCAL_V4` (`IPv4Network`) and
 | `IPNetworkLike` | anything accepted *as input* for a network |
 | `HostLike` | `str \| IPv4Address \| IPv6Address \| IPv4Interface \| IPv6Interface \| Host \| FQDN` -- any `dst`-typed parameter |
 | `InterfaceLike` | `Interface \| MACAddress \| IPv4Address \| IPv6Address \| str \| None` -- names a local interface: `src=` and `interface=` parameters |
-| `InterfaceQuery` | `Interface \| IPAddressLike \| IPInterface \| IPNetwork \| MACAddress` -- what `get_interface` and `iter_interfaces` look up |
+| `InterfaceQuery` | `Interface \| IPAddressLike \| IPInterface \| IPNetwork \| MACAddress` (text that is none of those is an adapter name) -- what `get_interface` and `iter_interfaces` look up |
 | `PortsLike` | `str \| int \| Iterable[str \| int]` -- a port, a range name, a scheme name, or several: `scan_ports`, `scan_hosts` |
 | `SocketAddress` | `(host, port)` or `(host, port, flowinfo, scope_id)` -- a socket address tuple, as in `Datagram.sender` |
 | `MACAddressLike` | `str \| int \| bytes \| bytearray \| MACAddress` |
@@ -334,11 +334,13 @@ a `bool` or `None`. `repr` is a constructor call that rebuilds an equal value.
 for consumers that filter or act per address. The full `Interface` comes along,
 so nothing is lost. Pass an existing enumeration in a loop; it is a syscall.
 
-- **`family` is the short form, `4` or `6`** — *not* `socket.AF_INET`/
-  `AF_INET6`, which `bind` and `get_free_port` take. Anything else raises
-  `ValueError` **from the call itself**, not from the first `next()`: a
-  generator that validates lazily reports a bad argument from a traceback that
-  no longer names the caller. Passing an `AF_*` constant says so in the message.
+- **`family` is `4` or `AF_INET`, `6` or `AF_INET6`**, the same two spellings
+  everywhere a family is taken (`bind`, `get_free_port`, `has_pktinfo`,
+  `iter_addresses`). Anything else raises `ValueError` **from the call itself**,
+  not from the first `next()`: a generator that validates lazily reports a bad
+  argument from a traceback that no longer names the caller. `AF_INET6` is 10 on
+  Linux, 23 on Windows and 30 on macOS, so compare against the constant, never a
+  literal.
 
 ## Address and network helpers
 
@@ -924,7 +926,8 @@ at least 3 there.
 
 - **`bind(address="", port=0, *, family=None, kind=SOCK_DGRAM, reuse_address=True, allow_address_takeover=False, reuse_port=False, broadcast=False, connreset=None, interface=None, options=(), listen=None)`**
   — create, configure and bind in one call. `family=None` takes the family
-  from the address: an IPv6 literal (or an `interface=` whose address is
+  from the address (`family` is `4`/`AF_INET` or `6`/`AF_INET6`, anything else
+  raises `ValueError`): an IPv6 literal (or an `interface=` whose address is
   IPv6) gives `AF_INET6`, an IPv4 literal `AF_INET`, and a name `AF_INET`
   when it has an IPv4 address, else `AF_INET6`. **The wildcard `""` is
   IPv4**; ask for `"::"` to listen on IPv6. `connreset=None` is `False` for a
@@ -1088,10 +1091,19 @@ at least 3 there.
   A **cached call returns the stored `Interface` objects in a fresh list.**
   An `Interface` cannot change after construction and `.ips` is a tuple, so
   one caller cannot corrupt another's view. Only `.raw`, a dict, is copied.
-- **`get_interface(query, *, strict=True, cache=False) -> Interface | None`** — first matching
+- **`get_interface(query=None, *, index=None, strict=True, cache=False) -> Interface | None`** — first matching
   adapter in OS enumeration order. `query` accepts an `Interface`, exact
   `IPAddress`, exact `.ip` from an `IPInterface`, an `IPNetwork` containing at
-  least one assigned address, or an exact `MACAddress`. Address-like strings,
+  least one assigned address, an exact `MACAddress`, or **an adapter name**
+  (text that is no address, network or MAC): `get_interface(iface.name)` and
+  `get_interface(index=iface.index)` return `iface`, the two keys the library
+  hands out. Pass a `query` or `index=`, not both and not neither (`TypeError`);
+  `index=` is a positive `int` (`ValueError` otherwise), and an `int` *query* stays
+  an address. A `%zone` on an address is a filter: it must name the adapter that
+  holds the address (the index on Linux and Windows, the name on the BSDs), and
+  `interface_index` and `interface_address` apply the same rule, so
+  `::1%nosuchadapter` and `::1%999` name no interface and a strict lookup of
+  them raises. Address-like strings,
   integers and packed bytes remain accepted; a slash-bearing string is a
   network. MAC text and 6-byte packed values are recognised after IP parsing.
   Integer MACs must be wrapped in `MACAddress` because integers are also valid
@@ -1099,8 +1111,8 @@ at least 3 there.
   `strict=False`, only an address or `IPInterface` miss synthesizes a host-route
   interface named `"<unknown>"`; networks and MACs have no honest synthetic
   result.
-- **`iter_interfaces(query) -> Iterator[Interface]`** — every match for the same
-  query forms, in OS order and with each adapter yielded once even if several
+- **`iter_interfaces(query=None, *, index=None, cache=False) -> Iterator[Interface]`** — every match for the same
+  query forms (names and `index=` included), in OS order and with each adapter yielded once even if several
   assigned addresses match. An `Interface` yields itself without enumeration.
   Addresses need not be unique across adapters (unscoped IPv6 link-local is a
   common example), so use this plural form when every owner matters.
@@ -1880,7 +1892,7 @@ wrapped socket expires, on every supported Python (before 3.10
   **`asyncio` is imported lazily**, never by `import netimps`. A caller using
   only the value types pays nothing for it.
 - **`has_pktinfo(family=AF_INET) -> bool`** — whether a UDP socket of that
-  family can report each datagram's arrival interface *on this host*. The
+  family (`4`/`AF_INET` or `6`/`AF_INET6`; anything else raises `ValueError`) can report each datagram's arrival interface *on this host*. The
   question to ask **before** choosing how to bind: with it, one wildcard socket
   serves every address and still knows which one a datagram reached; without
   it, the wildcard has to be expanded into a socket per address — and on Linux

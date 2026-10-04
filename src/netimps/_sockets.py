@@ -31,7 +31,7 @@ import weakref as _weakref
 
 from . import _proc
 from ._iface_spec import InterfaceLike, interface_address as _interface_address
-from ._iface_spec import _without_zone
+from ._iface_spec import _without_zone, _zone_names
 from ._iface_spec import interface_index as _interface_index
 from ._exceptions import AddressInUseError
 from ._ifaddrs import Interface
@@ -46,6 +46,7 @@ from ._ip import (
     Host,
     _as_address,
     _dst_argument,
+    _family_argument,
     _host_text,
     split_host,
     split_zone,
@@ -209,7 +210,8 @@ def bind(
         address and guessing one (the network address? the first host?) would be
         worse than refusing.
     :param port: local port; ``0`` lets the OS choose.
-    :param family: ``AF_INET`` or ``AF_INET6``. ``None`` (the default) takes the
+    :param family: ``4`` or ``AF_INET``, ``6`` or ``AF_INET6``; anything else
+        raises :class:`ValueError`. ``None`` (the default) takes the
         family from what was given: an IPv6 literal, or an *interface* whose
         address is IPv6, gives ``AF_INET6``; an IPv4 literal gives ``AF_INET``;
         a name gives ``AF_INET`` when it has an IPv4 address and ``AF_INET6``
@@ -272,6 +274,7 @@ def bind(
     its own :class:`OSError` subclass and ``errno``. The socket is closed before
     the exception propagates, so a failed call leaks nothing.
     """
+    family = _family_argument(family)
     # Coerced through the same helper `ping`, `resolve` and `UDPEndpoint.send`
     # use, so one union is accepted everywhere rather than this one entry point
     # being stricter than its neighbours.
@@ -599,7 +602,7 @@ def bind_error_hint(
     return None
 
 
-def _classify_interface_query(query: InterfaceQuery) -> "Tuple[str, Any]":
+def _classify_interface_query(query: "Optional[InterfaceQuery]") -> "Tuple[str, Any]":
     """Return the lookup kind and normalised value, or ``("invalid", None)``."""
     import ipaddress as _ipaddress
 
@@ -631,19 +634,10 @@ def _classify_interface_query(query: InterfaceQuery) -> "Tuple[str, Any]":
         mac = try_parse(query, MACAddress)
         if mac is not None:
             return "mac", mac
+    # Text that is no address, network or MAC names an adapter.
+    if isinstance(query, str) and query:
+        return "name", query
     return "invalid", None
-
-
-def _zone_names(iface: "Interface", zone: str) -> bool:
-    """True if ``zone`` identifies ``iface``.
-
-    Linux and Windows write an IPv6 zone as the numeric interface index, the
-    BSDs as the adapter name; both spellings are accepted, as they are in
-    :func:`netimps._iface_spec.interface_index`.
-    """
-    if zone.isdigit():
-        return bool(iface.index) and iface.index == int(zone)
-    return iface.name == zone
 
 
 def _interfaces_for_query(
@@ -657,6 +651,12 @@ def _interfaces_for_query(
         yield wanted
         return
     if kind == "invalid":
+        return
+    if kind == "index":
+        enumerated = get_interfaces() if cache is False else get_interfaces(cache=cache)
+        for iface in enumerated:
+            if iface.index == wanted:
+                yield iface
         return
 
     zone = getattr(wanted, "scope_id", None) if kind == "address" else None
@@ -676,6 +676,8 @@ def _interfaces_for_query(
     for iface in enumerated:
         if kind == "mac":
             matches = iface.mac == wanted
+        elif kind == "name":
+            matches = iface.name == wanted
         elif kind == "address":
             matches = any(entry.ip == wanted for entry in iface.ips)
             if matches and zone:
@@ -691,9 +693,32 @@ def _interfaces_for_query(
             yield iface
 
 
+#: The default of ``query``, telling "no query given" from an explicit ``None``
+#: (which is an invalid query: no match).
+_NO_QUERY: Any = object()
+
+
+def _interface_target(
+    query: "Optional[InterfaceQuery]", index: "Optional[int]"
+) -> "Tuple[str, Any]":
+    """The lookup kind and value for a query, or for ``index=`` instead of one."""
+    if index is None:
+        if query is _NO_QUERY:
+            raise TypeError("pass a query or index=")
+        return _classify_interface_query(query)
+    if query is not _NO_QUERY:
+        raise TypeError("pass a query or index=, not both")
+    if not isinstance(index, int) or isinstance(index, bool):
+        raise TypeError("index must be an int, not %r" % (type(index).__name__,))
+    if index < 1:
+        raise ValueError("index must be a positive interface index, got %r" % (index,))
+    return "index", index
+
+
 def iter_interfaces(
-    query: InterfaceQuery,
+    query: "Optional[InterfaceQuery]" = _NO_QUERY,
     *,
+    index: "Optional[int]" = None,
     cache: "Union[bool, float]" = False,
 ) -> "Iterator[Interface]":
     """Yield every local interface matching ``query``, in OS order.
@@ -706,8 +731,10 @@ def iter_interfaces(
 
     MAC text and 6-byte packed values are recognised after IP parsing.
     Integer MACs must be wrapped in ``MACAddress`` because an integer is also
-    a valid IP-address representation. Invalid queries and misses yield
-    nothing. Each matching interface is yielded once even if several of its
+    a valid IP-address representation. Text that is no address, network or MAC
+    is an **adapter name**; ``index=`` names an interface by its index instead
+    of a ``query`` (an ``int`` query stays an address). Invalid queries and
+    misses yield nothing. Each matching interface is yielded once even if several of its
     assigned addresses fall within a requested network.
 
     A ``%zone``-qualified IPv6 address (``fe80::1%15``, ``fe80::1%eth0``) is
@@ -718,13 +745,14 @@ def iter_interfaces(
     just reported was local. A zone naming an adapter that does not hold the
     address yields nothing, which is the honest answer to a contradiction.
     """
-    kind, wanted = _classify_interface_query(query)
+    kind, wanted = _interface_target(query, index)
     yield from _interfaces_for_query(kind, wanted, cache)
 
 
 def get_interface(
-    query: InterfaceQuery,
+    query: "Optional[InterfaceQuery]" = _NO_QUERY,
     *,
+    index: "Optional[int]" = None,
     strict: bool = True,
     cache: "Union[bool, float]" = False,
 ) -> "Optional[Interface]":
@@ -735,8 +763,9 @@ def get_interface(
 
         get_interface(sock.getsockname()[0])
 
-    Accepts the same query forms as :func:`iter_interfaces`; singular lookup is
-    exactly the first plural result. Since addresses can appear on more than
+    Accepts the same query forms as :func:`iter_interfaces`, an adapter name and
+    ``index=`` among them (``get_interface(iface.name)``, ``get_interface(index=
+    iface.index)``); singular lookup is exactly the first plural result. Since addresses can appear on more than
     one adapter (especially unscoped IPv6 link-local addresses), use the plural
     form when every match matters.
 
@@ -759,7 +788,7 @@ def get_interface(
     """
     from ._ifaddrs import Interface
 
-    kind, wanted = _classify_interface_query(query)
+    kind, wanted = _interface_target(query, index)
     match = next(_interfaces_for_query(kind, wanted, cache), None)
     if match is not None or strict or kind != "address":
         return match
@@ -1026,6 +1055,7 @@ def get_free_port(
     default ``AF_INET``.
     """
     address = _dst_argument(src)
+    family = _family_argument(family)
     if family is None:
         family = _infer_family(address, _socket.SOCK_STREAM)
     sock = _socket.socket(family, _socket.SOCK_STREAM)

@@ -58,6 +58,18 @@ def _without_zone(address: "IPAddress") -> "IPAddress":
     return parse(str(address).split("%", 1)[0], IPAddress)
 
 
+def _zone_names(iface: "Interface", zone: str) -> bool:
+    """True if ``zone`` identifies ``iface``.
+
+    The one zone matcher behind :func:`interface_index`, :func:`interface_address`
+    and :func:`netimps.get_interface`. Linux and Windows write an IPv6 zone as
+    the numeric interface index, the BSDs as the adapter name; both are read.
+    """
+    if zone.isdigit():
+        return bool(iface.index) and iface.index == int(zone)
+    return iface.name == zone
+
+
 def _family_name(want_ipv6: bool) -> str:
     return "IPv6" if want_ipv6 else "IPv4"
 
@@ -189,9 +201,11 @@ def interface_address(
     # is held to the same rule -- otherwise the very same spec is accepted for
     # IPv4 (which wants an address) and rejected for IPv6 (which wants an
     # index), which is interface_index's behaviour below.
-    bare = _without_zone(parsed)
-    if strict and get_interface(bare) is None and not _enumeration_is_degraded():
-        return _fail("no local interface holds address %s" % (bare,))
+    # The zoned address goes to the lookup, which filters by the zone: a zone
+    # that names an adapter not holding the address is a miss, as it is for
+    # `interface_index` and `get_interface`.
+    if strict and get_interface(parsed) is None and not _enumeration_is_degraded():
+        return _fail("no local interface holds address %s" % (parsed,))
     return parsed
 
 
@@ -223,9 +237,9 @@ def interface_index(interface: "InterfaceLike", strict: bool = True) -> "Optiona
     A ``%zone`` suffix is **honoured, not ignored**: it is the one part of a
     scoped address that names an interface, which is exactly what is being
     asked for here. Linux and Windows spell the zone as the numeric index and
-    the BSDs as the adapter name, and both are read. Without this, every
-    scoped literal failed the lookup outright -- ``ipaddress`` keeps the zone
-    as part of the address, so ``fe80::1%12`` matches no enumerated address.
+    the BSDs as the adapter name, and both are read. The address must be held
+    by the interface the zone names: ``::1%nosuchadapter`` and ``::1%999`` name
+    no local interface, exactly as :func:`netimps.get_interface` finds none.
     """
     from ._sockets import get_interface
     from ._ifaddrs import Interface, get_interfaces
@@ -261,20 +275,8 @@ def interface_index(interface: "InterfaceLike", strict: bool = True) -> "Optiona
         address = try_parse(str(interface).strip(), IPAddress)
         if address is None:
             return _fail("cannot resolve %r to a local interface" % (interface,))
-        zone = getattr(address, "scope_id", None)
-        if zone:
-            if zone.isdigit():
-                # The OS wrote this index itself; take it at face value.
-                index = int(zone)
-                if index:
-                    return index
-            else:
-                named = next(
-                    (iface for iface in get_interfaces() if iface.name == zone), None
-                )
-                if named is not None and named.index:
-                    return named.index
-            address = _without_zone(address)
+        # The zoned address, so the lookup filters by the zone: an unknown
+        # adapter name or index is a miss, never an index taken on trust.
         match = get_interface(address)
         if match is None:
             return _fail("no local interface holds address %s" % (address,))

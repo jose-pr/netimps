@@ -339,10 +339,13 @@ def test_interfaces_for_integer_remains_an_ip_query(monkeypatch):
 
 def test_interfaces_for_invalid_and_no_match(monkeypatch):
     _, calls = _mock_lookup_interfaces(monkeypatch)
-    assert list(iter_interfaces("not-an-address")) == []
     assert list(iter_interfaces(None)) == []
+    assert calls == [], "an invalid query enumerates nothing"
+    # Text that is no address, network or MAC is an adapter name: one
+    # enumeration finds no adapter called that.
+    assert list(iter_interfaces("not-an-address")) == []
     assert list(iter_interfaces(ipaddress.ip_network("192.0.2.0/24"))) == []
-    assert calls == [True]
+    assert calls == [True, True]
 
 
 def test_interface_for_unknown_is_none_when_strict(monkeypatch):
@@ -1093,7 +1096,7 @@ def test_iter_addresses_accepts_a_prepared_enumeration():
 
 
 def test_iter_addresses_rejects_a_bad_family():
-    with pytest.raises(ValueError, match="family must be 4, 6 or None"):
+    with pytest.raises(ValueError, match="family must be 4, 6"):
         list(netimps.iter_addresses(family=5))
 
 

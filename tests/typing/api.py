@@ -229,6 +229,9 @@ if MACAddress.is_valid(raw_mac):
 
 iface = Interface("loopback")
 assert_type(get_interface(iface), Optional[Interface])
+assert_type(get_interface("eth0"), Optional[Interface])
+assert_type(get_interface(index=3, strict=False), Optional[Interface])
+assert_type(iter_interfaces(index=3), Iterator[Interface])
 assert_type(get_interface(IPv4Address("127.0.0.1")), Optional[Interface])
 assert_type(get_interface(IPv4Interface("127.0.0.1/8")), Optional[Interface])
 assert_type(get_interface(IPv4Network("127.0.0.0/8")), Optional[Interface])
