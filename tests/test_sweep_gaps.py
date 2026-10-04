@@ -187,7 +187,7 @@ def test_join_host_rejects_bad_input(host, port, match):
 
 
 def test_join_host_rejects_none():
-    with pytest.raises(ValueError):
+    with pytest.raises(TypeError):
         join_host(None, 80)
 
 

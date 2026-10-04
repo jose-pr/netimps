@@ -317,3 +317,105 @@ def test_nslookup_reads_a_failure_after_the_colon_as_an_outage(fake_program, rea
 def test_nslookup_reads_no_such_name_and_no_such_record_as_empty(fake_program, line):
     fake_program("nslookup", stderr=(line + "\n").encode(), returncode=1)
     assert resolve_nslookup("host.test", search=False) == []
+
+
+# --------------------------------------------------------------------------- #
+# ns= spellings: one parser for every backend                                  #
+# --------------------------------------------------------------------------- #
+
+_NSLOOKUP_ANSWER = (
+    b"Server:  127.0.0.1\nAddress:  127.0.0.1#53\n\n"
+    b"Name:    host.test\nAddress: 10.0.0.5\n"
+)
+
+
+@pytest.mark.parametrize("spelling", ["{h}:{p}", ["{h}:{p}"], ["{h}:{p}", "{h}:{p}"]])
+@pytest.mark.parametrize("backend", ["dnspython", "wire"])
+def test_ns_host_port_answers_alike_on_every_backend(server, backend, spelling):
+    """`host:port` is the wire backend's documented spelling. dnspython raised
+    `ValueError` for it, so the same call answered or failed with the `dns`
+    extra installed or not."""
+    if isinstance(spelling, str):
+        given = spelling.format(h="127.0.0.1", p=server.port)
+    else:
+        given = [item.format(h="127.0.0.1", p=server.port) for item in spelling]
+    assert resolve("host.test", ns=given, backends=backend, search=False) == [
+        IPv4Address("10.0.0.5")
+    ]
+    assert resolve_dnspython("host.test", ns=given, search=False, timeout=2.0) == [
+        IPv4Address("10.0.0.5")
+    ]
+
+
+def test_ns_without_a_port_takes_the_port_argument(server):
+    assert resolve(
+        "host.test",
+        ns="127.0.0.1",
+        port=server.port,
+        backends="dnspython",
+        search=False,
+    ) == [IPv4Address("10.0.0.5")]
+
+
+def test_an_ns_port_wins_over_the_port_argument(server):
+    assert resolve_dnspython(
+        "host.test", ns="127.0.0.1:%d" % server.port, port=9, search=False
+    ) == [IPv4Address("10.0.0.5")]
+
+
+def test_the_default_chain_takes_ns_host_port(server):
+    assert resolve("host.test", ns=ns(server), search=False) == [
+        IPv4Address("10.0.0.5")
+    ]
+
+
+@pytest.mark.parametrize(
+    "bad",
+    ["127.0.0.1:abc", "127.0.0.1:0", "127.0.0.1:70000", "[::1", "not-an-address", ""],
+)
+def test_a_malformed_ns_is_the_same_value_error_on_every_backend(bad):
+    for backend in ("dnspython", "wire", None):
+        with pytest.raises(netimps.NetimpsValueError):
+            resolve("host.test", ns=[bad], backends=backend, search=False, timeout=0.5)
+    with pytest.raises(netimps.NetimpsValueError):
+        resolve_dnspython("host.test", ns=[bad], timeout=0.5)
+
+
+@pytest.mark.parametrize("spelling", ["[::1]:5353", "[::1]", "::1", "127.0.0.1:5353"])
+def test_the_nameserver_parser_reads_every_documented_spelling(spelling):
+    ((host, port),) = _dns._nameservers([spelling], 53)
+    assert port == (5353 if spelling.endswith(":5353") else 53)
+    assert ":" not in host or host == "::1"
+
+
+def test_nslookup_has_no_per_call_port(fake_program):
+    """It would query port 53 and return that server's answer as if it were
+    the one asked, so a port other than 53 is refused before a program runs."""
+    fake = fake_program("nslookup", stdout=_NSLOOKUP_ANSWER)
+    with pytest.raises(netimps.NetimpsValueError, match="port="):
+        resolve_nslookup("host.test", ns="127.0.0.1:5353", search=False)
+    assert fake.calls == []
+
+
+def test_nslookup_takes_the_host_of_an_ns_on_port_53(fake_program):
+    fake = fake_program("nslookup", stdout=_NSLOOKUP_ANSWER)
+    for given in ("127.0.0.1:53", "[::1]", "[::1]:53"):
+        resolve_nslookup("host.test", ns=given, search=False)
+        assert fake.argv[-1] == given.split(":53")[0].strip("[]")
+
+
+def test_the_chain_leaves_nslookup_out_for_an_ns_on_another_port(server, fake_program):
+    """`ns=host:5353` is not an `nslookup` question, so the chain goes on to
+    the backend that can ask it instead of failing on the way."""
+    fake = fake_program("nslookup", stdout=_NSLOOKUP_ANSWER)
+    got = resolve(
+        "host.test",
+        "a",
+        ns="127.0.0.1:%d" % server.port,
+        backends=["nslookup", "wire"],
+        search=False,
+    )
+    assert got == [IPv4Address("10.0.0.5")]
+    assert fake.calls == []
+    with pytest.raises(ValueError, match="no backend"):
+        resolve("host.test", ns=ns(server), backends="nslookup", search=False)

@@ -333,13 +333,21 @@ so nothing is lost. Pass an existing enumeration in a loop; it is a syscall.
   colons it has, because brackets in a URI authority assert "the inside is an
   address". A port-less v6 comes back bare, which is what makes
   `split_host(join_host(h, p)) == (h, p)` hold in every case. Raises
-  `ValueError` for an empty host, a port outside 0–65535, or a mismatched
-  bracket (`"[::1"` would otherwise emerge as `"[::1:80"`).
+  `NetimpsValueError` for an empty host, a port outside 0–65535, brackets around
+  anything but an IPv6 address, or a mismatched bracket (`"[::1"` would
+  otherwise emerge as `"[::1:80"`).
   Both of these take the package's usual loose union, not only a `str`: an address
   object, an `IPv4Interface`/`IPv6Interface` (its `.ip` is used), a `Host` or an
-  `FQDN`. A *network* raises `TypeError` — it names no single host. `split_host`
-  uses an allowlist rather than a `str()` fallback, because a fallback turned
-  `None` into the hostname `"None"`.
+  `FQDN`. A *network*, and any other value (`None`, an `int`, `bytes`), raises
+  `TypeError` — a network names no single host, and an allowlist replaces a
+  `str()` fallback, which turned `None` into the hostname `"None"`.
+  `split_zone` takes the same union and the same `TypeError`.
+  **Port text is ASCII digits** (RFC 3986 `port = *DIGIT`): `"h:8_0"`, `"h:+80"`,
+  `"h: 80"` and non-ASCII digits raise `NetimpsValueError`; a `port` argument of
+  `join_host`, or the port of a `(host, port)` pair, is an `int` (a `bool`, a
+  `float` or a numeric `str` raises `TypeError`; a pair may carry digit text).
+  What sits inside brackets is validated as an IPv6 literal by `split_host` as
+  `join_host` does, so `split_host("[10.0.0.5]:80")` raises.
 - **`unmap(value) -> IPAddress`** — collapse an IPv4-mapped IPv6 address
   (`::ffff:10.0.0.5`) to plain IPv4; anything else passes through. The form a
   dual-stack socket reports an IPv4 peer in, and almost nothing a caller does wants
@@ -555,7 +563,11 @@ calls instead of one, the last of which may spawn `nslookup`. Narrow
   or `tcp=True` — the OS resolver takes no per-call nameserver, port or
   transport, so running it would answer a different question from the one
   asked. With `backends=["system"]` plus one of those, the resulting
-  `ValueError` names the reason.
+  `ValueError` names the reason. **`nslookup` is skipped** for an `ns=` entry
+  with a port other than 53, for the same reason.
+- **`ns=` is parsed once, before any backend runs**, with the parser
+  `resolve_wire` documents (`host`, `host:port`, `[v6]`, `[v6]:port`), and every
+  backend that takes it gets the address and the port.
 - **`cache=`** reuses a recent answer, with `get_interfaces`' three spellings:
   `False` (the default) neither reads nor writes the cache, `True` keeps an
   answer for `RESOLUTION_CACHE_TTL` (**30 seconds**), a number is that many
@@ -591,8 +603,11 @@ address itself -- the caller never constructs that name by hand.
 
 - **`ns=None` (default) uses the system resolver configuration** —
   `/etc/resolv.conf` on POSIX, the registry on Windows. Pass `ns=` (a string
-  or list) to query specific nameservers instead; a malformed `ns=` raises
-  immediately, before any query is attempted.
+  or list) to query specific nameservers instead, each as `host`,
+  `host:port`, a bare IPv6 address, `[v6]` or `[v6]:port` (an address; `port`
+  fills in an entry that names none), or an `https://` DoH URL, which dnspython
+  alone takes. A malformed `ns=` raises `NetimpsValueError` immediately, before
+  any query is attempted, the same on every backend.
 - **`search=True` (default) tries the resolver's search list** (the
   `search`/`domain` directive in `resolv.conf`, or the Windows per-adapter DNS
   suffix list) for an unqualified `query` — e.g. `resolve_dnspython("db1")`
@@ -662,7 +677,10 @@ path is usable. Address records only: `rdtype` must be `"a"`, `"aaaa"` or
   `Name:` line with no address and no error text) output. Windows also prints
   its NXDOMAIN message on **stderr**, not stdout — both streams are checked.
 - `ns=` is passed as `nslookup`'s trailing `server` argument (a single
-  nameserver, not a list).
+  nameserver, not a list): an address or a name, as `host`, `[v6]`, or either
+  with `:53`. `nslookup` has no per-call port, so another port raises
+  `NetimpsValueError` naming `port=` before a program runs; `resolve_wire` and
+  `resolve_dnspython` take one.
 - **`search`** has the same three-way contract as the other backends
   (ignored for `"ptr"`), but `nslookup` has no built-in search-list
   handling — this issues one `nslookup` call per candidate name, in order,

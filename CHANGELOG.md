@@ -359,6 +359,26 @@ probe says so in its prefix.
   `/`, `child` and `with_hostname` refuse a result over 253 octets, where
   `encode()` used to emit 259; `encode_name` refuses over 255 on the wire.
 
+- **`split_host`, `split_zone` and `join_host` share one host rule and one
+  port rule.** `join_host` accepted a network (`'10.0.0.0/24:80'`), `bytes`
+  (`"b'h':80"`), a `float` port (`'h:80'`) and `True` (`'h:1'`), and
+  `split_host` read `"h:8_0"`, `"h:+80"`, `"h: 80"` and Arabic-Indic digits as
+  port 80; port text is now ASCII digits and every port goes through the one
+  range gate. `split_host("[10.0.0.5]:80")` and `"[not an address]:80"` raise,
+  as `join_host` already refused them. A value that is not a host type at all
+  (`None`, an `int`, `bytes`) raises `TypeError` from all three, where
+  `split_host`/`split_zone`/`join_host` raised `NetimpsValueError`; so does a
+  non-`int` port. Text that does not parse stays `NetimpsValueError`.
+
+- **`resolve(ns="host:port")` answers the same with and without dnspython.**
+  The `host`, `host:port`, `[v6]` and `[v6]:port` spellings `resolve_wire`
+  documents are read by one parser for every backend: `resolve_dnspython`
+  hands dnspython each server's own port (it raised `ValueError` for
+  `host:port`), and a malformed `ns` is a `NetimpsValueError` before any
+  backend runs. `resolve_nslookup` takes `host`, `[v6]` or either with `:53`
+  and raises `NetimpsValueError` naming `port=` for another port, which
+  `nslookup` cannot use; the chain leaves it out for such an entry.
+
 ## [0.3.4] - 2026-10-03
 
 ### Fixed

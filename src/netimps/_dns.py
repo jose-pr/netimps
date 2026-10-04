@@ -318,13 +318,16 @@ def resolve_dnspython(
 
     # Only when asked: the keyword is not in every dnspython release.
     extra: "Dict[str, Any]" = {"source": source} if source else {}
+    # Parsed before the resolver exists: a malformed spelling is the caller's
+    # mistake, whatever the install.
+    entries = _ns_entries(ns)
+    doh = [entry for entry in entries if _is_doh_server(entry)]
+    servers = _nameservers([e for e in entries if e not in doh], port)
     try:
-        r = _resolver.Resolver(configure=not ns)
-        if isinstance(ns, str):
-            ns = [ns]
-        if ns:
-            r.nameservers = list(ns)
-        if port != 53:
+        r = _resolver.Resolver(configure=not (servers or doh))
+        if servers or doh:
+            _set_nameservers(r, servers, doh)
+        elif port != 53:
             r.port = port
         search_domains = None
         if isinstance(search, (list, tuple)):
@@ -1019,6 +1022,14 @@ def resolve_nslookup(
     _check_nslookup_query(query)
     if ns:
         _check_nslookup_query(ns, "nameserver")
+        host, number = _nameservers([ns], 53, names=True)[0]
+        if number != 53:
+            raise NetimpsValueError(
+                "nslookup cannot ask nameserver %r on port %d: it has no "
+                "per-call port; use resolve_wire or resolve_dnspython with "
+                "port=" % (ns, number)
+            )
+        ns = host
     if isinstance(search, (list, tuple)):
         for domain in search:
             if domain.strip("."):
@@ -1404,6 +1415,14 @@ def _resolve_chain(
             "unknown resolve backend(s) %r, expected from %r" % (unknown, _BACKENDS)
         )
 
+    # Parsed once, with the parser every backend uses, so a malformed
+    # spelling fails the same way on every install. An https:// entry is a
+    # dnspython-only DoH server and is left to it.
+    parsed = _nameservers(
+        [e for e in _ns_entries(ns) if not _is_doh_server(e)], 53, names=True
+    )
+    other_port = any(number != 53 for _host, number in parsed)
+
     last_error: Optional[Exception] = None
     attempted = False
     dns_missing = False  # dnspython was skipped because the extra is absent
@@ -1456,7 +1475,7 @@ def _resolve_chain(
                 source=source,
             )
         elif name == "nslookup":
-            if rdtype not in ("a", "aaaa", "ptr") or source:
+            if rdtype not in ("a", "aaaa", "ptr") or source or other_port:
                 continue
             if isinstance(ns, (list, tuple)):
                 single_ns = ns[0] if ns else None
@@ -1503,6 +1522,8 @@ def _resolve_chain(
             excluded.append("an explicit ns")
         if port != 53:
             excluded.append("port=%r" % (port,))
+        if other_port:
+            excluded.append("a nameserver port")
         if tcp:
             excluded.append("tcp=True")
         if source:
@@ -1691,36 +1712,54 @@ def lookup_fqdn(
 
 def _port_number(text: str, entry: str) -> int:
     if not (text.isascii() and text.isdigit()):
-        raise ValueError("nameserver %r: port %r is not a number" % (entry, text))
+        raise NetimpsValueError(
+            "nameserver %r: port %r is not a number" % (entry, text)
+        )
     return int(text)
 
 
-def _servers(
-    ns: "Optional[Union[str, List[str]]]", port: int
+def _system_nameservers() -> "List[str]":
+    """The nameservers of ``/etc/resolv.conf`` (POSIX); empty elsewhere."""
+    try:
+        with open("/etc/resolv.conf", encoding="utf-8") as handle:
+            return [
+                line.split()[1]
+                for line in handle
+                if line.split()[:1] == ["nameserver"] and len(line.split()) > 1
+            ]
+    except OSError:
+        return []
+
+
+def _is_doh_server(entry: object) -> bool:
+    """A dnspython-only nameserver written as an ``https://`` URL."""
+    return isinstance(entry, str) and entry.lstrip().lower().startswith("https://")
+
+
+def _nameservers(
+    entries: "List[str]", port: int, *, names: bool = False
 ) -> "List[Tuple[str, int]]":
-    """``(host, port)`` per nameserver: ``host``, ``host:port``, a bare IPv6
-    address, ``[v6]`` or ``[v6]:port``. ``None``: the system's, from
-    ``/etc/resolv.conf`` (POSIX only)."""
-    entries = [ns] if isinstance(ns, str) else list(ns or [])
-    if not entries:
-        try:
-            with open("/etc/resolv.conf", encoding="utf-8") as handle:
-                entries = [
-                    line.split()[1]
-                    for line in handle
-                    if line.split()[:1] == ["nameserver"] and len(line.split()) > 1
-                ]
-        except OSError:
-            entries = []
-        if not entries:
-            raise ResolutionError(
-                "resolve_wire needs ns= here: no /etc/resolv.conf to take the system's from"
-            )
+    """``(host, port)`` per nameserver entry: ``host``, ``host:port``, a bare
+    IPv6 address, ``[v6]`` or ``[v6]:port``; ``port`` fills an entry that names
+    none. The one parser every backend that takes ``ns`` goes through.
+
+    A host has to be an IP address unless ``names``, for ``nslookup``, which
+    resolves a nameserver given by name.
+
+    :raises NetimpsValueError: for an entry that is not one of those spellings,
+        a port that is not ASCII digits in 1-65535, or a host that is no address.
+    """
     out = []
     for entry in entries:
+        if not isinstance(entry, str):
+            raise TypeError("a nameserver is text, not %r" % (type(entry).__name__,))
         entry = entry.strip()
         if entry.startswith("["):
-            host, _, rest = entry[1:].partition("]")
+            host, close, rest = entry[1:].partition("]")
+            if not close:
+                raise NetimpsValueError("nameserver %r: unclosed '['" % (entry,))
+            if rest and not rest.startswith(":"):
+                raise NetimpsValueError("nameserver %r: unexpected %r" % (entry, rest))
             number = _port_number(rest[1:], entry) if rest.startswith(":") else port
         elif entry.count(":") == 1:
             host, _, rest = entry.partition(":")
@@ -1728,15 +1767,61 @@ def _servers(
         else:
             host, number = entry, port
         if not 1 <= number <= 65535:
-            raise ValueError(
+            raise NetimpsValueError(
                 "nameserver %r: port %d is outside 1-65535" % (entry, number)
             )
-        try:
-            _ipaddress.ip_address(host.split("%")[0])
-        except ValueError:
-            raise ValueError("nameserver %r is not an IP address" % (entry,))
+        if not names or not host:
+            try:
+                _ipaddress.ip_address(host.split("%")[0])
+            except ValueError:
+                raise NetimpsValueError(
+                    "nameserver %r is not an IP address" % (entry,)
+                ) from None
         out.append((host, number))
     return out
+
+
+def _ns_entries(ns: "Optional[Union[str, List[str]]]") -> "List[str]":
+    """``ns`` as a list of entries; an empty string or list names none."""
+    return (
+        [ns]
+        if isinstance(ns, str) and ns
+        else list(ns or []) if not isinstance(ns, str) else []
+    )
+
+
+def _set_nameservers(
+    resolver: "Any", servers: "List[Tuple[str, int]]", doh: "List[str]"
+) -> None:
+    """Give dnspython ``servers`` with a port each, then the ``https://`` ones.
+
+    The resolver's per-address port table does it in every release, and is
+    keyed by address; the same address on two ports needs ``Do53Nameserver``
+    (dnspython 2.4 on).
+    """
+    ports = dict(servers)
+    if len(ports) == len(set(servers)):
+        resolver.nameserver_ports = ports
+        resolver.nameservers = [host for host, _ in servers] + doh
+        return
+    from dns.nameserver import Do53Nameserver
+
+    resolver.nameservers = [Do53Nameserver(host, port) for host, port in servers] + doh
+
+
+def _servers(
+    ns: "Optional[Union[str, List[str]]]", port: int
+) -> "List[Tuple[str, int]]":
+    """``(host, port)`` per nameserver (see :func:`_nameservers`). ``None``: the
+    system's, from ``/etc/resolv.conf`` (POSIX only)."""
+    entries = [ns] if isinstance(ns, str) else list(ns or [])
+    if not entries:
+        entries = _system_nameservers()
+        if not entries:
+            raise ResolutionError(
+                "resolve_wire needs ns= here: no /etc/resolv.conf to take the system's from"
+            )
+    return _nameservers(entries, port)
 
 
 def _source_for(

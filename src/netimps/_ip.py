@@ -29,6 +29,7 @@ from ._exceptions import NetimpsValueError, ResolutionError
 # `IPAddress` inside the one function that needs it), which is what lets
 # `HostLike` below name the class itself.
 from ._fqdn import FQDN
+from ._scheme import coerce_port
 
 from ipaddress import (
     IPv4Address,
@@ -275,15 +276,13 @@ def subtract(
 
 
 def _host_text(text: object) -> str:
-    """The string a loose host value stands for; ``TypeError`` for a network,
-    :class:`NetimpsValueError` for a type that is not a host at all."""
+    """The string a loose host value stands for.
+
+    :raises TypeError: for a network (it names no single host) and for a value
+        that is not a host type at all.
+    """
     if isinstance(text, str):
         return text
-    # The same loose union the rest of the package takes. This used to insist
-    # on a `str` and reject an address object, a `Host` or an `FQDN` -- values
-    # a caller holding "the host" very often has, and which `join_host`, the
-    # inverse of `split_host`, already accepts. A network still raises, via
-    # `_dst_argument`, since it has no single address.
     if isinstance(text, (IPv4Network, IPv6Network)):
         _dst_argument(text)  # raises TypeError, with the reason
     if isinstance(text, (IPv4Address, IPv6Address, IPv4Interface, IPv6Interface)):
@@ -293,12 +292,12 @@ def _host_text(text: object) -> str:
         # original spelling, `FQDN` to the name with its trailing dot if it
         # has one.
         return str(text)
-    # An **allowlist**, not a `str()` fallback. A fallback accepted `None` and
-    # turned it into the hostname "None", which is the worst kind of answer: a
-    # plausible one that is wrong, and one a caller cannot detect. An int or a
-    # list went the same way.
-    raise NetimpsValueError(
-        "host must be a string, an address, a Host or an FQDN, got %r" % (text,)
+    # An **allowlist**, not a `str()` fallback: a fallback turns `None` into
+    # the hostname "None", a plausible answer that is wrong and that a caller
+    # cannot detect.
+    raise TypeError(
+        "host must be a string, an address, a Host or an FQDN, not %r"
+        % (type(text).__name__,)
     )
 
 
@@ -318,8 +317,9 @@ def split_zone(text: "HostLike") -> "Tuple[str, Optional[str]]":
     *interface*, which is why it is returned rather than thrown away. Brackets are
     :func:`split_host`'s business, not this function's.
 
-    ``text`` takes the package's loose host union. Raises
-    :class:`NetimpsValueError` for a ``%`` with nothing after it.
+    ``text`` takes the package's loose host union. Raises :class:`TypeError`
+    for a value that is not a host type, and :class:`NetimpsValueError` for a
+    ``%`` with nothing after it.
     """
     value = _host_text(text)
     host, sep, zone = value.partition("%")
@@ -369,15 +369,17 @@ def split_host(
     address object, an :class:`IPv4Interface`/:class:`IPv6Interface` (its ``.ip``
     is used), a :class:`Host` or an :class:`FQDN`. :func:`join_host`, the inverse,
     already did -- this insisted on a ``str`` and rejected the values a caller
-    holding "the host" most often has. A *network* raises :class:`TypeError`,
-    since it names no single host.
+    holding "the host" most often has. A *network*, or a value that is not a host
+    type at all (``None``, an ``int``, ``bytes``), raises :class:`TypeError`.
 
-    Raises :class:`ValueError` on empty input, an unclosed bracket, a port that
-    is not an integer in 0-65535, or an unbracketed string with two or more
-    colons that is **not** a valid IPv6 address. That last one is a real input
-    class, not a theoretical one: ``"host:80:extra"`` and a half-typed address
-    used to be handed back whole as the *host*, so the caller then looked up a
-    name that cannot exist instead of being told what was wrong.
+    Port text is ASCII digits, as RFC 3986 section 3.2.3 has it: ``"8_0"``,
+    ``"+80"``, a space and non-ASCII digits are refused. What sits inside
+    brackets has to be an IPv6 literal (section 3.2.2).
+
+    Raises :class:`NetimpsValueError` on empty input, an unclosed bracket,
+    brackets around anything but an IPv6 address, a port that is not ASCII digits
+    in 0-65535, or an unbracketed string with two or more colons that is **not**
+    a valid IPv6 address (``"host:80:extra"``, a half-typed address).
     """
     if isinstance(text, tuple):
         return _split_pair(text, default_port)
@@ -391,6 +393,10 @@ def split_host(
         if end == -1:
             raise NetimpsValueError("unclosed '[' in %r" % (text,))
         host = text[1:end]
+        if not _is_ipv6_literal(host):
+            raise NetimpsValueError(
+                "%r is bracketed but not an IPv6 address" % (text[: end + 1],)
+            )
         rest = text[end + 1 :]
         if not rest:
             port = default_port
@@ -431,9 +437,10 @@ def _split_pair(pair: "Tuple[Any, ...]", default_port: Optional[int]):
     host, inner = split_host(raw_host)
     if raw_port is None:
         return host, inner if inner is not None else default_port
-    if isinstance(raw_port, bool) or not isinstance(raw_port, (int, str)):
-        raise NetimpsValueError("port must be an integer or None, got %r" % (raw_port,))
-    port = _parse_port(str(raw_port), repr(pair))
+    if isinstance(raw_port, str):
+        port = _parse_port(raw_port, pair)
+    else:
+        port = _port_number(raw_port, pair)
     if inner is not None and inner != port:
         raise NetimpsValueError(
             "two ports for one host: %r in the host and %d beside it" % (inner, port)
@@ -454,14 +461,22 @@ def _is_ipv6_literal(text: str) -> bool:
     return True
 
 
-def _parse_port(raw: str, original: str) -> int:
+def _port_number(port: object, original: object) -> int:
+    """``port`` through :func:`netimps._scheme.coerce_port`, the one place a port
+    is validated, with a range error as the package's value error."""
     try:
-        port = int(raw)
-    except (TypeError, ValueError):
+        return coerce_port(port)
+    except TypeError:
+        raise
+    except ValueError as exc:
+        raise NetimpsValueError("%s, in %r" % (exc, original)) from None
+
+
+def _parse_port(raw: str, original: object) -> int:
+    """Port text: ASCII digits only (RFC 3986 ``port = *DIGIT``), then the gate."""
+    if not (raw.isascii() and raw.isdigit()):
         raise NetimpsValueError("invalid port %r in %r" % (raw, original))
-    if not 0 <= port <= 65535:
-        raise NetimpsValueError("port out of range in %r" % (original,))
-    return port
+    return _port_number(int(raw), original)
 
 
 def is_link_scoped(ip: IPAddress) -> bool:
@@ -900,18 +915,12 @@ def join_host(host: "HostLike", port: "Optional[int]" = None) -> str:
     rule: a lone ``"::1"`` needs none, since there is no colon to disambiguate
     from. That is what makes ``split_host(join_host(h, p)) == (h, p)`` hold.
 
-    :raises ValueError: for an empty host, or a port outside 0-65535.
+    :raises TypeError: for a network, a value that is not a host type, or a
+        ``port`` that is not an ``int`` (a ``bool`` is not one).
+    :raises NetimpsValueError: for an empty host, brackets around anything but
+        an IPv6 address, or a port outside 0-65535.
     """
-    if host is None:
-        raise NetimpsValueError("host must not be None")
-
-    # An interface carries an address plus a prefix; the address is the part a
-    # socket address wants.
-    inner = getattr(host, "ip", None)
-    if inner is not None and isinstance(host, (IPv4Interface, IPv6Interface)):
-        host = inner
-
-    text = str(host).strip()
+    text = _host_text(host).strip()
     if not text:
         raise NetimpsValueError("host must not be empty")
 
@@ -937,10 +946,7 @@ def join_host(host: "HostLike", port: "Optional[int]" = None) -> str:
         # them would break the round trip.
         return text[1:-1] if text.startswith("[") else text
 
-    port = int(port)
-    if not 0 <= port <= 65535:
-        raise NetimpsValueError("port must be in 0-65535, got %r" % (port,))
-    return "%s:%d" % (text, port)
+    return "%s:%d" % (text, _port_number(port, port))
 
 
 def unmap(value: "Union[str, IPAddress]") -> "IPAddress":

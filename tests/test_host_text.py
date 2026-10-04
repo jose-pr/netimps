@@ -52,7 +52,7 @@ def test_split_zone_takes_the_loose_host_union():
     assert split_zone(IPv6Address("fe80::1%7")) == ("fe80::1", "7")
     assert split_zone(Host("fe80::1%eth0")) == ("fe80::1", "eth0")
     assert split_zone(FQDN("example.com")) == ("example.com", None)
-    with pytest.raises(netimps.NetimpsValueError):
+    with pytest.raises(TypeError):
         split_zone(None)
 
 
@@ -93,11 +93,15 @@ def test_a_pair_that_names_a_port_twice_must_agree():
         split_host(("h:80", 81))
 
 
-@pytest.mark.parametrize(
-    "pair", [("h", True), ("h", 1.5), ("h", 70000), ("h", -1), ("h",), ("h", 1, 2)]
-)
+@pytest.mark.parametrize("pair", [("h", 70000), ("h", -1), ("h",), ("h", 1, 2)])
 def test_a_malformed_pair_is_refused(pair):
     with pytest.raises(netimps.NetimpsValueError):
+        split_host(pair)
+
+
+@pytest.mark.parametrize("pair", [("h", True), ("h", 1.5)])
+def test_a_pair_with_a_port_of_the_wrong_type_is_a_type_error(pair):
+    with pytest.raises(TypeError):
         split_host(pair)
 
 
@@ -197,3 +201,126 @@ def test_the_mac_pattern_is_not_reachable_from_the_class():
     did. ``is_valid`` is the supported route."""
     assert not hasattr(MACAddress, "_VALID_MAC")
     assert MACAddress.is_valid("aa:bb:cc:dd:ee:ff")
+
+
+# --------------------------------------------------------------------------- #
+# One host rule and one port rule for split_host and join_host                 #
+# --------------------------------------------------------------------------- #
+
+import ipaddress as _ipaddress
+
+
+@pytest.mark.parametrize(
+    "value",
+    [None, 5, 5.5, b"h", ["h"], object()],
+)
+def test_a_value_that_is_not_a_host_type_is_a_type_error(value):
+    """CONVERSIONS: the wrong type is a caller's bug, not text that does not
+    parse."""
+    for call in (
+        lambda: netimps.split_host(value),
+        lambda: netimps.split_zone(value),
+        lambda: netimps.join_host(value, 80),
+        lambda: netimps.join_host(value),
+    ):
+        with pytest.raises(TypeError) as caught:
+            call()
+        assert not isinstance(caught.value, netimps.NetimpsError)
+
+
+@pytest.mark.parametrize(
+    "network",
+    [_ipaddress.ip_network("10.0.0.0/24"), _ipaddress.ip_network("fd00::/64")],
+)
+def test_a_network_names_no_host_in_either_direction(network):
+    with pytest.raises(TypeError):
+        netimps.split_host(network)
+    with pytest.raises(TypeError):
+        netimps.join_host(network, 80)
+
+
+@pytest.mark.parametrize("port", [80.9, True, "80", {}, [80]])
+def test_join_host_takes_an_int_port(port):
+    with pytest.raises(TypeError):
+        netimps.join_host("h", port)
+
+
+@pytest.mark.parametrize("port", [-1, 65536, 10**6])
+def test_join_host_refuses_an_out_of_range_port(port):
+    with pytest.raises(netimps.NetimpsValueError):
+        netimps.join_host("h", port)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "example.com:8_0",
+        "example.com:+80",
+        "example.com: 80",
+        "example.com:80 x",
+        "example.com:٨٠",  # Arabic-Indic digits
+        "example.com:８０",  # fullwidth digits
+        "example.com:-1",
+        "example.com:0x50",
+        "example.com:",
+        "[::1]:8_0",
+        "[::1]:٨٠",
+        "example.com:65536",
+    ],
+)
+def test_port_text_is_ascii_digits_in_range(text):
+    """RFC 3986 section 3.2.3: port = *DIGIT. `int()` read `8_0`, `+80`, a
+    leading space and every script's digits as port 80."""
+    with pytest.raises(netimps.NetimpsValueError):
+        split_host(text)
+
+
+def test_a_pair_port_goes_through_the_same_gate():
+    assert split_host(("h", "80")) == ("h", 80)
+    for bad in ("8_0", "+80", " 80", "٨٠"):
+        with pytest.raises(netimps.NetimpsValueError):
+            split_host(("h", bad))
+    for wrong in (True, 1.5, b"80"):
+        with pytest.raises(TypeError):
+            split_host(("h", wrong))
+    with pytest.raises(netimps.NetimpsValueError):
+        split_host(("h", 70000))
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["[not an address]:80", "[10.0.0.5]:80", "[10.0.0.5]", "[example.com]:80", "[]"],
+)
+def test_brackets_hold_an_ipv6_literal(text):
+    """RFC 3986 section 3.2.2. `join_host` refused what `split_host` handed
+    back, so the pair was not inverse."""
+    with pytest.raises(netimps.NetimpsValueError):
+        split_host(text)
+    with pytest.raises(netimps.NetimpsValueError):
+        netimps.join_host(text, 80)
+
+
+@pytest.mark.parametrize(
+    "host, port",
+    [
+        ("example.com", 80),
+        ("example.com", None),
+        ("10.0.0.5", 0),
+        ("10.0.0.5", 65535),
+        ("::1", 8080),
+        ("fe80::1%eth0", 80),
+        ("2001:db8::1", None),
+        ("localhost", 22),
+    ],
+)
+def test_split_inverts_join(host, port):
+    assert split_host(netimps.join_host(host, port)) == (host, port)
+    for given in (
+        _ipaddress.ip_address("10.0.0.5"),
+        _ipaddress.ip_interface("10.0.0.5/8"),
+        _ipaddress.ip_address("::1"),
+        FQDN("example.com"),
+        Host("example.com"),
+    ):
+        text = netimps.join_host(given, port)
+        assert split_host(text)[1] == port

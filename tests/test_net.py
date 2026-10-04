@@ -255,12 +255,7 @@ def test_resolve_explicit_ns_disables_system_configuration(fake_dns):
 
 def test_resolve_invalid_nameserver_raises_before_querying(fake_dns):
     """A bad `ns=` is a caller error -- it must not be swallowed into []."""
-
-    def _raise(value):
-        raise ValueError("not a valid nameserver: %r" % (value,))
-
-    fake_dns.nameservers_setter = _raise
-    with pytest.raises(ValueError, match="not a valid nameserver"):
+    with pytest.raises(ValueError, match="not an IP address"):
         resolve("example.com", ns="not-an-ip")
     # The query must never have been attempted.
     assert fake_dns.last is None
