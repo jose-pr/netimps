@@ -151,3 +151,130 @@ def test_importing_netimps_does_not_ask_for_the_host_name():
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "imported"
+
+
+# --- signatures ---------------------------------------------------------------
+
+import inspect
+import typing
+
+# How many arguments each callable accepts positionally; every other option is
+# keyword-only. A callable absent from this table accepts at most
+# ``_DEFAULT_POSITIONAL``.
+POSITIONAL = {
+    "Backoff": 1,
+    "FQDN": 0,
+    "Host": 1,
+    "Interface": 2,
+    "MACAddress": 1,
+    "PingResult": 2,
+    "Route": 1,
+    "UDPEndpoint": 1,
+    "backoff_delays": 2,
+    "count_hops": 1,
+    "discover_mtu": 1,
+    "get_free_port": 1,
+    "get_interface": 1,
+    "get_interfaces": 0,
+    "get_pmtu": 2,
+    "get_route": 1,
+    "get_source_ip": 2,
+    "get_tcp_mss": 2,
+    "iter_addresses": 1,
+    "join_group": 2,
+    "leave_group": 2,
+    "max_udp_payload": 1,
+    "multicast_socket": 2,
+    "patch_socket_module": 1,
+    "ping": 1,
+    "register_port": 2,
+    "resolve": 2,
+    "resolve_dnspython": 2,
+    "resolve_doh": 2,
+    "resolve_nslookup": 2,
+    "resolve_system": 2,
+    "resolve_wire": 2,
+    "retry": 2,
+    "scan_hosts": 2,
+    "scan_ports": 2,
+    "set_buffer_size": 1,
+    "split_host": 1,
+    "tcp_check": 2,
+    "try_parse": 2,
+    "wait_for_port": 2,
+}
+_DEFAULT_POSITIONAL = 3
+
+# Shapes fixed by what they mirror: the standard library's ``recvmsg`` and
+# ``sendmsg`` and the ``CMSG_*`` helpers, and two named tuples that are
+# positional by nature.
+EXEMPT = {"recvmsg", "sendmsg", "CMSG_LEN", "CMSG_SPACE", "Datagram", "SocketOption"}
+
+# Parameters that may stay ``Any``: what they hold is not known to this package.
+ANY_ALLOWED: "typing.Set[typing.Tuple[str, str]]" = set()
+
+
+def _callables():
+    for name in sorted(netimps.__all__):
+        obj = getattr(netimps, name)
+        if not (inspect.isfunction(obj) or inspect.isclass(obj)):
+            continue
+        if getattr(obj, "__module__", "").split(".")[0] != "netimps":
+            continue
+        try:
+            sig = inspect.signature(obj)
+        except (TypeError, ValueError):
+            continue
+        yield name, obj, sig
+
+
+def test_options_are_keyword_only_past_the_counted_positionals():
+    """A signature that still takes its options positionally: ``ping(dst, 3,
+    2.0, None, ...)`` reads as nothing, and inserting a parameter later
+    silently shifts every such call."""
+    wrong = {}
+    for name, _obj, sig in _callables():
+        if name in EXEMPT:
+            continue
+        count = sum(
+            1
+            for p in sig.parameters.values()
+            if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+        )
+        allowed = POSITIONAL.get(name, _DEFAULT_POSITIONAL)
+        if count > allowed:
+            wrong[name] = (count, allowed)
+    assert wrong == {}, f"{len(wrong)} callables take too many positionals: {wrong}"
+
+
+def test_every_public_annotation_resolves():
+    """``typing.get_type_hints`` raising means a consumer introspecting the
+    signature fails; a name used in a hint has to exist at run time."""
+    failures = {}
+    for name, obj, _sig in _callables():
+        target = obj.__init__ if inspect.isclass(obj) else obj
+        try:
+            typing.get_type_hints(target)
+        except Exception as exc:  # noqa: BLE001 - the message is the report
+            failures[name] = repr(exc)
+    assert failures == {}
+
+
+def test_no_public_parameter_is_bare_any():
+    """``Any`` on a parameter says "do anything with it" to the caller's type
+    checker and checks nothing; a missing annotation is the same."""
+    bare = []
+    for name, obj, sig in _callables():
+        if name in EXEMPT:
+            continue
+        target = obj.__init__ if inspect.isclass(obj) else obj
+        try:
+            hints = typing.get_type_hints(target)
+        except Exception:  # noqa: BLE001 - reported by the test above
+            continue
+        for pname, param in sig.parameters.items():
+            if pname.startswith("_") or (name, pname) in ANY_ALLOWED:
+                continue
+            if pname not in hints or hints[pname] is typing.Any:
+                bare.append(f"{name}({pname})")
+    assert bare == [], f"{len(bare)} parameters are bare Any or unannotated: {bare}"
