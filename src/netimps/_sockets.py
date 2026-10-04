@@ -22,12 +22,10 @@ import errno as _errno
 from functools import partial as _partial
 import socket as _socket
 import struct as _struct
-from subprocess import DEVNULL as _DEVNULL
-from subprocess import TimeoutExpired as _SubprocessTimeout
-from subprocess import run as _subprocess_run
 import sys as _sys
 import time as _time
 
+from . import _proc
 from ._iface_spec import InterfaceLike, interface_address as _interface_address
 from ._iface_spec import _without_zone
 from ._iface_spec import interface_index as _interface_index
@@ -1383,18 +1381,12 @@ def _bsd_next_hop(dst: str, ipv6: bool = False) -> "Optional[_NextHop]":
         command.append("-inet6")
     command.append(dst)
     try:
-        result = _subprocess_run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=5.0,
-            stdin=_DEVNULL,
-        )
-    except (OSError, ValueError, _SubprocessTimeout):
+        result = _proc.run(command[0], command[1:], timeout=5.0)
+    except (OSError, ValueError):
         return None
     if result.returncode != 0:
         return None
-    return _parse_route_get_output(result.stdout or "")
+    return _parse_route_get_output(result.stdout)
 
 
 def _if_index(name: str) -> int:
@@ -1552,19 +1544,11 @@ def _hop_count_traceroute(
     # * timeout, which is minutes.
     budget = max(10.0, max_hops * timeout * 3 + 10)
     try:
-        # stdin=DEVNULL: a library must never consume its caller's stdin, and
-        # a traceroute that inherits a pipe can swallow whatever is in it.
-        result = _subprocess_run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=budget,
-            stdin=_DEVNULL,
-        )
-    except (OSError, ValueError, _SubprocessTimeout):
+        result = _proc.run(cmd[0], cmd[1:], timeout=budget)
+    except (OSError, ValueError):
         return None
 
-    for line in (result.stdout or "").splitlines():
+    for line in result.stdout.splitlines():
         fields = line.split()
         if not fields or not fields[0].isdigit():
             continue

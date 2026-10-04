@@ -22,7 +22,7 @@ import shutil
 import signal
 import subprocess
 import sys
-from typing import Dict, List, Mapping, NamedTuple, Optional, Sequence
+from typing import Dict, Mapping, NamedTuple, Optional, Sequence
 
 _IS_WINDOWS = sys.platform == "win32"
 
@@ -80,7 +80,7 @@ def _find(program: str) -> str:
 
 def _kill_tree(process: "subprocess.Popen[bytes]") -> None:
     """Kill ``process`` and everything it started."""
-    if _IS_WINDOWS:
+    if sys.platform == "win32":
         root = os.environ.get("SystemRoot", r"C:\Windows")
         taskkill = os.path.join(root, "System32", "taskkill.exe")
         try:
@@ -98,7 +98,7 @@ def _kill_tree(process: "subprocess.Popen[bytes]") -> None:
         try:
             # The child leads its own session (see run), so its group is
             # exactly the tree to kill.
-            os.killpg(process.pid, signal.SIGKILL)  # type: ignore[attr-defined]
+            os.killpg(process.pid, signal.SIGKILL)
         except OSError:
             pass
     try:
@@ -133,20 +133,26 @@ def run(
     if env:
         environment.update(env)
 
-    options: "Dict[str, object]" = {}
-    if _IS_WINDOWS:
-        options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
+    # sys.platform is tested here, not through _IS_WINDOWS, so a type checker
+    # narrows each branch to the platform that has the option.
+    if sys.platform == "win32":
+        process = subprocess.Popen(
+            [path, *args],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+        )
     else:
-        options["start_new_session"] = True
-
-    process = subprocess.Popen(
-        [path, *args],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=environment,
-        **options,  # type: ignore[arg-type]
-    )
+        process = subprocess.Popen(
+            [path, *args],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+            start_new_session=True,
+        )
     try:
         out, err = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:

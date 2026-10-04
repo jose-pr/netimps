@@ -355,7 +355,7 @@ def no_such_host(monkeypatch):
 # --------------------------------------------------------------------------- #
 
 #: The script every fake runs. ``{config}`` is a Python literal; the call log is
-#: one JSON array of arguments per line, which is how a test reads back what the
+#: one JSON ``[arguments, stdin length]`` per line, which is how a test reads back what the
 #: library actually passed.
 _FAKE_SCRIPT = """\
 import json, os, subprocess, sys, time
@@ -369,8 +369,9 @@ try:
         index = sum(1 for _ in handle)
 except OSError:
     index = 0
+STDIN = sys.stdin.read()
 with open(LOG, "a", encoding="utf-8") as handle:
-    handle.write(json.dumps(sys.argv[1:]) + "\\n")
+    handle.write(json.dumps([sys.argv[1:], len(STDIN)]) + "\\n")
 
 
 def pick(key):
@@ -411,7 +412,15 @@ class FakeProgram:
         if not self.log.exists():
             return []
         lines = self.log.read_text(encoding="utf-8").splitlines()
-        return [json.loads(line) for line in lines]
+        return [json.loads(line)[0] for line in lines]
+
+    @property
+    def stdin_lengths(self):
+        """How many characters of standard input each run could read."""
+        if not self.log.exists():
+            return []
+        lines = self.log.read_text(encoding="utf-8").splitlines()
+        return [json.loads(line)[1] for line in lines]
 
     @property
     def argv(self):
@@ -459,6 +468,10 @@ def fake_program(tmp_path, monkeypatch):
 
     def make(name, stdout="", stderr="", returncode=0, hang=False):
         fake = FakeProgram(directory, name)
+        # Making the same fake again starts it afresh.
+        for leftover in (fake.log, fake.pids):
+            if leftover.exists():
+                leftover.unlink()
         script = _FAKE_SCRIPT.format(
             config={
                 "stdout": _as_bytes(stdout),

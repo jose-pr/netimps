@@ -405,7 +405,12 @@ def test_hop_count_v6_probe_uses_the_v6_options(monkeypatch):
     assert (socket.IPPROTO_IPV6, socket.IPV6_UNICAST_HOPS, 1) in options
 
 
-def test_traceroute_parser_reads_hop_number(monkeypatch):
+def _traceroute_program(fake_program, **kwargs):
+    """A fake of the binary `_hop_count_traceroute` runs on this platform."""
+    return fake_program("tracert" if _sockets._IS_WINDOWS else "traceroute", **kwargs)
+
+
+def test_traceroute_parser_reads_hop_number(fake_program):
     """Only the hop number and destination address are read, never the prose."""
     output = (
         "\nTracing route to 8.8.8.8 over a maximum of 30 hops\n\n"
@@ -414,42 +419,31 @@ def test_traceroute_parser_reads_hop_number(monkeypatch):
         "  3     9 ms     7 ms    11 ms  8.8.8.8 \n\n"
         "Trace complete.\n"
     )
-
-    class Result:
-        stdout = output
-
-    monkeypatch.setattr(_sockets, "_subprocess_run", lambda *a, **k: Result())
+    _traceroute_program(fake_program, stdout=output)
     assert _sockets._hop_count_traceroute("8.8.8.8", 30, 1.0) == 3
 
 
-def test_traceroute_parser_localised_prose_is_ignored(monkeypatch):
+def test_traceroute_parser_localised_prose_is_ignored(fake_program):
     """A non-English traceroute must still parse -- no prose matching."""
     output = (
         "  1     5 ms     2 ms     4 ms  192.0.2.1 \n"
         "  2     *        *        *     Expiration du delai d'attente.\n"
         "  3     9 ms     7 ms    11 ms  1.1.1.1 \n"
     )
-
-    class Result:
-        stdout = output
-
-    monkeypatch.setattr(_sockets, "_subprocess_run", lambda *a, **k: Result())
+    _traceroute_program(fake_program, stdout=output)
     assert _sockets._hop_count_traceroute("1.1.1.1", 30, 1.0) == 3
 
 
-def test_traceroute_parser_missing_binary_is_none(monkeypatch):
-    def missing(*a, **k):
-        raise FileNotFoundError("traceroute not installed")
-
-    monkeypatch.setattr(_sockets, "_subprocess_run", missing)
+def test_traceroute_parser_missing_binary_is_none(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", str(tmp_path))
     assert _sockets._hop_count_traceroute("8.8.8.8", 30, 1.0) is None
 
 
-def test_traceroute_parser_no_match_is_none(monkeypatch):
-    class Result:
-        stdout = "  1     5 ms  192.0.2.1 \n  2     *  Request timed out.\n"
-
-    monkeypatch.setattr(_sockets, "_subprocess_run", lambda *a, **k: Result())
+def test_traceroute_parser_no_match_is_none(fake_program):
+    _traceroute_program(
+        fake_program,
+        stdout="  1     5 ms  192.0.2.1 \n  2     *  Request timed out.\n",
+    )
     assert _sockets._hop_count_traceroute("8.8.8.8", 30, 1.0) is None
 
 
@@ -1424,40 +1418,27 @@ def test_is_icmp_reply_reads_a_v6_packet_without_an_ip_header():
     assert not _sockets._is_icmp_reply(b"", ipv6=True)
 
 
-def test_bsd_next_hop_answers_loopback_without_spawning(monkeypatch):
-    """Loopback is on-link by definition -- no subprocess, no parsing risk.
+def test_bsd_next_hop_answers_loopback_without_spawning(fake_program):
+    """Loopback is on-link by definition -- no process, no parsing risk.
 
     The `route -n get` output shape for a *host* route is the one thing here
     that could not be measured locally, and loopback is the case that must be
     right on every platform, so it never reaches the parser.
     """
-    monkeypatch.setattr(
-        _sockets,
-        "_subprocess_run",
-        lambda *a, **k: pytest.fail("loopback must not spawn a process"),
-    )
+    fake = fake_program("route")
     assert _sockets._bsd_next_hop("127.0.0.1") == (None, 0)
     assert _sockets._bsd_next_hop("::1", ipv6=True) == (None, 0)
+    assert fake.calls == []
 
 
-def test_subprocess_helpers_never_read_the_callers_stdin(monkeypatch):
+def test_program_helpers_never_read_the_callers_stdin(fake_program):
     """A library that inherits stdin can swallow its caller's input."""
-    import subprocess
-
-    seen = []
-
-    class Result:
-        returncode = 0
-        stdout = "  interface: en0\n"
-
-    def recording(cmd, **kwargs):
-        seen.append(kwargs.get("stdin"))
-        return Result()
-
-    monkeypatch.setattr(_sockets, "_subprocess_run", recording)
+    route = fake_program("route", stdout="  interface: en0\n")
+    traceroute = _traceroute_program(fake_program)
     _sockets._bsd_next_hop("1.1.1.1")
     _sockets._hop_count_traceroute("1.1.1.1", 5, 1.0)
-    assert seen == [subprocess.DEVNULL, subprocess.DEVNULL]
+    assert route.stdin_lengths == [0]
+    assert traceroute.stdin_lengths == [0]
 
 
 # --------------------------------------------------------------------------- #

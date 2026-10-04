@@ -36,9 +36,6 @@ import socket as _socket
 import struct as _struct
 import time as _time
 from functools import partial as _partial
-from subprocess import DEVNULL as _DEVNULL
-from subprocess import TimeoutExpired as _SubprocessTimeout
-from subprocess import run as _run
 from typing import (
     Any,
     Callable,
@@ -51,7 +48,7 @@ from typing import (
     overload,
 )
 
-from . import _dnswire
+from . import _dnswire, _proc
 from ._exceptions import (
     NetimpsValueError,
     ResolutionError,
@@ -742,20 +739,16 @@ def _resolve_nslookup_once(
         cmd.append(ns)
 
     try:
-        # stdin=DEVNULL, not the caller's stdin: `capture_output` redirects
-        # only stdout/stderr, so without this the child inherits whatever the
-        # calling program was reading -- and an nslookup that finds no usable
-        # name argument goes interactive and looks *that* up, line by line,
-        # against the configured nameserver. A library never hands its
-        # caller's stdin to a subprocess.
-        response = _run(cmd, capture_output=True, timeout=timeout, stdin=_DEVNULL)
-    except _SubprocessTimeout as exc:
+        # The runner closes stdin: an nslookup that finds no usable name
+        # argument goes interactive and would look up the caller's input.
+        response = _proc.run(cmd[0], cmd[1:], timeout=timeout)
+    except TimeoutError as exc:
         raise ResolutionTimeoutError("nslookup timed out: %s" % (exc,)) from exc
     except OSError as exc:
         raise ResolutionError("nslookup unavailable: %s" % (exc,)) from exc
 
-    text = (response.stdout or b"").decode("utf-8", "replace")
-    stderr_text = (response.stderr or b"").decode("utf-8", "replace")
+    text = response.stdout
+    stderr_text = response.stderr
     # Windows nslookup prints "*** <server> can't find <name>: Non-existent
     # domain" on stderr, not stdout -- the NXDOMAIN marker check has to see
     # both, or a genuine "no such name" looks like an unparseable answer.

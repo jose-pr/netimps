@@ -74,6 +74,7 @@ src/netimps/
 ├── _sockets.py    # private: source IP, free port, tcp/wait, route, hops, MTU
 ├── _dns.py        # private: resolve() chaining dnspython/system/nslookup backends
 ├── _ping.py       # private: ping() over the platform binary
+├── _proc.py       # private: the one runner every platform binary goes through
 ├── _retry.py      # private: bounded retry with exponential backoff
 ├── _udp.py        # private: UDP receive with arrival interface (pktinfo)
 ├── _fqdn.py       # private: FQDN domain-name value type (label algebra)
@@ -149,9 +150,10 @@ map:
 ## Working here
 
 - **A green suite proves nothing about this package's platform behaviour.**
-  Nearly every test that touches `ping`, `traceroute` or `nslookup` fakes
-  `subprocess.run` and then asserts the argv the library *builds* — which can
-  never catch a flag the platform does not have. That is not hypothetical: CI
+  Nearly every test that touches `ping`, `traceroute` or `nslookup` puts a
+  fake program on `PATH` (the `fake_program` fixture) and then asserts the argv
+  the library *builds* — which can never catch a flag the platform does not
+  have. That is not hypothetical: CI
   happily confirmed that `ping(ipv6=True)` puts `-6` in the argv for months
   while macOS `ping` answered `invalid option -- 6` and exited 64.
   `tests/test_platform_smoke.py` is the one file that runs the real binaries,
@@ -341,10 +343,11 @@ Tests live in `tests/` and run via `pytest -q` from a checkout;
 
 | File | Covers |
 | --- | --- |
-| `conftest.py` | the suite-wide network guard and its `no_such_host` / `allow_resolver` opt-outs |
+| `conftest.py` | the suite-wide network guard and its `no_such_host` / `allow_resolver` opt-outs; the `fake_program` fixture |
 | `test_ip.py` | `parse`/`try_parse`/`is_valid`, the aliases, CIDR maths |
 | `test_mac.py` | `MACAddress` parsing, ordering, and the hash/eq law across every accepted spelling |
-| `test_net.py` | DNS and ping, with `dns.resolver` and `subprocess.run` faked throughout |
+| `test_net.py` | DNS and ping, with `dns.resolver` faked and a fake `nslookup`/`ping` program on `PATH` |
+| `test_proc.py` | the runner: missing program, exit status, deadline that kills the children, invalid bytes, `LC_ALL`, stdin |
 | `test_interfaces.py` | `get_interfaces` invariants, the pure helpers, the degraded fallback |
 | `test_sockets.py` | bind / `tcp_check` / route / MTU; loopback, or assertions about shape |
 | `test_scan.py` | `scan_ports` / `scan_hosts` and the multicast helpers, loopback only |
@@ -357,6 +360,16 @@ Tests live in `tests/` and run via `pytest -q` from a checkout;
 | `test_cli.py` | the CLI; skips itself when the `cli` extra is absent |
 | `test_platform_smoke.py` | the **only** non-mocked tests — the real `ping`/`ping6` binary and real loopback sockets |
 | `typing/api.py` | the static-typing contract; never executed, checked by mypy with `typing/consumer.ini` |
+
+**`fake_program` is how tests stand in for a platform binary.** It writes a
+program into a temporary directory first on `PATH`: a `#!` script on POSIX, a
+`distlib`-built `.exe` launcher on Windows (a `.cmd` shim is refused by the
+runner, so it would not exercise the real path). `fake.argv` / `fake.calls`
+read back what the library passed; `stdout`, `stderr` and `returncode` may be
+lists, one per run. The fixture adds the fake's directory to the guard's
+allow-list, so a fake `nslookup` is not mistaken for a real off-host query.
+Never patch `subprocess` or `_proc.run` to stand in for a program, except to
+make the runner report a deadline the test cannot wait for.
 
 `tests/test_platform_smoke.py` must stay unmocked. Every other ping test
 asserts the argv the library builds, which cannot catch a flag the platform

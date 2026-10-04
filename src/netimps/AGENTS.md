@@ -599,18 +599,18 @@ path is usable. Address records only: `rdtype` must be `"a"`, `"aaaa"` or
   stopping at the first with actual records. `search=True` (default) draws
   the candidate list from the system resolver's search config (reusing
   `dnspython`'s `resolv.conf`/registry parsing if it's installed; `[]` —
-  literal name only — if not). `timeout` bounds **each** subprocess attempt.
-- **Raises `ValueError` before any subprocess is spawned** for a `query` that
+  literal name only — if not). `timeout` bounds **each** `nslookup` run.
+- **Raises `ValueError` before `nslookup` is run** for a `query` that
   starts with `-`, is empty or whitespace-only, or contains whitespace or
   control characters. `nslookup` has **no `--` end-of-options separator**, so
   such a query cannot be escaped into position: the binary reads it as an
   option, finds no name argument, and drops into *interactive* mode — where it
   reads names to look up from **stdin**. Measured: that drained the calling
   program's stdin and sent each line to the configured nameserver as a query.
-- **The subprocess is given `stdin=DEVNULL`**, so it can never read the
-  caller's stdin whatever else happens.
-- Raises `ResolutionError` (not `ValueError`) for a missing binary, a
-  timeout, an unparseable output shape, or **a non-zero exit carrying none of
+- **`nslookup` is run as described under "Programs the library runs"**:
+  standard input closed, `LC_ALL=C`, output decoded `errors="replace"`.
+- Raises `ResolutionError` (not `ValueError`) for a missing binary (found on
+  `PATH` before anything runs, and named in the message), an unparseable output shape, or **a non-zero exit carrying none of
   the "no such name" markers** (no reachable server, a refused connection).
   That last case used to return `[]`, which made a transport failure look like
   NXDOMAIN and stopped `resolve()`'s chain. A genuine "no such name" — exit 1
@@ -650,6 +650,27 @@ names a DoH endpoint wants that answer alone.
   error, or a reply that is not `application/dns-message` is `ResolutionError`.
 - `rdtype` as `resolve_wire`; NXDOMAIN is `[]`, another error rcode
   `ResolutionError`.
+
+## Programs the library runs
+
+`ping`/`ping6`, `nslookup`, `route` and `traceroute`/`tracert` are started by one
+private runner, so they all behave alike:
+
+- **An argument list, never a shell.** The program is looked up on `PATH` before
+  anything runs; a missing one is reported by name (`FileNotFoundError`
+  internally), and the caller keeps its own contract for it: `ping` is falsy,
+  `get_route` and `count_hops` give `None`/unknown, `resolve_nslookup` raises
+  `ResolutionError`. A program that resolves to a `.bat` or `.cmd` is refused.
+- **Standard input is closed**, so a child can never read the caller's.
+- **`LC_ALL=C` is added to a copy of the environment**, so the output does not
+  change with the user's locale. Replies are still matched by address token,
+  never by prose.
+- **Output is decoded with `errors="replace"`**: the OEM code page on Windows
+  (measured: `ping`, `nslookup` and `tracert` all echo a non-ASCII host name in
+  it), UTF-8 elsewhere. Invalid bytes become U+FFFD and never raise.
+- **A deadline kills the program and its children** before the caller's
+  timeout mapping applies (`ResolutionTimeoutError` for `nslookup`, falsy for
+  `ping`).
 
 ## Reachability
 
@@ -715,7 +736,8 @@ failure. `tcp` and `udp` also report `rtt`; only ICMP reports `ttl`.
 - An unusable `src` (unknown MAC, adapter with no address, foreign address)
   gives a falsy result — it **never silently falls back** to the default route.
 - **Reachability failures never raise; caller mistakes always do.** A missing
-  binary, a hung subprocess, a non-zero exit and an empty `dst` are all falsy.
+  binary, a hung `ping` (killed after `max(timeout, 1) + 5` seconds), a
+  non-zero exit and an empty `dst` are all falsy.
   `ValueError` is raised for an unknown `method`, a negative `size`, a `ttl`
   outside `1-255`, a `tcp`/`udp` probe with no `port`, a `dont_fragment` that
   cannot be honoured, and a `dst` beginning with `-` — the binary reads that as
@@ -957,9 +979,9 @@ failure. `tcp` and `udp` also report `rtt`; only ICMP reports `ttl`.
   Windows (it asks the kernel which route *it* would pick, so the
   longest-prefix matching is not reimplemented), `/proc/net/route` and
   `/proc/net/ipv6_route` on Linux, and `route -n get` on macOS/BSD — the one
-  platform where this spawns a short-lived process (`stdin=DEVNULL`, 5s cap),
-  because there is no `/proc` to read. Loopback short-circuits without
-  spawning anything.
+  platform where this runs a short-lived program (`route`, 5s cap), because
+  there is no `/proc` to read. A missing or hung `route` gives `on_link=None`.
+  Loopback short-circuits without running anything.
 
   > **`Route.on_link` is `Optional[bool]`**: `True` when no gateway is needed,
   > `False` when one is, and **`None` when the next hop could not be looked up
@@ -978,7 +1000,8 @@ failure. `tcp` and `udp` also report `rtt`; only ICMP reports `ttl`.
 - **`count_hops(dst, *, max_hops=30, timeout=1.0, allow_traceroute=True, ipv6=None)`**
   — uses raw-socket probes when permitted, otherwise drives the system
   `traceroute`/`tracert`, so it **works unprivileged**. Only the hop number and
-  destination address are parsed, never localised prose.
+  destination address are parsed, never localised prose. A missing or hung
+  program gives `None`.
   `allow_traceroute=False` requires the in-process path and raises
   `PermissionError` instead. `ipv6=` picks the family and the probes follow
   (ICMPv6 with `IPV6_UNICAST_HOPS`, and the platform's v6 traceroute); the

@@ -15,11 +15,9 @@ import os as _os
 import re as _re
 import socket as _socket
 import sys as _sys
-from subprocess import DEVNULL as _DEVNULL
-from subprocess import TimeoutExpired as _SubprocessTimeout
-from subprocess import run as _run
 from typing import Any, List, Literal, Optional, Tuple, cast as _cast
 
+from . import _proc
 from ._iface_spec import InterfaceLike, interface_address as _interface_address
 from ._ip import HostLike, IPAddress, _dst_argument
 from ._parse import try_parse as _try_parse
@@ -748,23 +746,14 @@ def ping(
 
     for attempt in range(1, tries + 1):
         try:
-            response = _run(
-                argv,
-                capture_output=True,
-                timeout=wall_timeout,
-                # Never hand a subprocess the caller's stdin. `ping` does not
-                # read it, but a library that leaks stdin to a child is one
-                # implementation change away from mattering -- and the sibling
-                # nslookup call proved exactly that.
-                stdin=_DEVNULL,
-            )
-        except (OSError, _SubprocessTimeout):
-            # No ping binary, or it hung past the wall clock.
+            response = _proc.run(argv[0], argv[1:], timeout=wall_timeout)
+        except OSError:
+            # No ping binary, or it hung past the wall clock (TimeoutError).
             return PingResult(False, dst, attempts=attempt)
         if response.returncode != 0:
             continue
 
-        text = (response.stdout or b"").decode("utf-8", "replace")
+        text = response.stdout
 
         # A zero exit is not proof the *target* answered: Windows also exits 0
         # for "TTL expired in transit", where a router replied instead. Confirm

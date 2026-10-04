@@ -6,7 +6,6 @@ they wrote against the builtin (or against the package base) stops matching.
 """
 
 import socket
-import subprocess
 import threading
 from pathlib import Path
 
@@ -109,25 +108,18 @@ def test_a_hung_system_lookup_raises_the_timeout_error(monkeypatch):
         released.set()
 
 
-def test_an_nslookup_timeout_raises_the_timeout_error(monkeypatch):
-    """The subprocess's own ``TimeoutExpired`` is neither an ``OSError`` nor a
-    ``TimeoutError``; without translation the caller sees only the text."""
-
-    def _slow(cmd, **kwargs):
-        raise subprocess.TimeoutExpired(cmd, 1)
-
-    monkeypatch.setattr(_dns, "_run", _slow)
+def test_an_nslookup_timeout_raises_the_timeout_error(fake_program):
+    """A hung nslookup is killed and the caller sees the package's timeout error."""
+    fake_program("nslookup", hang=True)
     with pytest.raises(ResolutionTimeoutError):
-        netimps.resolve_nslookup("example.com", timeout=1)
+        netimps.resolve_nslookup("example.com", timeout=1, search=False)
 
 
-def test_a_missing_nslookup_is_a_resolution_error_but_not_a_timeout(monkeypatch):
+def test_a_missing_nslookup_is_a_resolution_error_but_not_a_timeout(
+    tmp_path, monkeypatch
+):
     """A missing binary is not a deadline; the two must stay distinguishable."""
-
-    def _missing(cmd, **kwargs):
-        raise FileNotFoundError("nslookup")
-
-    monkeypatch.setattr(_dns, "_run", _missing)
+    monkeypatch.setenv("PATH", str(tmp_path))
     with pytest.raises(ResolutionError) as caught:
         netimps.resolve_nslookup("example.com")
     assert not isinstance(caught.value, TimeoutError)

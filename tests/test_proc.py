@@ -155,3 +155,25 @@ def test_the_lookup_follows_a_changed_path(fake_program, tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", str(tmp_path))
     with pytest.raises(FileNotFoundError):
         _proc.run("netimps-probe", [], timeout=20)
+
+
+def test_ping_finds_and_runs_a_fake_ping_with_the_argv_it_built(fake_program):
+    """`netimps.ping` resolves `ping` from PATH and passes exactly its own argv.
+
+    Nothing is patched: the fake is found by the same `shutil.which` lookup the
+    real binary would be, and what it recorded is compared with what
+    `_ping_command` builds for the same arguments.
+    """
+    import netimps
+    from netimps import _ping
+
+    fake = fake_program(
+        "ping", stdout="Reply from 127.0.0.1: bytes=32 time=1ms TTL=128\n"
+    )
+    result = netimps.ping("127.0.0.1", timeout=1.0)
+    argv, _ = _ping._ping_command(
+        "127.0.0.1", None, 1.0, None, None, None, False, [netimps.parse("127.0.0.1")]
+    )
+    assert bool(result) is True and result.ttl == 128
+    assert fake.calls == [argv[1:]]
+    assert argv[0] == "ping"

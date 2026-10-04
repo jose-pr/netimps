@@ -171,6 +171,18 @@ probe says so in its prefix.
 - `resolve_wire` and `resolve_doh` chain an unreadable reply's
   `DNSDecodeError` as the `__cause__` of the `ResolutionError` they raise.
 
+- **Every program netimps runs (`ping`, `nslookup`, `route`, `traceroute`,
+  `tracert`) is started the same way.** It is found on `PATH` before anything
+  runs, so a missing one is named in the error; standard input is closed;
+  `LC_ALL=C` is added to the child's environment, so output no longer follows
+  the user's locale; and output is decoded explicitly with
+  `errors="replace"` (the OEM code page on Windows, UTF-8 elsewhere) instead of
+  the locale's default, so a byte that does not decode no longer raises
+  `UnicodeDecodeError` out of `count_hops` or `get_route`. A deadline now kills
+  the program's children as well as the program. A program that resolves to a
+  `.bat` or `.cmd` is refused. What each function reports for a missing or hung
+  program is unchanged.
+
 ### Removed
 
 - **`get_ip(address, ipv6=None)`.** `Host(x).ip()` is the same
