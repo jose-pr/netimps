@@ -1409,6 +1409,10 @@ interface spec (`Interface`, MAC, adapter name or address). `close()` closes
 the wrapped socket, and the endpoint is a **context manager**
 (`with UdpEndpoint(bind("", 67)) as endpoint:`).
 
+`recv` and `send` raise the builtin `TimeoutError` when a timeout set on the
+wrapped socket expires, on every supported Python (before 3.10
+`socket.timeout` is only an `OSError`, so it is translated).
+
 - **One option per address family, and they are not spellings of each other.**
   `IP_PKTINFO` is the IPv4 option; setting it on an `AF_INET6` socket
   *succeeds* on Linux and then no cmsg ever arrives. The family selects the

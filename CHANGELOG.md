@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `resolve_nslookup`; message unchanged. It is a `ValueError`, so
   `except ValueError` still catches it. `parse` now also converts the
   `ipaddress` builders' own errors, chained as `__cause__`.
+- `UdpEndpoint.recv` and `send` raise the builtin `TimeoutError` when the
+  socket's timeout expires. From Python 3.10 that is what `socket.timeout`
+  already is; on 3.9 it was only an `OSError`.
 - `ResolutionError` and `AddressInUseError` now also derive from
   `NetimpsError`. Every existing `except` clause keeps matching.
 - `resolve_wire` and `resolve_doh` chain an unreadable reply's

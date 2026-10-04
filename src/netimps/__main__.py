@@ -8,6 +8,8 @@ Without it, this exits with a one-line message naming the extra -- importing
 :mod:`netimps.cli` never needs duho, only running a command does.
 """
 
+from __future__ import annotations
+
 from .cli import run
 
 if __name__ == "__main__":

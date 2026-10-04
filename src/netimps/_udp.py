@@ -93,11 +93,23 @@ sending from ``0.0.0.0``.
 
 from __future__ import annotations
 
+import functools as _functools
 import socket as _socket
 import struct as _struct
 import sys as _sys
 import time as _time
-from typing import Any, Dict, Iterable, NamedTuple, Optional, Tuple, Union, cast
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    NamedTuple,
+    Optional,
+    Tuple,
+    TypeVar,
+    Union,
+    cast,
+)
 
 from ._iface_spec import InterfaceSpec
 from ._ifaddrs import INTERFACE_CACHE_TTL, Interface
@@ -116,6 +128,29 @@ __all__ = ["UdpEndpoint", "Datagram"]
 _MISSING = object()
 
 _IS_WINDOWS = _sys.platform == "win32"
+
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+
+def _builtin_timeout(method: _F) -> _F:
+    """Re-raise ``socket.timeout`` as the builtin ``TimeoutError``.
+
+    From 3.10 they are one class and this changes nothing; on the 3.9 floor
+    ``socket.timeout`` is only an ``OSError``, so a caller catching
+    ``TimeoutError`` would otherwise miss it.
+    """
+
+    @_functools.wraps(method)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return method(*args, **kwargs)
+        except _socket.timeout as exc:
+            if isinstance(exc, TimeoutError):
+                raise
+            raise TimeoutError(*exc.args) from exc
+
+    return cast(_F, wrapper)
+
 
 #: Documented kernel ABI values, used when CPython does not export the name.
 #:
@@ -495,6 +530,7 @@ class UdpEndpoint:
             self._iface_cache[index] = None
         return found
 
+    @_builtin_timeout
     def recv(self, bufsize: int = 65535, resolve_interface: bool = True) -> Datagram:
         """Receive one datagram.
 
@@ -508,6 +544,9 @@ class UdpEndpoint:
         the interface fields are filled for both address families, and
         ``.control_truncated`` says whether anything was dropped for want of
         buffer space.
+
+        A timeout set on the socket raises the builtin :class:`TimeoutError`
+        on every supported Python.
         """
         if not self.supports_pktinfo:
             # No interface information here, but `recvmsg` still reports
@@ -646,6 +685,7 @@ class UdpEndpoint:
         # changes nothing, and filling it with the source was misleading.
         return level, send_type, _struct.pack(_PKTINFO_V4, index, packed, b"\x00" * 4)
 
+    @_builtin_timeout
     def send(
         self,
         data: bytes,
@@ -688,6 +728,9 @@ class UdpEndpoint:
 
         Resolving a MAC, adapter name or bare address enumerates interfaces;
         pass an :class:`Interface` in a send loop to avoid that.
+
+        A timeout set on the socket raises the builtin :class:`TimeoutError`
+        on every supported Python.
         """
         target = (_dst_argument(address), int(port))
 

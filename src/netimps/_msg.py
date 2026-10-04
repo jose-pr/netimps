@@ -47,6 +47,8 @@ already provides, so if CPython ever ships ``recvmsg`` on Windows this stands
 down by itself.
 """
 
+from __future__ import annotations
+
 import errno as _errno
 import os as _os
 import socket as _socket

@@ -41,6 +41,8 @@ POSIX, which would make even a guarded import of this module a hazard, and
 removes both questions from the struct layouts.
 """
 
+from __future__ import annotations
+
 import ctypes as _ctypes
 import socket as _socket
 import weakref as _weakref
