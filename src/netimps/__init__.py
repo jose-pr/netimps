@@ -37,7 +37,7 @@ membership all behave exactly as the stdlib does.
 
 from __future__ import annotations
 
-# Re-export the concrete stdlib types so consumers can annotate with them.
+# Re-export the concrete stdlib types so callers can annotate with them.
 from ipaddress import (
     IPv4Address,
     IPv4Interface,
@@ -281,9 +281,7 @@ def _installed_version() -> str:
 
     Read rather than restated. A literal here is a second source of truth for
     one fact, and it drifts the moment `pyproject.toml` is bumped and this line
-    is not -- which is exactly what happened cutting 0.3.0, leaving
-    `__version__` saying 0.2.2 while the metadata said 0.3.0 and the shipped
-    header promised the two were the same value.
+    is not, leaving `__version__` and the package metadata disagreeing.
 
     Falls back to "0.0.0+unknown" when the package is not installed at all
     (running straight from a source tree with no metadata), which is honest

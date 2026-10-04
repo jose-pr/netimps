@@ -24,8 +24,8 @@ __all__ = ["get_default_port", "get_default_scheme", "register_port"]
 #: Conventional scheme -> port mappings, consulted before the system services
 #: database. Seeded with the entries :func:`socket.getservbyname` gets wrong or
 #: does not know (it has no entry for the socks variants at all). Mutable via
-#: :func:`register_port`; not a frozen table, deliberately -- consumers keep
-#: needing to add their own.
+#: :func:`register_port`; not a frozen table, deliberately -- callers have
+#: protocols of their own to add.
 _DEFAULT_PORTS = {
     "http": 80,
     "https": 443,
@@ -162,15 +162,15 @@ def _service_name(port: int) -> "Optional[str]":
 def register_port(scheme: str, port: int, *, canonical: bool = False) -> None:
     """Register (or override) a scheme's conventional port.
 
-    The built-in table covers the common cases, but every consumer eventually
-    has a protocol of its own::
+    The built-in table covers the common cases; a protocol of the caller's own
+    is added here::
 
         register_port("myproto", 9999)
         get_default_port("myproto")     # 9999
         get_default_scheme(9999)        # 'myproto'
 
-    Re-registering a scheme **moves** it: the port it used to occupy no longer
-    maps back to it, or the registry would contradict itself::
+    Re-registering a scheme **moves** it: the port it occupied before the call
+    stops mapping back to it, or the registry would contradict itself::
 
         register_port("myproto", 8888)
         get_default_port("myproto")     # 8888

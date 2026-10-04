@@ -116,9 +116,8 @@ class MACAddress:
 
         Returns a plain ``bool`` and deliberately does **not** narrow
         ``value``: a :data:`typing.TypeGuard` here would let a checker certify
-        ``user_input.packed`` on something that is still a ``str``, which is
-        the unsoundness removed from the module-level ``is_valid`` in 0.1.0.
-        Use :meth:`try_parse` when you want the parsed object.
+        ``user_input.packed`` on something that is still a ``str``. Use
+        :meth:`try_parse` when you want the parsed object.
         """
         try:
             cls(value)  # type: ignore[arg-type]

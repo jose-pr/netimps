@@ -2,7 +2,7 @@
 
 The one parsing entry point: ``type`` is a result type (the union aliases, a
 concrete class) or any callable. The overloads under ``TYPE_CHECKING`` are the
-signature consumers see; the runtime definitions are permissive.
+signature callers see; the runtime definitions are permissive.
 
 Re-exported from :mod:`netimps`.
 """
@@ -53,11 +53,9 @@ _Builder = Callable[..., Any]
 # value type as the *join* of three different ``ipaddress.ip_*`` functions --
 # which collapses to the opaque ``function`` type, one it then refuses to call
 # ("Cannot call function of unknown type") and refuses to use as a key. The
-# two names below bind the very same dict objects, so ``netimps._BUILDERS``
-# stays the single table everything reads and mutates; they only write down
-# what has always been in them. The permanent fix is to annotate the literals
-# in ``_ip`` -- a function object *is* a ``Callable[..., Any]``; only the join
-# of several is not -- at which point the cast here can go.
+# two names below bind the very same dict objects as ``_ip._BUILDERS`` and
+# ``_ip._BUILDER_DEFAULTS``, so that table stays the single one everything
+# reads and mutates; they only write down what is in them.
 _BUILDER_TABLE = cast("Mapping[Any, _Builder]", _BUILDERS)
 _BUILDER_DEFAULT_TABLE: Mapping[_Builder, Mapping[str, Any]] = _BUILDER_DEFAULTS
 
@@ -96,13 +94,13 @@ if TYPE_CHECKING:
     # the result represented by union type forms and arbitrary builders.
     #
     # Checking this file against *itself* raises two structural complaints a
-    # consumer never sees: the overloads have no implementation inside the
+    # caller never sees: the overloads have no implementation inside the
     # ``if TYPE_CHECKING`` block (``no-overload-impl``), and the runtime
     # ``def`` further down reads as a redefinition of them (``no-redef``).
     # Both are inherent to declaring overloads this way, so each is silenced
     # on the exact line that raises it -- never by loosening a signature.
     #
-    # What consumers actually get is asserted in ``tests/typing/api.py``
+    # What callers actually get is asserted in ``tests/typing/api.py``
     # (``parse(x, IPNetwork)`` is typed ``IPv4Network | IPv6Network``, and so
     # on), and was measured from outside the package with ``TypeForm``
     # disabled and ``python_version = 3.9``. Do not flatten, widen or delete
@@ -334,7 +332,9 @@ def try_parse(  # type: ignore[no-redef]  # the overloads above are the signatur
     strict: "Optional[bool]" = None,
     **options: "object",
 ) -> "Any":
-    """Return ``type(value)``, or ``default`` if it rejects the input. Never raises.
+    """Return ``type(value)``, or ``default`` if it rejects the input.
+
+    A rejected value never raises; an unusable ``type`` or option does.
 
     The one non-raising parse for the whole package. ``type`` is either a
     **type** -- including the union aliases, which are not themselves callable
@@ -393,7 +393,10 @@ def is_valid(  # type: ignore[no-redef]  # the overloads above are the signature
     strict: "Optional[bool]" = None,
     **options: "object",
 ) -> "bool":
-    """Return ``True`` if ``value`` parses as ``type``. Never raises.
+    """Return ``True`` if ``value`` parses as ``type``.
+
+    A rejected value is ``False``, never an exception; an unusable ``type`` or
+    option raises ``TypeError``, as in :func:`try_parse`.
 
     Accepts the same ``type`` forms as :func:`try_parse` -- a type, a union
     alias, or any callable::

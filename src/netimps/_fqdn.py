@@ -83,7 +83,8 @@ _IPAddress = Union[IPv4Address, IPv6Address]
 __all__ = ["FQDN", "FQDNLike"]
 
 #: What :class:`FQDN` accepts wherever it accepts "another name": the parsed
-#: type, a string, or an iterable of labels.
+#: type or a string. The constructor and the label operators also take an
+#: iterable of labels, spelled out in their own signatures.
 FQDNLike = Union["FQDN", str]
 
 #: RFC 1035 2.3.4. 253 rather than 255: the wire form spends one octet on each
@@ -896,12 +897,11 @@ class FQDN:
         one that matches ``ipaddress``. Use ``is_subdomain_of`` when you mean
         *strictly* below.
 
-        This is deliberately **not** a label test. An earlier version made
-        ``"com" in FQDN("www.example.com")`` true, which reads plausibly and
-        conflicts head-on with the containment meaning -- the same expression
-        cannot answer both. Containment won because it is the stdlib idiom this
-        package is a thin layer over, and because a label test is already
-        spelled ``"com" in f.labels``.
+        This is deliberately **not** a label test: ``"com" in
+        FQDN("www.example.com")`` is ``False``. One expression cannot answer
+        both containment and "is this a label", and containment is the stdlib
+        idiom this package is a thin layer over; a label test is spelled
+        ``"com" in f.labels``.
 
         Accepts an :class:`FQDN` or a ``str``, ignores qualification (the
         trailing dot does not change where a name sits in the tree), and answers

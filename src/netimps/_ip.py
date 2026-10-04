@@ -2,7 +2,7 @@
 
 The v4/v6 union aliases callers annotate with, the builder tables :func:`parse`
 dispatches on, and the address/network helpers that are specific to IP (as
-opposed to the generic parsing combinators, which live in ``__init__``).
+opposed to the generic parsing combinators, which live in ``_parse``).
 
 Re-exported from :mod:`netimps`.
 """
@@ -176,7 +176,7 @@ def _dst_argument(value) -> str:
     An :class:`IPv4Interface`/:class:`IPv6Interface` unwraps to its
     ``.ip`` -- the ``/prefix`` means nothing to ``ping``/``getaddrinfo``, and
     stringifying the interface directly would pass ``"10.0.0.5/24"`` as the
-    destination, which every consumer of this (a subprocess argument, a
+    destination, which every caller of this (a subprocess argument, a
     socket call, a DNS query) reads as garbage rather than an address.
 
     An :class:`IPv4Network`/:class:`IPv6Network` has no single address, so it
@@ -372,10 +372,9 @@ def split_host(
 
     ``text`` accepts the package's usual loose union, not only a ``str``: an
     address object, an :class:`IPv4Interface`/:class:`IPv6Interface` (its ``.ip``
-    is used), a :class:`Host` or an :class:`FQDN`. :func:`join_host`, the inverse,
-    already did -- this insisted on a ``str`` and rejected the values a caller
-    holding "the host" most often has. A *network*, or a value that is not a host
-    type at all (``None``, an ``int``, ``bytes``), raises :class:`TypeError`.
+    is used), a :class:`Host` or an :class:`FQDN`, as :func:`join_host`, the
+    inverse, does. A *network*, or a value that is not a host type at all
+    (``None``, an ``int``, ``bytes``), raises :class:`TypeError`.
 
     Port text is ASCII digits, as RFC 3986 section 3.2.3 has it: ``"8_0"``,
     ``"+80"``, a space and non-ASCII digits are refused. What sits inside
@@ -412,9 +411,9 @@ def split_host(
     elif text.count(":") > 1:
         # More than one colon and no brackets: a bare IPv6 address is the only
         # thing that can be, and splitting would turn "::1" into host "::"
-        # port 1. Confirm it really parses rather than assuming -- the
-        # assumption returned the whole unparseable string as the host, which
-        # is a confident wrong answer the caller cannot detect.
+        # port 1. Confirm it really parses rather than assuming: taking the
+        # whole unparseable string as the host is a confident wrong answer the
+        # caller cannot detect.
         if not _is_ipv6_literal(text):
             raise NetimpsValueError(
                 "%r has several colons but is not an IPv6 address; "
@@ -572,7 +571,7 @@ def is_link_scoped(ip: "IPAddressLike") -> bool:
 # Well-known networks
 # ---------------------------------------------------------------------------
 # Named so callers read as the RFC does, instead of repeating literals. These
-# are the ranges consumers kept spelling out by hand.
+# are the ranges callers otherwise spell out by hand.
 
 #: RFC 3927 link-local ("Automatic Private IP Addressing") -- what a host gives
 #: itself when DHCP fails, so its presence usually means "no lease".
@@ -602,8 +601,8 @@ class Host:
         Host("10.0.0.5").is_address    # True, no DNS involved
 
     The point is that ``str(host)`` is **always what was given**, so a URL can
-    still be rebuilt when resolution fails -- which is the case a bare
-    a bare lookup handles badly, since it returns ``None`` and loses the name.
+    still be rebuilt when resolution fails -- the case a bare lookup handles
+    badly, since it returns ``None`` and loses the name.
     """
 
     __slots__ = ("value", "_resolved", "_attempted")
