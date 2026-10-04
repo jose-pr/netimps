@@ -76,16 +76,22 @@ src/netimps/
 ├── _ping.py       # private: ping() over the platform binary
 ├── _proc.py       # private: the one runner every platform binary goes through
 ├── _retry.py      # private: bounded retry with exponential backoff
-├── _udp.py        # private: UDP receive with arrival interface (pktinfo)
-├── _freebsd.py    # private: IPv4 arrival data and source pinning on FreeBSD
-├── _fqdn.py       # private: FQDN domain-name value type (label algebra)
 ├── _pktinfo.py    # private: pktinfo constants, per-platform layouts, decoding (imports neither _udp nor _msg)
+├── _udp/          # private package: UDP receive with arrival interface (pktinfo)
+│   ├── _datagram.py  # Datagram
+│   ├── _endpoint.py  # UDPEndpoint: recv, the async variants, close
+│   ├── _send.py      # send and the cmsg that pins the source (mixin)
+│   ├── _reply.py     # reply_socket and the address policy (mixin)
+│   ├── _support.py   # has_pktinfo
+│   ├── _timeout.py   # socket.timeout -> TimeoutError on 3.9
+│   ├── _notifier.py  # add_reader polyfill, so arecv works on a Proactor loop
+│   └── _freebsd.py   # IPv4 arrival data and source pinning on FreeBSD
+├── _fqdn.py       # private: FQDN domain-name value type (label algebra)
 ├── _msg/          # private package: cross-platform recvmsg/sendmsg + the socket patch
 │   ├── _dispatch.py  # recvmsg, sendmsg, CMSG_LEN/SPACE: native, or Winsock on Windows
 │   ├── _shape.py     # IPv4 pktinfo re-laid between the Windows and POSIX field orders
 │   ├── _sysconf.py   # the os.sysconf stand-in the patch installs
 │   └── _patch.py     # install/remove the socket patch (only the root imports it)
-├── _aio.py        # private: add_reader polyfill, so arecv works on a Proactor loop
 ├── _winsock/      # private package: ctypes WSARecvMsg/WSASendMsg (Windows only, never imported elsewhere)
 │   ├── _abi.py       # ws2_32, the structures, argtypes
 │   ├── _cmsg.py      # cmsg sizes, control-buffer walk and build

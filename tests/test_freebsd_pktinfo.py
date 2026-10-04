@@ -16,7 +16,7 @@ import sys
 import pytest
 
 from netimps import Interface, UDPEndpoint, bind, has_pktinfo
-from netimps import _freebsd, _udp
+from netimps._udp import _endpoint, _freebsd
 
 ON_FREEBSD = sys.platform.startswith("freebsd")
 
@@ -105,7 +105,7 @@ def test_recv_combines_the_two_messages(freebsd_v4, monkeypatch, order):
     if order == "interface first":
         messages.reverse()
     monkeypatch.setattr(
-        _udp,
+        _endpoint,
         "_recvmsg",
         lambda sock, bufsize, ancbufsize: (b"x", messages, 0, ("127.0.0.1", 9)),
     )
@@ -120,7 +120,7 @@ def test_recv_without_the_interface_message_still_reports_the_address(
 ):
     messages = [(socket.IPPROTO_IP, 7, b"\x0a\x00\x00\x05")]
     monkeypatch.setattr(
-        _udp,
+        _endpoint,
         "_recvmsg",
         lambda sock, bufsize, ancbufsize: (b"x", messages, 0, ("10.0.0.9", 9)),
     )

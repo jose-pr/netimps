@@ -32,7 +32,7 @@ import struct as _struct
 import sys as _sys
 from typing import Any, Optional, Tuple
 
-from ._ip import IPv4Address
+from .._ip import IPv4Address
 
 __all__ = ["IS_FREEBSD"]
 

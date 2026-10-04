@@ -540,7 +540,7 @@ def test_aclose_waits_for_the_thread_without_blocking_the_loop(factory):
     """
     import time
 
-    from netimps._aio import ReadNotifier
+    from netimps._udp._notifier import ReadNotifier
 
     class SlowThread:
         def __init__(self):

@@ -27,7 +27,7 @@ from netimps import (
     is_local_address,
     retry,
 )
-from netimps import _iface_spec, _retry, _udp
+from netimps import _iface_spec, _pktinfo, _retry, _udp
 
 # --------------------------------------------------------------------------- #
 # bind                                                                         #
@@ -525,7 +525,7 @@ def test_udp_endpoint_round_trip(family, host):
 
     # Degrading to False is honest, but it must not become the escape hatch:
     # where the kernel exports this family's option, it has to be used.
-    receive_option = _udp._pktinfo_options(family)[1]
+    receive_option = _pktinfo._pktinfo_options(family)[1]
     if receive_option is not None and hasattr(socket.socket, "recvmsg"):
         assert endpoint.has_pktinfo
     if sys.platform.startswith("freebsd") and family == socket.AF_INET:
@@ -579,7 +579,7 @@ def test_udp_endpoint_ancillary_buffer_holds_more_than_one_cmsg():
     with UDPEndpoint(bind("127.0.0.1", 0)) as endpoint:
         if not endpoint.has_pktinfo:
             pytest.skip("no IP_PKTINFO on this platform")
-        one = socket.CMSG_SPACE(struct.calcsize(_udp._PKTINFO_V4))
+        one = socket.CMSG_SPACE(struct.calcsize(_pktinfo._PKTINFO_V4))
         assert endpoint._cmsg_size >= one * 2
 
 
@@ -630,7 +630,7 @@ def test_udp_endpoint_send_rejects_an_unresolvable_source():
 
 def test_udp_endpoint_degrades_without_pktinfo(monkeypatch):
     """No IP_PKTINFO must mean empty interface fields, not a failure."""
-    monkeypatch.setattr(_udp, "_IP_PKTINFO", None)
+    monkeypatch.setattr(_pktinfo, "_IP_PKTINFO", None)
     # FreeBSD carries IPv4 arrival data without IP_PKTINFO; a platform with
     # neither is what this simulates.
     monkeypatch.setattr(_udp._freebsd, "IS_FREEBSD", False)
@@ -675,7 +675,7 @@ def test_udp_endpoint_claims_pktinfo_whenever_the_platform_delivers_it(family, h
 
     This asks the **platform**, not the library. `test_udp_endpoint_round_trip`
     has a guard for the same thing, but it reads
-    `_udp._pktinfo_options(family)[1]` -- the function under test -- so when that
+    `_pktinfo._pktinfo_options(family)[1]` -- the function under test -- so when that
     returned None for IPv6 on Windows, the guard switched itself off and the
     round trip passed through its own degraded branch. Measured on a CI runner:
     `UDPEndpoint(bind("::", 0)).has_pktinfo` was False while a raw
@@ -694,7 +694,7 @@ def test_udp_endpoint_claims_pktinfo_whenever_the_platform_delivers_it(family, h
         pytest.skip("cannot bind %s: %s" % (host, exc))
     delivered = False
     try:
-        # The *constants* come from `_udp`, the *decision* does not -- that
+        # The *constants* come from `_pktinfo`, the *decision* does not -- that
         # distinction is the whole design of this test. Reading them from
         # `socket` instead gave this check the same blind spot as the code it
         # was meant to police: `socket.IP_PKTINFO` only exists from CPython
@@ -702,11 +702,11 @@ def test_udp_endpoint_claims_pktinfo_whenever_the_platform_delivers_it(family, h
         # skipped -- passing while v4 pktinfo was broken on every platform.
         if family == socket.AF_INET6:
             candidates = [
-                (socket.IPPROTO_IPV6, _udp._IPV6_RECVPKTINFO),
-                (socket.IPPROTO_IPV6, _udp._IPV6_PKTINFO),
+                (socket.IPPROTO_IPV6, _pktinfo._IPV6_RECVPKTINFO),
+                (socket.IPPROTO_IPV6, _pktinfo._IPV6_PKTINFO),
             ]
         else:
-            candidates = [(socket.IPPROTO_IP, _udp._IP_PKTINFO)]
+            candidates = [(socket.IPPROTO_IP, _pktinfo._IP_PKTINFO)]
         for level, option in candidates:
             if option is None:
                 continue
@@ -725,7 +725,7 @@ def test_udp_endpoint_claims_pktinfo_whenever_the_platform_delivers_it(family, h
         finally:
             peer.close()
         delivered = any(
-            _udp._unpack_pktinfo(lvl, ctype, cdata) is not None
+            _pktinfo._unpack_pktinfo(lvl, ctype, cdata) is not None
             for lvl, ctype, cdata in ancdata
         )
     except OSError as exc:  # pragma: no cover - a stack without this loopback
@@ -861,7 +861,7 @@ def test_posix_packs_a_zero_source_for_an_index_only_pin(monkeypatch):
         control = endpoint._pktinfo_control("any-spec")
         assert control is not None
         _level, _ctype, data = control
-        index, _spec_dst, address = struct.unpack(_udp._PKTINFO_V4, data)
+        index, _spec_dst, address = struct.unpack(_pktinfo._PKTINFO_V4, data)
         assert index == 1
         assert address == b"\x00\x00\x00\x00", "a zero address is the POSIX idiom"
 

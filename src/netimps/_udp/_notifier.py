@@ -27,16 +27,11 @@ from __future__ import annotations
 
 import select as _select
 import socket as _socket
-import sys as _sys
 import threading as _threading
 import time as _time
 from typing import Any, Optional
 
 __all__ = ["ReadNotifier", "wait_writable"]
-
-#: Proactor is the Windows default, so the thread path is the common one there
-#: rather than an exotic fallback.
-_MAY_LACK_ADD_READER = _sys.platform == "win32"
 
 
 class ReadNotifier:

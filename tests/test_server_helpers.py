@@ -780,7 +780,7 @@ def test_supports_pktinfo_does_not_feature_test_the_constant_name():
 
 def test_supports_pktinfo_is_cached_per_family(monkeypatch):
     """Cached because it is a property of the platform, not of a socket."""
-    netimps._udp._PKTINFO_SUPPORT.clear()
+    netimps._udp._support._PKTINFO_SUPPORT.clear()
     created = []
     real = socket.socket
 
@@ -789,7 +789,7 @@ def test_supports_pktinfo_is_cached_per_family(monkeypatch):
             created.append(args[:2])
             super().__init__(*args, **kwargs)
 
-    monkeypatch.setattr(netimps._udp._socket, "socket", Counting)
+    monkeypatch.setattr(netimps._udp._support._socket, "socket", Counting)
     netimps.has_pktinfo(socket.AF_INET)
     netimps.has_pktinfo(socket.AF_INET)
     netimps.has_pktinfo(socket.AF_INET)
@@ -805,15 +805,15 @@ def test_supports_pktinfo_returns_false_rather_than_raising(monkeypatch):
     IPv6 disabled on the host is the realistic case, and a server asking "can
     you report arrivals?" wants an answer it can branch on.
     """
-    netimps._udp._PKTINFO_SUPPORT.clear()
+    netimps._udp._support._PKTINFO_SUPPORT.clear()
 
     def refuse(*args, **kwargs):
         raise OSError("no such family")
 
-    monkeypatch.setattr(netimps._udp._socket, "socket", refuse)
+    monkeypatch.setattr(netimps._udp._support._socket, "socket", refuse)
     assert netimps.has_pktinfo(socket.AF_INET6) is False
 
 
 def test_supports_pktinfo_defaults_to_ipv4():
-    netimps._udp._PKTINFO_SUPPORT.clear()
+    netimps._udp._support._PKTINFO_SUPPORT.clear()
     assert netimps.has_pktinfo() == netimps.has_pktinfo(socket.AF_INET)
