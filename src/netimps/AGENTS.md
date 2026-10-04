@@ -429,7 +429,8 @@ caller would already catch, so an existing `except ValueError` /
 | --- | --- | --- |
 | `NetimpsError` | `Exception` | the base; catch it for "anything netimps reported" |
 | `NetimpsValueError` | `NetimpsError`, `ValueError` | text that is not the value it was asked to become |
-| `ResolutionError` | `NetimpsError` | a backend could not even attempt the query |
+| `ResolutionError` | `NetimpsError`, `OSError` | a backend could not even attempt the query (an outage) |
+| `NoAnswerError` | `ResolutionError` | `check=True`: the lookup completed and there is no such name or record |
 | `ResolutionTimeoutError` | `ResolutionError`, `TimeoutError` | a backend's deadline expired |
 | `DNSDecodeError` | `NetimpsValueError` | the DNS codec cannot read a reply or write a name |
 | `AddressInUseError` | `NetimpsError`, `OSError` | `bind()` found the address taken |
@@ -441,6 +442,15 @@ read: `parse`, `MACAddress(...)`, `FQDN(...)`, `split`-style host and port
 splitting (`split_host`, `join_host`) and `resolve_nslookup`'s query
 check. A bad option elsewhere (`ping`'s `ttl`, `tcp_check`'s port, a
 `timeout`) stays a plain `ValueError`.
+
+**`ResolutionError` is an `OSError`**, as the standard library's own name
+failure `socket.gaierror` is, so an `except OSError` around a connect catches it
+and `retry()` retries it by default. **`NoAnswerError`** is the leaf for a lookup
+that *completed* and found nothing; `Host`/`FQDN` `check=True` raises it for an
+empty answer, and a plain `ResolutionError` or `ResolutionTimeoutError` for an
+outage, so a caller can tell a name that does not exist from a resolver that
+could not be asked. `retry` retries `NoAnswerError` too unless `retryable=` names
+the types to retry instead of `OSError` itself.
 
 **`ResolutionError`** — a backend could not even *attempt* the
 query: a missing `nslookup` binary, `dnspython` not installed, an `rdtype` the
@@ -1873,9 +1883,12 @@ Calls `func()`, retrying transient failures with exponential backoff. Returns
 whatever `func` returns; if every attempt fails **the last exception is
 re-raised unwrapped**, so the traceback still points at the real problem.
 
-- **Only `OSError` is retried by default** — that covers the socket family. A
-  `ValueError` means the call is malformed and will fail identically, so it
-  propagates immediately.
+- **Only `OSError` is retried by default** — that covers the socket family and
+  so `ResolutionError`, an outage. A `ValueError` means the call is malformed and
+  will fail identically, so it propagates immediately. `NoAnswerError` (a name
+  that does not exist) is an `OSError` as well; to leave it out, name the types
+  to retry instead of `OSError` itself, e.g.
+  `retryable=(ConnectionError, TimeoutError)`.
 - `attempts` counts *total* calls: `attempts=1` calls once and never sleeps.
 - `jitter` spreads retries so simultaneous failures do not resynchronise into a
   thundering herd. Applied **after** the cap and only ever shortens, so
@@ -1980,16 +1993,17 @@ Which call looks anything up:
   address outright. `Host("www.example.com").fqdn().domain` →
   `FQDN('example.com')` with no I/O. A name is returned **as written**, not as
   the canonical name after search-list expansion. `None` when no name was found
-  or the text is not a possible name; `check=True` raises `ResolutionError` for
-  the first and `NetimpsValueError` for the second. `ipv6` is accepted and
+  or the text is not a possible name; `check=True` raises `NoAnswerError` for
+  the first (a reverse lookup that completed with no name; an outage is a plain
+  `ResolutionError`) and `NetimpsValueError` for the second. `ipv6` is accepted and
   unused, so one options dict serves all three methods. Not memoised.
 - **`.ip(*, check=False, ipv6=None, ns=None, timeout=5.0, port=53, tcp=False,
   search=True, backends=None, source=None, cache=False, deadline=None, refresh=False) -> IPAddress | None`**
   — a literal as parsed, a name looked up. `ipv6=True` asks for AAAA, `False`
   for A, `None` for either in one lookup, in the OS's own order. `check=True`
-  raises `ResolutionError` instead of returning `None` — for an empty answer, a
-  resolver outage or an empty host (`resolve(strict=True)` alone re-raises only
-  the outage). **With none of `ns`, `port`, `tcp`, `source` or `backends`, the
+  raises instead of returning `None`: `NoAnswerError` for an empty answer, a
+  plain `ResolutionError` (or `ResolutionTimeoutError`) for a resolver outage or
+  an empty host (`resolve(strict=True)` alone re-raises only the outage). **With none of `ns`, `port`, `tcp`, `source` or `backends`, the
   OS resolver alone answers**, as the standard library's lookups do: a missed
   name costs milliseconds, where the full chain behind `netimps.resolve` costs
   seconds. Naming any of them selects `resolve()`'s own chain rules. `timeout`

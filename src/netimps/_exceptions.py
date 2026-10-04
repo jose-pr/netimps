@@ -17,6 +17,7 @@ __all__ = [
     "NetimpsError",
     "NetimpsValueError",
     "ResolutionError",
+    "NoAnswerError",
     "ResolutionTimeoutError",
     "DNSDecodeError",
     "AddressInUseError",
@@ -35,10 +36,26 @@ class NetimpsValueError(NetimpsError, ValueError):
     """
 
 
-class ResolutionError(NetimpsError):
+class ResolutionError(NetimpsError, OSError):
     """A backend could not even attempt the query (missing binary, unsupported
-    ``rdtype``, transport/setup failure). Distinct from a definitive DNS
-    answer of "no such record", which is `[]`, not an exception.
+    ``rdtype``, a server that did not answer, a transport or setup failure).
+    Distinct from a definitive DNS answer of "no such record", which is `[]`,
+    not an exception.
+
+    An :class:`OSError`, as :class:`socket.gaierror` is: a caller who writes
+    ``except OSError`` around a connect already expects name failures in it, and
+    :func:`netimps.retry` retries it by default.
+    """
+
+
+class NoAnswerError(ResolutionError):
+    """The lookup completed and there is no such name or no such record.
+
+    What ``check=True`` on :class:`~netimps.Host` and :class:`~netimps.FQDN`
+    raises for an empty answer, as opposed to a plain :class:`ResolutionError`
+    for a resolver that could not be asked. The difference matters to
+    :func:`netimps.retry`: an outage is worth another attempt, a name that does
+    not exist is not.
     """
 
 

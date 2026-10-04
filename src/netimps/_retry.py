@@ -315,9 +315,14 @@ def retry(
     the real problem.
 
     :param retryable: exception types worth another attempt. Defaults to
-        ``OSError``, which covers the socket family. **Anything else
-        propagates immediately**: a ``ValueError`` means the call is malformed
-        and will fail identically next time.
+        ``OSError``, which covers the socket family and so also
+        :class:`ResolutionError`, an outage worth another attempt. **Anything
+        else propagates immediately**: a ``ValueError`` means the call is
+        malformed and will fail identically next time. :class:`NoAnswerError`
+        (a name or record that does not exist, from ``check=True``) is an
+        ``OSError`` too and so is retried by default; a caller who does not want
+        that names the types to retry instead of ``OSError`` itself, for
+        example ``retryable=(ConnectionError, TimeoutError)``.
     :param on_retry: called as ``(attempt, exception, next_delay)`` before each
         wait -- the hook for logging, since this deliberately does no logging
         of its own.

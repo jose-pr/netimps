@@ -52,6 +52,7 @@ from ._exceptions import (
     DNSDecodeError,
     NetimpsError,
     NetimpsValueError,
+    NoAnswerError,
     ResolutionError,
     ResolutionTimeoutError,
 )
@@ -202,6 +203,7 @@ __all__ = [
     "resolve_doh",
     "has_dns",
     "ResolutionError",
+    "NoAnswerError",
     "ResolutionTimeoutError",
     "DNSDecodeError",
     "NetimpsError",

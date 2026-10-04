@@ -241,6 +241,15 @@ probe says so in its prefix.
   list multiplied it. `deadline` is the total for the call, shared by all of
   them; the header states what each `timeout` bounds.
 
+- **`ResolutionError` is an `OSError`, and `NoAnswerError` is new.**
+  `ResolutionError(NetimpsError, OSError)`, as the standard library's own name
+  failure `socket.gaierror` is, so `except OSError` around a connect catches it
+  and `retry()` retries it by default. `NoAnswerError(ResolutionError)` is what
+  `check=True` on `Host.ip/fqdn/resolve` and `FQDN.ip/resolve` raises when the
+  lookup completed with no such name or record; an outage stays a plain
+  `ResolutionError` or `ResolutionTimeoutError`. `retry`'s docstring and the
+  header say how to leave `NoAnswerError` out.
+
 ### Removed
 
 - **`get_ip(address, ipv6=None)`.** `Host(x).ip()` is the same

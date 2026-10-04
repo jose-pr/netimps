@@ -59,6 +59,7 @@ from . import _dnswire, _proc
 from ._exceptions import (
     DNSDecodeError,
     NetimpsValueError,
+    NoAnswerError,
     ResolutionError,
     ResolutionTimeoutError,
 )
@@ -348,6 +349,8 @@ def resolve_dnspython(
             answer = r.resolve_address(query, tcp=tcp, search=search, **extra)
         else:
             answer = r.resolve(query, rdtype, tcp=tcp, search=search, **extra)
+    except ResolutionError:
+        raise  # the deadline ending the resolution, not a socket failure
     except _classes("NXDOMAIN", "NoAnswer"):
         return []  # the resolver answered: there is no such record
     except _classes("LifetimeTimeout", "Timeout") as exc:
@@ -1638,7 +1641,7 @@ def lookup_ip(
         if isinstance(answer, (_ipaddress.IPv4Address, _ipaddress.IPv6Address)):
             return answer
     if check:
-        raise ResolutionError("%s has no address record" % (name,))
+        raise NoAnswerError("%s has no address record" % (name,))
     return None
 
 
@@ -1679,7 +1682,7 @@ def lookup_fqdn(
         if name is not None:
             return name
     if check:
-        raise ResolutionError("%s has no reverse name" % (address,))
+        raise NoAnswerError("%s has no reverse name" % (address,))
     return None
 
 
@@ -2040,6 +2043,8 @@ def _urllib_fetch(
                     "%s answered a body larger than %d bytes" % (shown, _DOH_MAX_BYTES)
                 )
             return data
+    except ResolutionError:
+        raise  # already says what was wrong with the reply
     except urllib.error.HTTPError as exc:
         raise ResolutionError("%s answered HTTP %d" % (shown, exc.code)) from exc
     except (urllib.error.URLError, OSError) as exc:

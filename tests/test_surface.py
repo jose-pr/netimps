@@ -42,6 +42,7 @@ EXPECTED = [
     "MACAddressLike",
     "NetimpsError",
     "NetimpsValueError",
+    "NoAnswerError",
     "PORT_RANGES",
     "PingResult",
     "PortsLike",

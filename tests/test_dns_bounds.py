@@ -393,11 +393,13 @@ def test_https_is_not_refused(endpoint):
 def test_a_reply_body_over_64_kib_is_refused(endpoint):
     """Measured on ec35558: the parser was handed 8,388,660 bytes."""
     started = time.perf_counter()
-    with pytest.raises(ResolutionError, match="larger"):
+    with pytest.raises(ResolutionError, match="larger") as caught:
         netimps.resolve_doh(
             "host.test", endpoint + "/big", rdtype="a", allow_http=True, timeout=10
         )
     assert time.perf_counter() - started < 5
+    # An OSError handler further out must not wrap the message again.
+    assert str(caught.value).count("http://") == 1
 
 
 def test_a_redirect_is_not_followed(endpoint):

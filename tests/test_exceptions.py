@@ -18,6 +18,7 @@ from netimps import (
     DNSDecodeError,
     NetimpsError,
     NetimpsValueError,
+    NoAnswerError,
     ResolutionError,
     ResolutionTimeoutError,
     _dns,
@@ -28,7 +29,8 @@ from netimps import (
 _BASES = [
     (NetimpsError, (Exception,)),
     (NetimpsValueError, (NetimpsError, ValueError)),
-    (ResolutionError, (NetimpsError,)),
+    (ResolutionError, (NetimpsError, OSError)),
+    (NoAnswerError, (ResolutionError,)),
     (ResolutionTimeoutError, (ResolutionError, TimeoutError)),
     (DNSDecodeError, (NetimpsValueError,)),
     (AddressInUseError, (NetimpsError, OSError)),

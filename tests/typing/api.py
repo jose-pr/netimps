@@ -57,6 +57,7 @@ from netimps import (
     MACAddress,
     NetimpsError,
     NetimpsValueError,
+    NoAnswerError,
     ResolutionError,
     ResolutionTimeoutError,
     DNSDecodeError,
@@ -382,6 +383,7 @@ def _exceptions_subclass_what_they_promise() -> None:
 
     _package(NetimpsValueError("x"))
     _package(ResolutionError("x"))
+    _package(NoAnswerError("x"))
     _package(ResolutionTimeoutError("x"))
     _package(DNSDecodeError("x"))
     _package(AddressInUseError(98, "x"))
@@ -389,6 +391,8 @@ def _exceptions_subclass_what_they_promise() -> None:
     _value(DNSDecodeError("x"))
     _timeout(ResolutionTimeoutError("x"))
     _os(AddressInUseError(98, "x"))
+    _os(ResolutionError("x"))
+    _os(NoAnswerError("x"))
     _package(ResolutionTimeoutError("x"))
 
 
