@@ -245,7 +245,7 @@ def test_datagrams_stops_at_the_first_error_by_default():
 
 
 def test_on_error_returning_true_yields_the_datagram_after_a_failed_receive():
-    """pydhcp and pytftp each wrote an ``arecv`` loop with a try/except around it."""
+    """Servers each wrote an ``arecv`` loop with a try/except around it."""
     endpoint, peer = _endpoint_with_a_pending_receive_error()
     seen = []
 
