@@ -460,7 +460,17 @@ with an empty or over-long label, raised before anything is sent) and from
 and `resolve_doh` an unreadable *reply* is not raised as such: it becomes a
 `ResolutionError` whose `__cause__` is the `DNSDecodeError`.
 
-**`resolve(query, rdtype=None, *, ns=None, timeout=5.0, port=53, tcp=False, search=True, backends=None, strict=False, source=None, cache=False)`**
+**`resolve(query, rdtype=None, *, ns=None, timeout=5.0, port=53, tcp=False, search=True, backends=None, strict=False, source=None, cache=False, deadline=None)`**
+
+**`timeout` is one attempt, `deadline` the whole call.** `timeout` bounds the
+whole backend call for `dnspython` and `wire` (every nameserver and retry
+included), and each candidate name of a search list for `system` and
+`nslookup`; a record-type pair is one attempt per type. `deadline` (seconds,
+`None` for no limit) is shared by every backend, record type and candidate:
+each attempt gets `timeout` or the time left, whichever is smaller, and once it
+has passed the remaining backends are not started. The outcome is `[]`, or with
+`strict=True` a `ResolutionTimeoutError`. `Host.ip/fqdn/resolve` and
+`FQDN.ip/resolve` take the same `deadline=`.
 
 **The element type follows `rdtype`, for `resolve` and for each backend below:**
 `"a"` gives `List[IPv4Address]`, `"aaaa"` `List[IPv6Address]`, `"ptr"`
@@ -756,6 +766,11 @@ private runner, so they all behave alike:
 `if ping(host):` and `== True` keep working, while carrying `.ok`, `.dst`,
 `.rtt` (seconds), `.ttl`, `.src`, `.attempts`.
 
+`timeout` also bounds the lookup of a hostname `dst` (once, before the first
+attempt): a name server that hangs costs `timeout`, not its own give-up time. A
+`src` is resolved to the family of `dst`, so `ping("::1", src=<interface>)`
+pins the interface's IPv6 address.
+
 | Argument | Notes |
 | --- | --- |
 | `dst` | `HostLike` (hostname, address string, address object, or `IPv4Interface`/`IPv6Interface` -- its `.ip` is pinged). `ping(get_interfaces()[0].ipv4[0])` works directly. |
@@ -770,6 +785,12 @@ private runner, so they all behave alike:
 success (the RST proves something answered), as does an ICMP port-unreachable
 for UDP. Use `tcp_check` for "is the *service* up?", where a refusal is a
 failure. `tcp` and `udp` also report `rtt`; only ICMP reports `ttl`.
+
+**On Windows a TCP refusal takes about two seconds to arrive**: the SYN is
+retried before the RST is reported (measured 2.02 s against a closed loopback
+port on Windows 11; macOS 15.7 answers in 0.9 ms). With `method="tcp"` a
+`timeout` under two seconds reports a refusing Windows host as down, so pass
+at least 3 there.
 
 - **The flags are three grammars, not two.** Of the six this emits, *five*
   differ on BSD/macOS: `-W` is milliseconds there rather than seconds, `-t` is
@@ -1377,7 +1398,7 @@ ordered. Built from a dotted string or from separate labels, **leftmost first**:
   `default` for bad text only.
 - **Network methods are named as actions and can block.**
   **`.resolve(*, check=False, ipv6=None, ns=None, timeout=5.0, port=53,
-  tcp=False, search=True, backends=None, source=None, cache=False) -> (FQDN, IPAddress | None)`**
+  tcp=False, search=True, backends=None, source=None, cache=False, deadline=None) -> (FQDN, IPAddress | None)`**
   answers `(self, ip)`, the same pair `Host.resolve()` gives, so the two types
   interchangeable as `HostLike` answer `.resolve()` alike; `.ip(...)` with the
   same options is the second element. `.ping(**kw)` → `ping()`. DNS records of
@@ -1963,7 +1984,7 @@ Which call looks anything up:
   the first and `NetimpsValueError` for the second. `ipv6` is accepted and
   unused, so one options dict serves all three methods. Not memoised.
 - **`.ip(*, check=False, ipv6=None, ns=None, timeout=5.0, port=53, tcp=False,
-  search=True, backends=None, source=None, cache=False, refresh=False) -> IPAddress | None`**
+  search=True, backends=None, source=None, cache=False, deadline=None, refresh=False) -> IPAddress | None`**
   — a literal as parsed, a name looked up. `ipv6=True` asks for AAAA, `False`
   for A, `None` for either in one lookup, in the OS's own order. `check=True`
   raises `ResolutionError` instead of returning `None` — for an empty answer, a

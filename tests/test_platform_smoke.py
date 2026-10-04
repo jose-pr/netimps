@@ -157,3 +157,24 @@ def test_tcp_probe_reaches_ipv6_loopback():
         server.listen(1)
         port = server.getsockname()[1]
         assert netimps.ping("::1", method="tcp", port=port)
+
+
+@needs_ipv6
+def test_ping_an_ipv6_literal_from_the_loopback_interface():
+    """``src=`` takes its address from the destination's family.
+
+    The interface's IPv4 address was pinned as the source of an IPv6 probe,
+    which is falsy on Windows, macOS and FreeBSD alike.
+    """
+    loopback = [i for i in netimps.get_interfaces() if i.is_loopback][0]
+    assert netimps.ping("::1", src=loopback)
+
+
+def test_a_tcp_refusal_counts_as_up_given_the_platforms_own_time():
+    """A closed loopback port answers at once on POSIX; Windows retries the SYN
+    for about two seconds (measured 2.02 s on Windows 11) before it reports the
+    refusal, so ``timeout=3.0`` is what shows the refusal there."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    assert netimps.ping("127.0.0.1", method="tcp", port=port, timeout=3.0)

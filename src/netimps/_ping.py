@@ -17,7 +17,7 @@ import socket as _socket
 import sys as _sys
 from typing import Any, List, Literal, Optional, Tuple, cast as _cast
 
-from . import _proc
+from . import _dns, _proc
 from ._iface_spec import InterfaceLike, interface_address as _interface_address
 from ._ip import HostLike, IPAddress, _dst_argument
 from ._parse import try_parse as _try_parse
@@ -178,7 +178,23 @@ def _reply_needle(address: "IPAddress") -> "_re.Pattern":
     return _re.compile(r"(?<![0-9A-Fa-f:.])" + _re.escape(str(address)) + r"[:,]")
 
 
-def _expected_addresses(dst: str, ipv6: "Optional[bool]") -> "List[IPAddress]":
+#: Smallest bound handed to a name lookup. A ``timeout`` of ``0`` means "be
+#: quick", not "give the resolver no time at all".
+_MIN_LOOKUP_SECONDS = 0.05
+
+
+def _lookup(call: "Any", timeout: "Optional[float]") -> "Any":
+    """``call()`` under ``timeout`` seconds: the resolver module's bounded
+    lookup, so a name server that hangs costs ``timeout`` and not however long
+    it takes to give up. :class:`ResolutionTimeoutError` is an ``OSError``,
+    which every caller here already treats as "did not resolve"."""
+    bound = None if timeout is None else max(timeout, _MIN_LOOKUP_SECONDS)
+    return _dns._bounded_lookup(call, bound)
+
+
+def _expected_addresses(
+    dst: str, ipv6: "Optional[bool]", timeout: "Optional[float]" = None
+) -> "List[IPAddress]":
     """Addresses a reply from ``dst`` may legitimately carry.
 
     An address literal is its own answer. A hostname has to be resolved, and
@@ -188,8 +204,9 @@ def _expected_addresses(dst: str, ipv6: "Optional[bool]") -> "List[IPAddress]":
     ``ipv6=None`` collects both families, since the platform binary is then
     free to pick either.
 
-    Returns ``[]`` when nothing resolves, which callers read as "no
-    expectation to verify against" rather than as a failure.
+    Returns ``[]`` when nothing resolves, or the lookup outlasts ``timeout``,
+    which callers read as "no expectation to verify against" rather than as a
+    failure.
     """
 
     literal = _try_parse(dst)
@@ -204,7 +221,10 @@ def _expected_addresses(dst: str, ipv6: "Optional[bool]") -> "List[IPAddress]":
         family = _socket.AF_UNSPEC
 
     try:
-        infos = _socket.getaddrinfo(dst, None, family, _socket.SOCK_STREAM)
+        infos = _lookup(
+            lambda: _socket.getaddrinfo(dst, None, family, _socket.SOCK_STREAM),
+            timeout,
+        )
     except OSError:
         return []
 
@@ -263,7 +283,13 @@ def _parse_ping_output(
     return rtt, ttl, src
 
 
-def _probe_targets(dst: str, port: int, ipv6: "Optional[bool]", socktype: int):
+def _probe_targets(
+    dst: str,
+    port: int,
+    ipv6: "Optional[bool]",
+    socktype: int,
+    timeout: "Optional[float]" = None,
+):
     """``(family, sockaddr)`` pairs to probe ``dst`` on, in resolver order.
 
     Both probe methods used to hardcode ``AF_INET``, so a v6 destination
@@ -272,8 +298,9 @@ def _probe_targets(dst: str, port: int, ipv6: "Optional[bool]", socktype: int):
     with ``ipv6=`` silently ignored. Resolving here keeps the family a
     property of the destination (and of ``ipv6=``) rather than of the code.
 
-    Returns ``[]`` when nothing resolves, which the callers treat as a
-    failure to reach rather than raising.
+    Returns ``[]`` when nothing resolves, or the lookup outlasts ``timeout``
+    (``None``: no bound), which the callers treat as a failure to reach rather
+    than raising.
     """
     if ipv6 is True:
         family = _socket.AF_INET6
@@ -283,7 +310,9 @@ def _probe_targets(dst: str, port: int, ipv6: "Optional[bool]", socktype: int):
         family = _socket.AF_UNSPEC
 
     try:
-        infos = _socket.getaddrinfo(dst, port, family, socktype)
+        infos = _lookup(
+            lambda: _socket.getaddrinfo(dst, port, family, socktype), timeout
+        )
     except OSError:
         return []
     return [(info[0], info[4]) for info in infos]
@@ -314,7 +343,7 @@ def _tcp_ping(dst, port, timeout, size=None, ipv6=None, source=None, ttl=None):
     """
     import time as _time
 
-    targets = _probe_targets(dst, port, ipv6, _socket.SOCK_STREAM)
+    targets = _probe_targets(dst, port, ipv6, _socket.SOCK_STREAM, timeout)
     if not targets:
         return False, None, "unreachable"
 
@@ -360,7 +389,7 @@ def _udp_ping(dst, port, timeout, size=0, ipv6=None, source=None, ttl=None):
     """
     import time as _time
 
-    targets = _probe_targets(dst, port, ipv6, _socket.SOCK_DGRAM)
+    targets = _probe_targets(dst, port, ipv6, _socket.SOCK_DGRAM, timeout)
     if not targets:
         return False, None, "no reply"
 
@@ -564,7 +593,9 @@ def ping(
     :param tries: attempts before giving up. Values below 1 are treated as 1.
     :param timeout: seconds to wait per attempt. POSIX ``ping`` only accepts a
         whole number of seconds, so sub-second values are rounded **up** to 1 --
-        never down to 0, which some implementations read as "wait forever".
+        never down to 0, which some implementations read as "wait forever". It
+        also bounds the lookup of a hostname ``dst``, which happens once before
+        the first attempt.
     :param ipv6: force the IPv6 or IPv4 family. Applies to **all three**
         ``method`` values: it selects the ``-6``/``-4`` flag for ICMP and the
         address family the ``tcp``/``udp`` probes resolve and connect with.
@@ -617,6 +648,12 @@ def ping(
         as success -- the RST proves something answered -- and so does an ICMP
         port-unreachable for UDP. Use :func:`netimps.tcp_check` when the
         question is "is the *service* up?", where a refusal is a failure.
+
+        **On Windows a refusal takes about two seconds to arrive**: the SYN is
+        retried before the RST is reported (measured 2.02 s against a closed
+        loopback port; macOS answers in 0.9 ms). A ``timeout`` under two seconds
+        therefore reports a refusing Windows host as down, so give ``method="tcp"``
+        a ``timeout`` of at least 3 there.
 
         The UDP probe connects its socket before sending, so the ICMP
         port-unreachable is delivered on POSIX as well as Windows -- an
@@ -677,8 +714,15 @@ def ping(
         raise ValueError("ttl must be 1-255, got %r" % (ttl,))
 
     resolved_source = None
+    expected: "Optional[List[IPAddress]]" = None
     if src is not None:
-        resolved_source = _interface_address(src, want_ipv6=bool(ipv6), strict=False)
+        # The source has to be of the destination's family: a literal decides
+        # for itself, and a name is resolved (once, bounded) to learn it.
+        if ipv6 is None and _try_parse(dst) is None:
+            expected = _expected_addresses(dst, ipv6, timeout)
+        resolved_source = _interface_address(
+            src, want_ipv6=_wants_ipv6(dst, ipv6, expected), strict=False
+        )
         if resolved_source is None:
             # An interface with no usable address cannot be a src.
             return PingResult(False, dst, attempts=0)
@@ -720,7 +764,8 @@ def ping(
     # reply-address expectation and (on BSD) the choice of binary are two
     # questions about one lookup; asking twice costs an extra round trip and
     # lets them disagree about which host is being pinged.
-    expected = _expected_addresses(dst, ipv6)
+    if expected is None:
+        expected = _expected_addresses(dst, ipv6, timeout)
 
     if dont_fragment and not supports_dont_fragment(dst, ipv6, expected):
         raise ValueError(

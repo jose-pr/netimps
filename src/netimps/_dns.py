@@ -34,6 +34,7 @@ Re-exported from :mod:`netimps`.
 
 from __future__ import annotations
 
+import contextvars as _contextvars
 import ipaddress as _ipaddress
 import os as _os
 import socket as _socket
@@ -81,6 +82,30 @@ __all__ = [
 _BACKENDS = ("dnspython", "wire", "system", "nslookup")
 
 _ADDRESS_RDTYPES = ("a", "aaaa")
+
+#: The monotonic time at which the enclosing :func:`resolve` call must be done,
+#: or ``None``. Every blocking step reads it through :func:`_budget`, so one
+#: ``deadline=`` bounds the chain, a record-type pair and a search list alike
+#: without each backend growing a parameter. Context-local, so concurrent
+#: resolutions on other threads or tasks have their own.
+_DEADLINE: "_contextvars.ContextVar[Optional[float]]" = _contextvars.ContextVar(
+    "netimps_resolution_deadline", default=None
+)
+
+
+def _budget(timeout: "Optional[float]") -> "Optional[float]":
+    """``timeout`` capped at the time left before the enclosing deadline.
+
+    :class:`ResolutionTimeoutError` once the deadline has passed. With no
+    deadline set it is ``timeout`` unchanged, ``None`` included.
+    """
+    end = _DEADLINE.get()
+    if end is None:
+        return timeout
+    left = end - _time.monotonic()
+    if left <= 0:
+        raise ResolutionTimeoutError("the resolution deadline has passed")
+    return left if timeout is None else min(timeout, left)
 
 
 def _native_record(record):
@@ -308,6 +333,7 @@ def resolve_dnspython(
             # An explicit domain list replaces the system search list
             # outright, regardless of where the nameservers came from.
             r.search = [_name.from_text(d) for d in search_domains]
+        timeout = _budget(timeout)
         if timeout is not None:
             # `timeout` bounds a single query; `lifetime` bounds the whole
             # resolution including retries against every nameserver. Without
@@ -370,6 +396,7 @@ def _bounded_lookup(lookup: "Callable[[], Any]", timeout: Optional[float]) -> "A
     means "no answer", not a transport failure). Only the deadline itself
     becomes a :class:`ResolutionTimeoutError`.
     """
+    timeout = _budget(timeout)
     if timeout is None:
         return lookup()
 
@@ -822,11 +849,9 @@ def _resolve_nslookup_once(
     try:
         # The runner closes stdin: an nslookup that finds no usable name
         # argument goes interactive and would look up the caller's input.
-        response = _proc.run(
-            cmd[0],
-            cmd[1:],
-            timeout=_NSLOOKUP_LIMIT_SECONDS if timeout is None else timeout,
-        )
+        limit = _budget(_NSLOOKUP_LIMIT_SECONDS if timeout is None else timeout)
+        assert limit is not None
+        response = _proc.run(cmd[0], cmd[1:], timeout=limit)
     except TimeoutError as exc:
         raise ResolutionTimeoutError("nslookup timed out: %s" % (exc,)) from exc
     except OSError as exc:
@@ -1131,6 +1156,7 @@ def resolve(
     strict: bool = False,
     source: Optional[Union[str, List[str]]] = None,
     cache: "Union[bool, float]" = False,
+    deadline: Optional[float] = None,
 ) -> "List[IPv4Address]": ...
 
 
@@ -1148,6 +1174,7 @@ def resolve(
     strict: bool = False,
     source: Optional[Union[str, List[str]]] = None,
     cache: "Union[bool, float]" = False,
+    deadline: Optional[float] = None,
 ) -> "List[IPv6Address]": ...
 
 
@@ -1165,6 +1192,7 @@ def resolve(
     strict: bool = False,
     source: Optional[Union[str, List[str]]] = None,
     cache: "Union[bool, float]" = False,
+    deadline: Optional[float] = None,
 ) -> "List[str]": ...
 
 
@@ -1182,6 +1210,7 @@ def resolve(
     strict: bool = False,
     source: Optional[Union[str, List[str]]] = None,
     cache: "Union[bool, float]" = False,
+    deadline: Optional[float] = None,
 ) -> "List[Any]": ...
 
 
@@ -1198,6 +1227,7 @@ def resolve(
     strict: bool = False,
     source: Optional[Union[str, List[str]]] = None,
     cache: "Union[bool, float]" = False,
+    deadline: Optional[float] = None,
 ) -> "List[Any]":
     """Resolve ``query``, trying each backend in ``backends`` until one gives
     a definitive answer.
@@ -1257,7 +1287,17 @@ def resolve(
         by ``dnspython`` and ``nslookup`` (a single nameserver for the
         latter); excludes ``system`` from the chain, since it cannot honour a
         per-call nameserver.
-    :param timeout: seconds per backend attempt.
+    :param timeout: seconds for one backend attempt. What it bounds differs by
+        backend: for ``dnspython`` and ``wire`` the whole backend call, every
+        nameserver and retry included; for ``system`` and ``nslookup`` each
+        candidate name of a search list. A record-type pair is one attempt per
+        type.
+    :param deadline: seconds for the **whole call**: every backend, record type
+        and search candidate shares it, and each attempt gets ``timeout`` or
+        what is left, whichever is smaller. ``None`` (the default) sets no
+        overall limit. Once it has passed the remaining backends are not
+        started; the outcome is ``[]``, or with ``strict=True`` the
+        :class:`ResolutionTimeoutError`.
     :param port: nameserver port; ``dnspython`` only, and excludes ``system``
         from the chain when it is not 53.
     :param tcp: query over TCP; ``dnspython`` only, and excludes ``system``
@@ -1302,21 +1342,27 @@ def resolve(
     is a caller bug rather than a resolution outcome.
     """
     query = _dst_argument(query)
-    if cache is False:
-        return _resolve_chain(
+    if cache is not False:
+        key = _cache_key(
             query, rdtype, ns, timeout, port, tcp, search, backends, strict, source
-        )[0]
-    key = _cache_key(
-        query, rdtype, ns, timeout, port, tcp, search, backends, strict, source
-    )
-    ttl = RESOLUTION_CACHE_TTL if cache is True else float(cache)
-    hit = _cache_get(key, ttl)
-    if hit is not None:
-        return list(hit)
-    result, definitive = _resolve_chain(
-        query, rdtype, ns, timeout, port, tcp, search, backends, strict, source
-    )
-    if definitive:
+        )
+        ttl = RESOLUTION_CACHE_TTL if cache is True else float(cache)
+        hit = _cache_get(key, ttl)
+        if hit is not None:
+            return list(hit)
+    # An enclosing deadline stays in force; this call's own can only shorten it.
+    outer = _DEADLINE.get()
+    end = None if deadline is None else _time.monotonic() + deadline
+    if end is None or (outer is not None and outer < end):
+        end = outer
+    token = _DEADLINE.set(end)
+    try:
+        result, definitive = _resolve_chain(
+            query, rdtype, ns, timeout, port, tcp, search, backends, strict, source
+        )
+    finally:
+        _DEADLINE.reset(token)
+    if cache is not False and definitive:
         _cache_put(key, result)
     return result
 
@@ -1428,6 +1474,7 @@ def _resolve_chain(
             attempt = _each_rdtype(attempt, both)
         attempted = True
         try:
+            _budget(None)  # a passed deadline ends the chain
             result = attempt()
         except ResolutionError as exc:
             # Could not even ask: try the next backend, keep the error in case
@@ -1517,6 +1564,7 @@ def _query(
     backends: "Optional[Union[str, List[str]]]",
     source: "Optional[Union[str, List[str]]]",
     cache: "Union[bool, float]",
+    deadline: "Optional[float]",
 ) -> "List[Any]":
     """The one place :class:`~netimps.Host` and :class:`~netimps.FQDN` reach
     :func:`resolve`.
@@ -1544,6 +1592,7 @@ def _query(
         strict=check,
         source=source,
         cache=cache,
+        deadline=deadline,
     )
 
 
@@ -1560,6 +1609,7 @@ def lookup_ip(
     backends: "Optional[Union[str, List[str]]]" = None,
     source: "Optional[Union[str, List[str]]]" = None,
     cache: "Union[bool, float]" = False,
+    deadline: "Optional[float]" = None,
 ) -> "Optional[Any]":
     """The first address ``name`` resolves to (internal; ``name`` is not a literal).
 
@@ -1582,6 +1632,7 @@ def lookup_ip(
         backends=backends,
         source=source,
         cache=cache,
+        deadline=deadline,
     )
     for answer in answers:
         if isinstance(answer, (_ipaddress.IPv4Address, _ipaddress.IPv6Address)):
@@ -1603,6 +1654,7 @@ def lookup_fqdn(
     backends: "Optional[Union[str, List[str]]]" = None,
     source: "Optional[Union[str, List[str]]]" = None,
     cache: "Union[bool, float]" = False,
+    deadline: "Optional[float]" = None,
 ) -> "Optional[Any]":
     """The name ``address`` reverses to, as an ``FQDN`` without its root dot, or
     ``None`` (internal; ``address`` is a literal)."""
@@ -1620,6 +1672,7 @@ def lookup_fqdn(
         backends=backends,
         source=source,
         cache=cache,
+        deadline=deadline,
     )
     for answer in answers:
         name = FQDN.try_parse(str(answer))
@@ -1878,7 +1931,7 @@ def resolve_wire(
     names = [name]
     if isinstance(search, (list, tuple)) and not name.endswith(".") and "." not in name:
         names = ["%s.%s" % (name, domain.strip(".")) for domain in search] + [name]
-    deadline = _time.monotonic() + (timeout if timeout is not None else 5.0)
+    deadline = _time.monotonic() + (_budget(5.0 if timeout is None else timeout) or 0.0)
     last: Optional[Exception] = None
     answered = False
     for candidate in names:

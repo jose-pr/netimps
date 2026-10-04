@@ -614,6 +614,7 @@ class Host:
         backends: "Optional[Union[str, List[str]]]" = None,
         source: "Optional[Union[str, List[str]]]" = None,
         cache: "Union[bool, float]" = False,
+        deadline: "Optional[float]" = None,
     ) -> "Optional[FQDN]":
         """This host as an :class:`FQDN`: the name itself, or the name an address
         reverses to.
@@ -654,6 +655,7 @@ class Host:
                 backends=backends,
                 source=source,
                 cache=cache,
+                deadline=deadline,
             )
         return FQDN.parse(text) if check else FQDN.try_parse(text)
 
@@ -670,6 +672,7 @@ class Host:
         backends: "Optional[Union[str, List[str]]]" = None,
         source: "Optional[Union[str, List[str]]]" = None,
         cache: "Union[bool, float]" = False,
+        deadline: "Optional[float]" = None,
         refresh: bool = False,
     ) -> "Optional[IPAddress]":
         """Resolve to an address, or ``None``.
@@ -683,7 +686,10 @@ class Host:
         :param ipv6: ``True`` asks for AAAA, ``False`` for A, ``None`` for either
             in one lookup, in the order the OS chose.
         :param ns: nameserver(s) to ask instead of the OS's.
-        :param timeout: seconds per backend attempt.
+        :param timeout: seconds per backend attempt; what it bounds differs by
+            backend, see :func:`netimps.resolve`.
+        :param deadline: seconds for the whole lookup, every backend and
+            candidate included; ``None`` sets no overall limit.
         :param port: nameserver port.
         :param tcp: query over TCP.
         :param search: expand an unqualified name through a search list: the
@@ -734,6 +740,7 @@ class Host:
             or backends is not None
             or source
             or cache is not False
+            or deadline is not None
         )
         if plain and self._attempted and not refresh:
             return self._resolved
@@ -752,6 +759,7 @@ class Host:
             backends=backends,
             source=source,
             cache=cache,
+            deadline=deadline,
         )
         if plain:
             object.__setattr__(self, "_attempted", True)
@@ -771,6 +779,7 @@ class Host:
         backends: "Optional[Union[str, List[str]]]" = None,
         source: "Optional[Union[str, List[str]]]" = None,
         cache: "Union[bool, float]" = False,
+        deadline: "Optional[float]" = None,
     ) -> "Tuple[Optional[FQDN], Optional[IPAddress]]":
         """The pair ``(fqdn, ip)``; whichever half was not found is ``None``.
 
@@ -797,6 +806,7 @@ class Host:
                 backends=backends,
                 source=source,
                 cache=cache,
+                deadline=deadline,
             ),
             self.ip(
                 check=check,
@@ -809,6 +819,7 @@ class Host:
                 backends=backends,
                 source=source,
                 cache=cache,
+                deadline=deadline,
             ),
         )
 

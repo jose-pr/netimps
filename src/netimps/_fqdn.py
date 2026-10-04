@@ -497,6 +497,7 @@ class FQDN:
         backends: "Optional[Union[str, List[str]]]" = None,
         source: "Optional[Union[str, List[str]]]" = None,
         cache: "Union[bool, float]" = False,
+        deadline: "Optional[float]" = None,
     ) -> "Tuple[FQDN, Optional[_IPAddress]]":
         """The pair ``(self, ip)``: this name, and the address it resolves to.
 
@@ -525,6 +526,7 @@ class FQDN:
                 backends=backends,
                 source=source,
                 cache=cache,
+                deadline=deadline,
             ),
         )
 
@@ -547,6 +549,7 @@ class FQDN:
         backends: "Optional[Union[str, List[str]]]" = None,
         source: "Optional[Union[str, List[str]]]" = None,
         cache: "Union[bool, float]" = False,
+        deadline: "Optional[float]" = None,
     ) -> "Optional[_IPAddress]":
         """The first address this name resolves to, or ``None``.
 
@@ -568,6 +571,7 @@ class FQDN:
             backends=backends,
             source=source,
             cache=cache,
+            deadline=deadline,
         )
 
     # -- presentation and classification -----------------------------------

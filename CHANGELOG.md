@@ -234,6 +234,13 @@ probe says so in its prefix.
   `ResolutionError`), reads at most 65,536 bytes of a reply, and names the URL
   in messages without its credentials, query string or fragment.
 
+- **`deadline=` on `resolve()`, `Host.ip/fqdn/resolve` and `FQDN.ip/resolve`.**
+  `timeout` is one attempt and means different things per backend (the whole
+  call for dnspython and the wire backend, each candidate name for the OS
+  resolver and nslookup), so a backend chain, a record-type pair and a search
+  list multiplied it. `deadline` is the total for the call, shared by all of
+  them; the header states what each `timeout` bounds.
+
 ### Removed
 
 - **`get_ip(address, ipv6=None)`.** `Host(x).ip()` is the same
@@ -242,6 +249,13 @@ probe says so in its prefix.
   `addr` command use it; `Host(x).resolve()` gives `(fqdn, ip)`.
 
 ### Fixed
+
+- **`ping` bounds its own name lookup by `timeout`** (2.5 s for `timeout=0.5`
+  with a 2 s lookup before), and takes the family of `src` from the
+  destination: `ping("::1", src=<loopback Interface>)` pinned the interface's
+  IPv4 address on an IPv6 probe and was falsy on Windows, macOS and FreeBSD.
+  The header and docstring now say that a TCP refusal takes about two seconds
+  to arrive on Windows, so `ping(method="tcp")` needs a `timeout` of 3 there.
 
 - **A DNS reply is bounded.** A short MX or SRV record is a `DNSDecodeError`
   (it escaped as `struct.error`); a name follows at most 32 compression
