@@ -42,6 +42,10 @@ where the keyword-only options begin. Constructors follow the same rule
 and `CMSG_SPACE` keep the standard library's shapes, and the `Datagram` and
 `SocketOption` named tuples are positional by nature.
 
+**Durations are seconds.** `timeout` bounds one attempt and `deadline` a whole
+operation made of several (`wait_for_port`); `PingResult.rtt` is a duration in
+seconds, never milliseconds.
+
 **Every `dst`-typed parameter accepts `HostLike`** — a hostname string, an
 address string, an existing `IPv4Address`/`IPv6Address`, a `Host`, an `FQDN`,
 or an `IPv4Interface`/`IPv6Interface` (its `.ip` is used, dropping the `/prefix`,
@@ -647,8 +651,8 @@ names a DoH endpoint wants that answer alone.
 **`ping(dst, *, tries=1, timeout=1.0, ipv6=None, src=None, size=None, ttl=None, dont_fragment=False, method="icmp", port=None) -> PingResult`**
 
 `PingResult` is **truthy on success** and compares equal to `bool`, so
-`if ping(host):` and `== True` keep working, while carrying `.ok`, `.host`,
-`.rtt_ms`, `.ttl`, `.src`, `.attempts`.
+`if ping(host):` and `== True` keep working, while carrying `.ok`, `.dst`,
+`.rtt` (seconds), `.ttl`, `.src`, `.attempts`.
 
 | Argument | Notes |
 | --- | --- |
@@ -663,7 +667,7 @@ names a DoH endpoint wants that answer alone.
 **All three methods ask "is the *host* up?"** — so a TCP refusal counts as
 success (the RST proves something answered), as does an ICMP port-unreachable
 for UDP. Use `tcp_check` for "is the *service* up?", where a refusal is a
-failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
+failure. `tcp` and `udp` also report `rtt`; only ICMP reports `ttl`.
 
 - **The flags are three grammars, not two.** Of the six this emits, *five*
   differ on BSD/macOS: `-W` is milliseconds there rather than seconds, `-t` is
@@ -693,9 +697,10 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
   port-unreachable is seen on POSIX and not only on Windows — an unconnected
   UDP socket is never delivered an asynchronous ICMP error on Linux/BSD.
   `ECONNREFUSED` and `ECONNRESET` both count as "the host answered".
-- **`rtt_ms` is `0.0` for a sub-millisecond reply.** Windows prints `time<1ms`,
-  an upper bound rather than a measurement — reading the `1` would over-report
-  by up to 100%. `0.0` is falsy, so test `rtt_ms is None` for "not reported".
+- **`rtt` is in seconds, and `0.0` for a sub-millisecond reply.** Windows
+  prints `time<1ms`, an upper bound rather than a measurement — reading the `1`
+  would over-report by up to 100%. `0.0` is falsy, so test `rtt is None` for
+  "not reported".
 - **Reply lines are matched by address token, and the punctuation differs.**
   Windows writes `Reply from 127.0.0.1:`, Linux `64 bytes from 127.0.0.1:`,
   BSD `ping6` `16 bytes from ::1,` — a colon-only needle never matched the
@@ -709,7 +714,7 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
   cannot be honoured, and a `dst` beginning with `-` — the binary reads that as
   an option, and Windows `ping -?` prints usage and **exits 0**, which used to
   be reported as a successful ping of a host never contacted.
-- `PingResult` is **hashable**, over `(ok, host, rtt_ms, ttl)`. One asymmetry
+- `PingResult` is **hashable**, over `(ok, dst, rtt, ttl)`. One asymmetry
   to know about: it compares equal to a `bool` but does not hash like one, so
   `result == True` is `True` while `{True: x}[result]` raises `KeyError`.
 - **ICMP echo is not "is the host up"** — most cloud firewalls drop it. Prefer
@@ -922,13 +927,13 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
   addresses could take N × `timeout`. `timeout=0` is **floored** to 0.05s
   rather than taken literally: `settimeout(0)` means non-blocking, which
   reported every open port as closed. `timeout=None` blocks.
-- **`wait_for_port(dst, port, timeout=30.0, interval=0.1, connect_timeout=None)`**
-  — poll until it answers. Backs off to 1s. The overall deadline is honoured
-  even when individual connects block — it cannot overrun by more than one
-  attempt, which became true only once `tcp_check` started bounding *itself*
-  overall rather than per resolved address. `connect_timeout` defaults to
-  `interval` raised to at least 1s. An out-of-range `port` raises from
-  `tcp_check`.
+- **`wait_for_port(dst, port, *, deadline=30.0, interval=0.1, timeout=None)`**
+  — poll until it answers. Backs off to 1s. `deadline` bounds the whole wait
+  and is honoured even when individual connects block — it cannot overrun by
+  more than one attempt, because `tcp_check` bounds *itself* overall rather
+  than per resolved address. `timeout` is one attempt's connect timeout and
+  defaults to `interval` raised to at least 1s. An out-of-range `port` raises
+  from `tcp_check`.
 
 ## Routing, hops and MTU
 

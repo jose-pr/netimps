@@ -290,7 +290,7 @@ except Exception as exc:  # noqa: BLE001
 if netimps is not None:
     print("\n-- ping()")
     call("ping('127.0.0.1')", lambda: netimps.ping("127.0.0.1"))
-    call("ping('127.0.0.1').rtt_ms", lambda: netimps.ping("127.0.0.1").rtt_ms)
+    call("ping('127.0.0.1').rtt", lambda: netimps.ping("127.0.0.1").rtt)
     call("ping('::1')", lambda: netimps.ping("::1"))
     call("ping('::1', ipv6=True)", lambda: netimps.ping("::1", ipv6=True))
     call("ping('localhost')", lambda: netimps.ping("localhost"))

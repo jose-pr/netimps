@@ -1233,7 +1233,7 @@ def test_ping_unusable_src_is_falsy_not_a_crash(monkeypatch):
     monkeypatch.setattr(netimps._ping, "_interface_address", lambda *a, **k: None)
     result = ping("8.8.8.8", src="nonexistent-adapter")
     assert bool(result) is False
-    assert result.host == "8.8.8.8"
+    assert result.dst == "8.8.8.8"
 
 
 def test_ping_success(monkeypatch):
@@ -1258,7 +1258,7 @@ def test_ping_reports_rtt_and_ttl(monkeypatch):
     monkeypatch.setattr(netimps._ping, "_run", fake_run)
     result = ping("127.0.0.1")
     assert result.ok is True
-    assert result.rtt_ms == 1.0
+    assert result.rtt == pytest.approx(0.001), "the binary prints 1ms; rtt is seconds"
     assert result.ttl == 128
     assert result.attempts == 1
 
@@ -1281,14 +1281,14 @@ def test_ping_zero_exit_is_not_enough_without_a_matching_reply(monkeypatch):
 
 def test_ping_result_is_boolean_compatible():
     """Existing `if ping(...)` and `== True` call sites must keep working."""
-    ok = netimps.PingResult(True, "h", rtt_ms=1.0, ttl=64)
+    ok = netimps.PingResult(True, "h", rtt=0.001, ttl=64)
     bad = netimps.PingResult(False, "h")
     assert ok and not bad
     assert ok == True  # noqa: E712 - the compatibility being asserted
     assert bad == False  # noqa: E712
     assert bool(ok) is True and bool(bad) is False
-    # rtt_ms of 0.0 (sub-millisecond) is falsy but present.
-    assert netimps.PingResult(True, "h", rtt_ms=0.0).rtt_ms is not None
+    # rtt of 0.0 (sub-millisecond) is falsy but present.
+    assert netimps.PingResult(True, "h", rtt=0.0).rtt is not None
 
 
 def test_ping_failure_exhausts_tries(monkeypatch):
@@ -1526,7 +1526,7 @@ def test_ping_ipv6_hostname_verifies_against_the_v6_reply(monkeypatch):
     result = ping("example.com", ipv6=True)
     assert bool(result) is True
     assert result.src == IPv6Address("2606:2800::1")
-    assert result.rtt_ms == 8.1
+    assert result.rtt == pytest.approx(0.0081)
     assert result.ttl == 54
 
 
@@ -1856,7 +1856,7 @@ def test_reply_needle_matches_bsd_comma_and_hlim():
     """The captured BSD ping6 reply line, verbatim from a macOS runner."""
     line = "16 bytes from ::1, icmp_seq=0 hlim=64 time=0.520 ms"
     rtt, ttl, src = netimps._ping._parse_ping_output(line, [netimps.parse("::1")])
-    assert (rtt, ttl, str(src)) == (0.520, 64, "::1")
+    assert (rtt, ttl, str(src)) == (pytest.approx(0.00052), 64, "::1")
 
 
 def test_reply_needle_does_not_match_an_address_inside_a_longer_one():

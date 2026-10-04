@@ -244,11 +244,13 @@ class Ping(_Base):
             size=self.size,
             src=self.source,
         )
+        # The result carries seconds; the command's output is in milliseconds.
+        rtt_ms = None if result.rtt is None else result.rtt * 1000.0
         _emit(
             {
                 "ok": result.ok,
-                "host": result.host,
-                "rtt_ms": result.rtt_ms,
+                "host": result.dst,
+                "rtt_ms": rtt_ms,
                 "ttl": result.ttl,
                 "attempts": result.attempts,
                 "method": self.method,
@@ -259,7 +261,7 @@ class Ping(_Base):
                 % (
                     self.dst,
                     self.method,
-                    result.rtt_ms if result.rtt_ms is not None else float("nan"),
+                    rtt_ms if rtt_ms is not None else float("nan"),
                     "" if result.ttl is None else ", ttl %d" % result.ttl,
                 )
                 if result.ok
@@ -349,7 +351,7 @@ class Check(_Base):
             return 2
 
         if self.wait is not None:
-            ok = wait_for_port(self.dst, port, timeout=self.wait)
+            ok = wait_for_port(self.dst, port, deadline=self.wait)
         else:
             ok = tcp_check(self.dst, port, timeout=self.timeout)
 

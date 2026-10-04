@@ -36,8 +36,8 @@ class PingResult:
 
     Attributes:
         ok: whether the destination replied.
-        host: the destination as given.
-        rtt_ms: round-trip time in milliseconds, or ``None`` if not reported.
+        dst: the destination as given.
+        rtt: round-trip time in seconds, or ``None`` if not reported.
             Sub-millisecond replies (``time<1ms``) are recorded as ``0.0``,
             which is falsy -- test ``is None`` rather than truthiness.
         ttl: TTL/hop-limit of the reply, or ``None``. Counts *down* from the
@@ -46,11 +46,11 @@ class PingResult:
         attempts: how many probes were sent before this outcome.
     """
 
-    __slots__ = ("ok", "host", "rtt_ms", "ttl", "src", "attempts")
+    __slots__ = ("ok", "dst", "rtt", "ttl", "src", "attempts")
 
     ok: bool
-    host: "HostLike"
-    rtt_ms: Optional[float]
+    dst: "HostLike"
+    rtt: Optional[float]
     ttl: Optional[int]
     src: "Optional[IPAddress]"
     attempts: int
@@ -58,16 +58,16 @@ class PingResult:
     def __init__(
         self,
         ok: bool,
-        host: "HostLike",
+        dst: "HostLike",
         *,
-        rtt_ms: Optional[float] = None,
+        rtt: Optional[float] = None,
         ttl: Optional[int] = None,
         src: "Optional[IPAddress]" = None,
         attempts: int = 1,
     ) -> None:
         object.__setattr__(self, "ok", ok)
-        object.__setattr__(self, "host", host)
-        object.__setattr__(self, "rtt_ms", rtt_ms)
+        object.__setattr__(self, "dst", dst)
+        object.__setattr__(self, "rtt", rtt)
         object.__setattr__(self, "ttl", ttl)
         object.__setattr__(self, "src", src)
         object.__setattr__(self, "attempts", attempts)
@@ -82,8 +82,8 @@ class PingResult:
             _partial(
                 PingResult,
                 self.ok,
-                self.host,
-                rtt_ms=self.rtt_ms,
+                self.dst,
+                rtt=self.rtt,
                 ttl=self.ttl,
                 src=self.src,
                 attempts=self.attempts,
@@ -101,10 +101,10 @@ class PingResult:
         return bool(self.ok)
 
     def __repr__(self) -> str:
-        return "PingResult(ok=%r, host=%r, rtt_ms=%r, ttl=%r)" % (
+        return "PingResult(ok=%r, dst=%r, rtt=%r, ttl=%r)" % (
             self.ok,
-            self.host,
-            self.rtt_ms,
+            self.dst,
+            self.rtt,
             self.ttl,
         )
 
@@ -116,14 +116,14 @@ class PingResult:
         if isinstance(other, PingResult):
             return (
                 self.ok == other.ok
-                and self.host == other.host
-                and self.rtt_ms == other.rtt_ms
+                and self.dst == other.dst
+                and self.rtt == other.rtt
                 and self.ttl == other.ttl
             )
         return NotImplemented
 
     def __hash__(self) -> int:
-        return hash((self.ok, self.host, self.rtt_ms, self.ttl))
+        return hash((self.ok, self.dst, self.rtt, self.ttl))
 
 
 #: Which ``ping`` grammar this host speaks. **Three values, not two.**
@@ -221,7 +221,7 @@ def _expected_addresses(dst: str, ipv6: "Optional[bool]") -> "List[IPAddress]":
 def _parse_ping_output(
     text: str, expected: "List[IPAddress]"
 ) -> "Tuple[Optional[float], Optional[int], Optional[IPAddress]]":
-    """Pull (rtt_ms, ttl, src) out of ping's stdout.
+    """Pull (rtt in seconds, ttl, src) out of ping's stdout.
 
     Reads only numeric tokens that are stable across platforms and locales;
     the surrounding prose is never matched.
@@ -249,9 +249,9 @@ def _parse_ping_output(
         if found_rtt is not None and rtt is None:
             operator, value = found_rtt.group(1), found_rtt.group(2)
             try:
-                # "time<1ms" is an upper bound, not a measurement: report 0.0,
-                # which is what the documented contract has always promised.
-                rtt = 0.0 if operator == "<" else float(value)
+                # "time<1ms" is an upper bound, not a measurement: report 0.0.
+                # The binary prints milliseconds; this is the one conversion.
+                rtt = 0.0 if operator == "<" else float(value) / 1000.0
             except ValueError:
                 pass
         if found_ttl is not None and ttl is None:
@@ -309,7 +309,7 @@ def _configure_probe(sock, family, source, ttl):
 
 
 def _tcp_ping(dst, port, timeout, size=None, ipv6=None, source=None, ttl=None):
-    """Time a TCP handshake. Returns (ok, rtt_ms, error).
+    """Time a TCP handshake. Returns (ok, rtt in seconds, error).
 
     A refused connection still counts as reachable: the RST proves the host
     answered. Only a timeout or an unroutable address is a failure.
@@ -333,10 +333,10 @@ def _tcp_ping(dst, port, timeout, size=None, ipv6=None, source=None, ttl=None):
             sock.settimeout(timeout)
             _configure_probe(sock, family, source, ttl)
             sock.connect(sockaddr)
-            return True, (_time.perf_counter() - start) * 1000.0, None
+            return True, _time.perf_counter() - start, None
         except ConnectionRefusedError:
             # The host is alive and said "no" -- that is a measurement.
-            return True, (_time.perf_counter() - start) * 1000.0, "refused"
+            return True, _time.perf_counter() - start, "refused"
         except (_socket.timeout, OSError):
             continue  # try the next resolved address before giving up
         finally:
@@ -378,10 +378,10 @@ def _udp_ping(dst, port, timeout, size=0, ipv6=None, source=None, ttl=None):
             sock.connect(sockaddr)
             sock.send(bytes(max(0, size)))
             sock.recv(65535)
-            return True, (_time.perf_counter() - start) * 1000.0, None
+            return True, _time.perf_counter() - start, None
         except (ConnectionResetError, ConnectionRefusedError):
             # ICMP port unreachable -- the host is there.
-            return True, (_time.perf_counter() - start) * 1000.0, "port-unreachable"
+            return True, _time.perf_counter() - start, "port-unreachable"
         except (_socket.timeout, OSError):
             continue
         finally:
@@ -545,7 +545,7 @@ def ping(
         if ping("8.8.8.8"):                  # still reads as a boolean
             ...
         result = ping("8.8.8.8")
-        result.rtt_ms                        # 5.0
+        result.rtt                           # 0.005 (seconds)
         result.ttl                           # 119
 
     Shells out to the platform ``ping`` binary, translating ``timeout`` into the
@@ -708,7 +708,7 @@ def ping(
                 return PingResult(
                     True,
                     dst,
-                    rtt_ms=rtt,
+                    rtt=rtt,
                     src=probe_src,
                     attempts=attempt,
                 )
@@ -780,7 +780,7 @@ def ping(
         return PingResult(
             True,
             dst,
-            rtt_ms=rtt,
+            rtt=rtt,
             ttl=reply_ttl,
             src=reply_src,
             attempts=attempt,

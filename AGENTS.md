@@ -18,7 +18,7 @@ parse("10.0.0.5/24", IPNetwork)            # IPv4Network('10.0.0.0/24')
 netimps.get_source_ip("8.8.8.8")           # the address that actually reaches it
 netimps.tcp_check("example.com", 443)      # True
 netimps.resolve("example.com")             # [IPv4Address(...)]  ([] on failure)
-netimps.ping("8.8.8.8").rtt_ms             # 9.0
+netimps.ping("8.8.8.8").rtt                # 0.009  (seconds)
 ```
 
 - **Interface discovery, no dependencies** — `get_interfaces()` gives adapter

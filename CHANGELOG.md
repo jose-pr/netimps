@@ -83,6 +83,10 @@ probe says so in its prefix.
 | `Host.fqdn` (property) | `Host.fqdn()` (method; reverse lookup for an address) |
 | `Host.ip(refresh)` | `Host.ip(*, check, ipv6, refresh, <resolver options>)` |
 | `Fqdn.resolve() -> records` | `FQDN.resolve() -> (fqdn, ip)`; records come from `netimps.resolve(name, rdtype)` |
+| `wait_for_port(timeout=)` (whole wait) | `wait_for_port(deadline=)` |
+| `wait_for_port(connect_timeout=)` (one attempt) | `wait_for_port(timeout=)` |
+| `PingResult.rtt_ms` (milliseconds) | `PingResult.rtt` (seconds) |
+| `PingResult.host`, `PingResult(host=)` | `PingResult.dst`, `PingResult(dst=)` |
 
 ### Changed
 
@@ -116,6 +120,11 @@ probe says so in its prefix.
   shapes. `parse`, `try_parse` and `is_valid` name `strict` (the network
   builders' option) instead of an untyped `**kwargs`; `try_parse(value, type,
   default)` is now `try_parse(value, type, default=default)`.
+- **`wait_for_port` and `PingResult` say which time they mean.** `timeout`
+  is one attempt and `deadline` the whole operation, as everywhere else in the
+  package; `PingResult.rtt` is a duration in seconds, where `rtt_ms` was
+  milliseconds. A sub-millisecond reply is still `0.0`. The command line's
+  `ping --json` keeps its `host` and `rtt_ms` keys, converting for display.
 - **`MACAddress.try_parse` and `FQDN.try_parse` take text only.** They answer
   `None` (or the new `default=`) for text that does not parse, and raise
   `TypeError` for anything that is not a `str` -- `MACAddress.try_parse(None)`,

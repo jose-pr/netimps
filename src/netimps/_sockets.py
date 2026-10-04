@@ -922,16 +922,16 @@ def wait_for_port(
     dst: "HostLike",
     port: int,
     *,
-    timeout: float = 30.0,
+    deadline: float = 30.0,
     interval: float = 0.1,
-    connect_timeout: Optional[float] = None,
+    timeout: Optional[float] = None,
 ) -> bool:
-    """Poll until ``dst``:``port`` accepts a connection, or ``timeout`` elapses.
+    """Poll until ``dst``:``port`` accepts a connection, or ``deadline`` elapses.
 
     The "wait for the service to come up" loop every deploy and container
     script contains::
 
-        if not wait_for_port("localhost", 5432, timeout=60):
+        if not wait_for_port("localhost", 5432, deadline=60):
             raise RuntimeError("database never started")
 
     ``dst`` accepts the same forms as :func:`tcp_check` (address objects,
@@ -939,11 +939,12 @@ def wait_for_port(
 
     :param interval: delay between attempts. Backs off up to 1s so a long wait
         does not spin.
-    :param connect_timeout: per-attempt connect timeout; defaults to
-        ``interval`` bounded to at least 1s.
+    :param deadline: seconds the whole wait may take.
+    :param timeout: per-attempt connect timeout; defaults to ``interval``
+        bounded to at least 1s.
 
-    Returns ``True`` as soon as the port answers, ``False`` on timeout. The
-    deadline is honoured overall, so this cannot overrun by more than one
+    Returns ``True`` as soon as the port answers, ``False`` once ``deadline``
+    has passed. The deadline is honoured overall, so this cannot overrun by more than one
     attempt regardless of how long individual connects block -- which became
     true only when :func:`tcp_check` started bounding *itself* overall rather
     than per resolved address. A ``dst`` resolving to N addresses used to
@@ -952,17 +953,17 @@ def wait_for_port(
     An out-of-range ``port`` raises :class:`ValueError` (from
     :func:`tcp_check`) rather than being masked to 16 bits.
     """
-    deadline = _time.monotonic() + timeout
-    per_try = connect_timeout if connect_timeout is not None else max(interval, 1.0)
+    expires = _time.monotonic() + deadline
+    per_try = timeout if timeout is not None else max(interval, 1.0)
     delay = interval
 
     while True:
-        remaining = deadline - _time.monotonic()
+        remaining = expires - _time.monotonic()
         if remaining <= 0:
             return False
         if tcp_check(dst, port, timeout=min(per_try, remaining)):
             return True
-        remaining = deadline - _time.monotonic()
+        remaining = expires - _time.monotonic()
         if remaining <= 0:
             return False
         _time.sleep(min(delay, remaining))

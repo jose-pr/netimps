@@ -122,7 +122,7 @@ def test_tcp_check_never_raises(host, port, no_such_host):
 
 
 def test_wait_for_port_returns_immediately_when_open(listening_port):
-    assert wait_for_port("127.0.0.1", listening_port, timeout=5.0) is True
+    assert wait_for_port("127.0.0.1", listening_port, deadline=5.0) is True
 
 
 def test_wait_for_port_times_out():
@@ -130,13 +130,26 @@ def test_wait_for_port_times_out():
 
     port = get_free_port()
     start = time.monotonic()
-    assert wait_for_port("127.0.0.1", port, timeout=0.6, interval=0.05) is False
+    assert wait_for_port("127.0.0.1", port, deadline=0.6, interval=0.05) is False
     # Must honour the deadline rather than running to some internal default.
     assert time.monotonic() - start < 4.0
 
 
+def test_wait_for_port_ends_at_deadline_not_at_timeout():
+    """``deadline`` bounds the whole wait and ``timeout`` one attempt; the two
+    were once the other way round, so a caller's ``timeout=30`` meant a wait of
+    30 seconds on a closed port. With a long ``timeout`` and a short
+    ``deadline`` the call has to return at the deadline."""
+    import time
+
+    port = get_free_port()
+    start = time.monotonic()
+    assert wait_for_port("127.0.0.1", port, deadline=0.4, timeout=30.0) is False
+    assert 0.3 < time.monotonic() - start < 3.0
+
+
 def test_wait_for_port_respects_deadline_with_slow_connects(monkeypatch):
-    """A blocking connect must not let the call overrun its timeout.
+    """A blocking connect must not let the call overrun its deadline.
 
     The previous version of this test capped its own stub at
     ``min(timeout, 0.2)``, so no connect ever blocked past the deadline and
@@ -154,7 +167,7 @@ def test_wait_for_port_respects_deadline_with_slow_connects(monkeypatch):
 
     monkeypatch.setattr(_sockets, "tcp_check", slow)
     start = time.monotonic()
-    assert wait_for_port("127.0.0.1", 9, timeout=0.5, interval=0.05) is False
+    assert wait_for_port("127.0.0.1", 9, deadline=0.5, interval=0.05) is False
     elapsed = time.monotonic() - start
     # One attempt of slack, not one per address the name resolves to.
     assert elapsed < 0.5 + max(handed) + 0.5
@@ -179,7 +192,8 @@ def test_tcp_check_rejects_network():
 
 def test_wait_for_port_accepts_interface_object(listening_port):
     assert (
-        wait_for_port(IPv4Interface("127.0.0.1/8"), listening_port, timeout=5.0) is True
+        wait_for_port(IPv4Interface("127.0.0.1/8"), listening_port, deadline=5.0)
+        is True
     )
 
 
@@ -722,7 +736,7 @@ def test_ping_tcp_measures_a_real_handshake():
         port = server.getsockname()[1]
         result = netimps.ping("127.0.0.1", method="tcp", port=port, timeout=2.0)
         assert result.ok
-        assert result.rtt_ms is not None and result.rtt_ms >= 0
+        assert result.rtt is not None and result.rtt >= 0
     finally:
         server.close()
 
@@ -778,7 +792,7 @@ def test_ping_tcp_reaches_an_ipv6_destination(v6_loopback):
     """
     result = netimps.ping("::1", method="tcp", port=v6_loopback, timeout=2.0)
     assert result.ok
-    assert result.rtt_ms is not None
+    assert result.rtt is not None
 
 
 def test_ping_tcp_probe_family_follows_the_destination(monkeypatch, v6_loopback):
@@ -897,7 +911,7 @@ def test_ping_udp_closed_loopback_port_proves_liveness(host):
     result = netimps.ping(host, method="udp", port=port, timeout=2.0)
     if not result:  # pragma: no cover - env dependent
         pytest.skip("this host does not deliver ICMP port-unreachable to us")
-    assert result.rtt_ms is not None
+    assert result.rtt is not None
 
 
 def test_discover_mtu_forwards_ping_kwargs(monkeypatch):
@@ -1104,7 +1118,7 @@ def test_tcp_check_resolves_once_and_shares_one_deadline(monkeypatch):
 
 def test_wait_for_port_rejects_an_out_of_range_port():
     with pytest.raises(ValueError, match="out of range"):
-        wait_for_port("127.0.0.1", 70000, timeout=0.1)
+        wait_for_port("127.0.0.1", 70000, deadline=0.1)
 
 
 # --------------------------------------------------------------------------- #

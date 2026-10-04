@@ -71,7 +71,7 @@ def main() -> int:
     result = netimps.ping("127.0.0.1")
     print("  ping 127.0.0.1                  %s" % ("ok" if result else "no reply"))
     if result:
-        print("      rtt=%s ms  ttl=%s" % (result.rtt_ms, result.ttl))
+        print("      rtt=%.1f ms  ttl=%s" % (result.rtt * 1000, result.ttl))
     return 0
 
 

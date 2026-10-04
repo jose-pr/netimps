@@ -58,7 +58,11 @@ needs_ipv6 = pytest.mark.skipif(
 def test_ping_ipv4_loopback_answers():
     result = netimps.ping("127.0.0.1")
     assert result, "the platform ping binary did not confirm 127.0.0.1"
-    assert result.rtt_ms is not None, "a loopback reply must carry an RTT"
+    assert result.rtt is not None, "a loopback reply must carry an RTT"
+    # Seconds: a loopback round trip is well under one. Windows prints
+    # ``time<1ms`` for it, which is recorded as 0.0, so the lower bound is
+    # inclusive.
+    assert 0 <= result.rtt < 1
 
 
 def test_ping_ipv4_loopback_with_explicit_family():

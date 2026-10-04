@@ -34,7 +34,7 @@ SAMPLES = {
     "Host": lambda: Host("db.internal"),
     "MACAddress": lambda: MACAddress("aa:bb:cc:dd:ee:ff"),
     "PingResult": lambda: PingResult(
-        True, "10.0.0.5", rtt_ms=1.5, ttl=64, src=ipaddress.ip_address("10.0.0.5")
+        True, "10.0.0.5", rtt=0.0015, ttl=64, src=ipaddress.ip_address("10.0.0.5")
     ),
     "Route": lambda: Route(
         "10.0.0.5",

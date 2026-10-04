@@ -116,7 +116,7 @@ netimps.is_local_address("127.0.0.1")    # True without interface discovery
 
 # Honest reachability, and waiting for a service
 netimps.tcp_check("example.com", 443)              # True
-netimps.wait_for_port("localhost", 5432, timeout=60)
+netimps.wait_for_port("localhost", 5432, deadline=60)
 
 # CIDR set maths
 netimps.subtract(["10.0.0.0/24"], ["10.0.0.64/26"])
@@ -137,7 +137,7 @@ netimps.resolve("example.com", "txt")         # ['v=spf1 -all']  -- unquoted
 
 # ping carries the details, and can use TCP or UDP where ICMP is blocked
 result = netimps.ping("8.8.8.8")
-result.ok, result.rtt_ms, result.ttl     # (True, 9.0, 119)
+result.ok, result.rtt, result.ttl        # (True, 0.009, 119)  rtt in seconds
 netimps.ping("8.8.8.8", method="tcp", port=53)   # times the handshake
 
 # Path MTU, measured rather than guessed
