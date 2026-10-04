@@ -3,9 +3,33 @@
 from __future__ import annotations
 
 import ipaddress as _ipaddress
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
 from .._exceptions import NoAnswerError
 from ._chain import resolve
+
+#: The resolver options ``Host`` and ``FQDN`` methods take and pass on, in the
+#: order their signatures list them.
+_RESOLVER_KEYWORDS = (
+    "check",
+    "ns",
+    "timeout",
+    "port",
+    "tcp",
+    "search",
+    "backends",
+    "source",
+    "cache",
+    "deadline",
+)
+
+
+def resolver_keywords(
+    namespace: "Mapping[str, Any]", *, ipv6: bool = False
+) -> "Dict[str, Any]":
+    """The resolver options out of ``namespace``, a method's ``locals()``,
+    to pass on as keywords; ``ipv6`` adds the record-family choice."""
+    names = _RESOLVER_KEYWORDS + (("ipv6",) if ipv6 else ())
+    return {name: namespace[name] for name in names}
 
 
 def _query(

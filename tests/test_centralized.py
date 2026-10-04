@@ -882,7 +882,7 @@ def test_host_literal_needs_no_dns(monkeypatch):
     def explode(_name):
         raise AssertionError("a literal must not trigger DNS")
 
-    monkeypatch.setattr(netimps._ip._socket, "gethostbyname", explode)
+    monkeypatch.setattr(netimps._ip._host._socket, "gethostbyname", explode)
     host = Host("10.0.0.5")
     assert host.is_address
     assert host.ip() == netimps.parse("10.0.0.5")
@@ -897,7 +897,7 @@ def test_host_caches_resolution(monkeypatch):
 
     # getaddrinfo, not gethostbyname: the latter is IPv4-only and no longer
     # called, so stubbing it would have quietly let this reach the real network.
-    monkeypatch.setattr(netimps._ip._socket, "getaddrinfo", counting)
+    monkeypatch.setattr(netimps._ip._host._socket, "getaddrinfo", counting)
     host = Host("example.com")
     assert host.ip() == netimps.parse("93.184.216.34")
     assert host.ip() == netimps.parse("93.184.216.34")
@@ -914,7 +914,7 @@ def test_host_caches_failure_too(monkeypatch):
         calls.append(name)
         raise socket.gaierror(socket.EAI_NONAME, "no such host")
 
-    monkeypatch.setattr(netimps._ip._socket, "getaddrinfo", failing)
+    monkeypatch.setattr(netimps._ip._host._socket, "getaddrinfo", failing)
     host = Host("nope.invalid")
     assert host.ip() is None
     assert host.ip() is None

@@ -1274,7 +1274,7 @@ def test_host_ip_parses_literals_without_dns(monkeypatch):
     def explode(*args, **kwargs):
         raise AssertionError("a literal must not trigger DNS")
 
-    monkeypatch.setattr(netimps._ip._socket, "getaddrinfo", explode)
+    monkeypatch.setattr(netimps._ip._host._socket, "getaddrinfo", explode)
     assert netimps.Host("10.0.0.5").ip() == IPv4Address("10.0.0.5")
 
 
@@ -1297,7 +1297,7 @@ def _stub_name_resolution(monkeypatch, module, address, family=socket.AF_INET):
 
 
 def test_host_ip_falls_back_to_dns(monkeypatch):
-    _stub_name_resolution(monkeypatch, netimps._ip, "93.184.216.34")
+    _stub_name_resolution(monkeypatch, netimps._ip._host, "93.184.216.34")
     assert netimps.Host("example.com").ip() == IPv4Address("93.184.216.34")
 
 
@@ -1308,7 +1308,7 @@ def test_host_ip_resolves_a_v6_only_name(monkeypatch):
     against the repo's own recorded invariant.
     """
     _stub_name_resolution(
-        monkeypatch, netimps._ip, "2606:4700::1111", family=socket.AF_INET6
+        monkeypatch, netimps._ip._host, "2606:4700::1111", family=socket.AF_INET6
     )
     assert netimps.Host("v6only.example").ip() == netimps.parse("2606:4700::1111")
 
@@ -1317,7 +1317,7 @@ def test_host_ip_returns_none_on_failure(monkeypatch):
     def fail(*args, **kwargs):
         raise socket.gaierror(socket.EAI_NONAME, "no such host")
 
-    monkeypatch.setattr(netimps._ip._socket, "getaddrinfo", fail)
+    monkeypatch.setattr(netimps._ip._host._socket, "getaddrinfo", fail)
     assert netimps.Host("nope.invalid").ip() is None
 
 

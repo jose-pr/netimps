@@ -38,7 +38,7 @@ from ._cache import RESOLUTION_CACHE_TTL, clear_resolution_cache
 from ._chain import resolve
 from ._dnspython import has_dns, resolve_dnspython
 from ._doh import resolve_doh
-from ._lookup import lookup_fqdn, lookup_ip
+from ._lookup import lookup_fqdn, lookup_ip, resolver_keywords
 from ._nslookup import resolve_nslookup
 from ._system import _bounded_lookup, resolve_system
 from ._wire import resolve_wire

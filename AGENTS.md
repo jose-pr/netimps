@@ -63,7 +63,12 @@ Requires Python 3.9+. No hard runtime dependencies.
 ```
 src/netimps/
 ├── __init__.py    # the public surface: generic parse/try_parse/is_valid
-├── _ip.py         # private: IP type aliases, builder tables, IP helpers
+├── _ip/           # private package: IP types, CIDR maths, classification, Host
+│   ├── _types.py     # IP aliases, the builder tables, ip_literal
+│   ├── _host.py      # Host, HostLike, get_hostname, the loose host value
+│   ├── _hosttext.py  # split_host, split_zone, join_host
+│   ├── _cidr.py      # collapse, subtract
+│   └── _classify.py  # named networks, unmap, is_wildcard, is_link_scoped
 ├── _mac.py        # private: MACAddress value type
 ├── _scheme.py     # private: scheme <-> port registry, shared port coercion
 ├── cli.py         # public: duho-backed CLI (needs the `cli` extra)

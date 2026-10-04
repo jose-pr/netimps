@@ -15,18 +15,22 @@ from typing import (
     Any,
     Callable,
     Dict,
-    Mapping,
     Optional,
     TypeVar,
     Union,
-    cast,
     overload,
 )
 from typing import get_origin as _typing_get_origin
 
 from ._exceptions import NetimpsValueError
 from ._fqdn import FQDN
-from ._ip import _BUILDER_DEFAULTS, _BUILDERS, _CONCRETE, Host, IPAddress
+from ._ip._host import Host
+from ._ip._types import (
+    _BUILDER_DEFAULTS,
+    _BUILDERS,
+    _CONCRETE,
+    IPAddress,
+)
 from ._mac import MACAddress
 
 if TYPE_CHECKING:
@@ -44,20 +48,6 @@ _TEXT_TYPES = (MACAddress, FQDN, Host)
 
 _T = TypeVar("_T")
 _D = TypeVar("_D")
-
-#: What every entry in ``_ip``'s dispatch tables is: a callable taking the raw
-#: value plus keyword options and returning the built object.
-_Builder = Callable[..., Any]
-
-# ``_ip`` writes those tables as bare dict literals, so a checker infers their
-# value type as the *join* of three different ``ipaddress.ip_*`` functions --
-# which collapses to the opaque ``function`` type, one it then refuses to call
-# ("Cannot call function of unknown type") and refuses to use as a key. The
-# two names below bind the very same dict objects as ``_ip._BUILDERS`` and
-# ``_ip._BUILDER_DEFAULTS``, so that table stays the single one everything
-# reads and mutates; they only write down what is in them.
-_BUILDER_TABLE = cast("Mapping[Any, _Builder]", _BUILDERS)
-_BUILDER_DEFAULT_TABLE: Mapping[_Builder, Mapping[str, Any]] = _BUILDER_DEFAULTS
 
 
 def _check_parser(type) -> None:
@@ -242,7 +232,7 @@ def parse(  # type: ignore[no-redef]  # the overloads above are the signature
     # into a silent "invalid value". Fall through to the explicit checks below.
     try:
         wanted = _CONCRETE.get(target)
-        builder = _BUILDER_TABLE.get(wanted if wanted is not None else target)
+        builder = _BUILDERS.get(wanted if wanted is not None else target)
     except TypeError:
         wanted = builder = None
 
@@ -260,7 +250,7 @@ def parse(  # type: ignore[no-redef]  # the overloads above are the signature
             return target.parse(value, **kwargs)
         return target(value, **kwargs)
 
-    built = dict(_BUILDER_DEFAULT_TABLE.get(builder, {}))
+    built = dict(_BUILDER_DEFAULTS.get(builder, {}))
     built.update(kwargs)
     try:
         result = builder(value, **built)
@@ -287,7 +277,7 @@ def _check_options(target: "Any", value: object, options: "Dict[str, Any]") -> N
         return
     try:
         wanted = _CONCRETE.get(target)
-        builder = _BUILDER_TABLE.get(wanted if wanted is not None else target)
+        builder = _BUILDERS.get(wanted if wanted is not None else target)
     except TypeError:
         return
     if builder is not None:

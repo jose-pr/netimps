@@ -217,7 +217,7 @@ def test_a_host_built_from_an_interface_is_its_address(monkeypatch):
         asked.append(host)
         raise OSError("no resolver here")
 
-    monkeypatch.setattr(netimps._ip._socket, "getaddrinfo", spy, raising=False)
+    monkeypatch.setattr(netimps._ip._host._socket, "getaddrinfo", spy, raising=False)
     host = Host(ipaddress.ip_interface("127.0.0.1/8"))
     assert str(host) == "127.0.0.1"
     assert host.is_address is True

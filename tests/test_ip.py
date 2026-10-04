@@ -329,7 +329,7 @@ def test_input_aliases_are_not_parsers():
         netimps.IPNetworkLike,
         netimps.MACAddressLike,
     ):
-        assert alias not in _ip._BUILDERS
+        assert alias not in _ip._types._BUILDERS
         with pytest.raises(TypeError, match="typing construct"):
             netimps.try_parse("10.0.0.5", alias)
         with pytest.raises(TypeError, match="typing construct"):
