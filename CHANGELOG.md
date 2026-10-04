@@ -125,6 +125,19 @@ probe says so in its prefix.
   package; `PingResult.rtt` is a duration in seconds, where `rtt_ms` was
   milliseconds. A sub-millisecond reply is still `0.0`. The command line's
   `ping --json` keeps its `host` and `rtt_ms` keys, converting for display.
+- **`discover_mtu` names the options it forwards.** `tries=`, `ipv6=` and
+  `ttl=` replace `**ping_kwargs`; passing `size=` or `dont_fragment=`, which the
+  search varies itself, is now Python's own `TypeError` for an unexpected
+  keyword rather than a bespoke one.
+- **Annotations say what the code accepts and returns.** `resolve`,
+  `resolve_dnspython`, `resolve_system`, `resolve_nslookup`, `resolve_wire` and
+  `resolve_doh` are overloaded on `rdtype`: `"a"` gives `List[IPv4Address]`,
+  `"aaaa"` `List[IPv6Address]`, `"ptr"` `List[str]`, anything else
+  `List[Any]`. `method=` on `ping` and `discover_mtu` is
+  `Literal["icmp", "tcp", "udp"]`; `is_broadcast(address: IPAddressLike,
+  interface: Optional[Interface])`; `join_host` and `split_host` take
+  `HostLike`; `parse`, `try_parse` and `is_valid` take `strict` and typed
+  `**options`. No parameter of a public callable is a bare `Any`.
 - **`MACAddress.try_parse` and `FQDN.try_parse` take text only.** They answer
   `None` (or the new `default=`) for text that does not parse, and raise
   `TypeError` for anything that is not a `str` -- `MACAddress.try_parse(None)`,

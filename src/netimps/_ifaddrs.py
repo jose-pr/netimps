@@ -77,7 +77,7 @@ from typing import (
     Tuple,
     Union,
 )
-from ._ip import unmap
+from ._ip import IPAddressLike, unmap
 from ._parse import try_parse
 
 __all__ = [
@@ -1181,8 +1181,8 @@ def get_interfaces(
 
 
 def is_broadcast(
-    address: "Any",
-    interface: "Optional[Any]" = None,
+    address: "IPAddressLike",
+    interface: "Optional[Interface]" = None,
     *,
     cache: "Union[bool, float]" = False,
 ) -> bool:
@@ -1236,7 +1236,7 @@ def is_broadcast(
         return True
 
     if interface is not None:
-        candidates: "Iterable[Any]" = [interface]
+        candidates: "Iterable[Interface]" = [interface]
     elif cache is False:
         candidates = get_interfaces()
     else:

@@ -39,7 +39,17 @@ from functools import partial as _partial
 from subprocess import DEVNULL as _DEVNULL
 from subprocess import TimeoutExpired as _SubprocessTimeout
 from subprocess import run as _run
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+    overload,
+)
 
 from . import _dnswire
 from ._exceptions import (
@@ -47,7 +57,7 @@ from ._exceptions import (
     ResolutionError,
     ResolutionTimeoutError,
 )
-from ._ip import HostLike, _dst_argument
+from ._ip import HostLike, IPv4Address, IPv6Address, _dst_argument
 from ._parse import try_parse
 
 __all__ = [
@@ -99,6 +109,62 @@ def _auto_rdtype(query: str) -> str:
     """
 
     return "ptr" if try_parse(query) is not None else "a"
+
+
+@overload
+def resolve_dnspython(
+    query: "HostLike",
+    rdtype: "Literal['a', 'A']",
+    *,
+    ns: Optional[Union[str, List[str]]] = None,
+    timeout: Optional[float] = 5.0,
+    port: int = 53,
+    tcp: bool = False,
+    search: Union[bool, List[str]] = True,
+    source: Optional[str] = None,
+) -> "List[IPv4Address]": ...
+
+
+@overload
+def resolve_dnspython(
+    query: "HostLike",
+    rdtype: "Literal['aaaa', 'AAAA']",
+    *,
+    ns: Optional[Union[str, List[str]]] = None,
+    timeout: Optional[float] = 5.0,
+    port: int = 53,
+    tcp: bool = False,
+    search: Union[bool, List[str]] = True,
+    source: Optional[str] = None,
+) -> "List[IPv6Address]": ...
+
+
+@overload
+def resolve_dnspython(
+    query: "HostLike",
+    rdtype: "Literal['ptr', 'PTR']",
+    *,
+    ns: Optional[Union[str, List[str]]] = None,
+    timeout: Optional[float] = 5.0,
+    port: int = 53,
+    tcp: bool = False,
+    search: Union[bool, List[str]] = True,
+    source: Optional[str] = None,
+) -> "List[str]": ...
+
+
+@overload
+def resolve_dnspython(
+    query: "HostLike",
+    rdtype: Optional[str] = None,
+    *,
+    ns: Optional[Union[str, List[str]]] = None,
+    timeout: Optional[float] = 5.0,
+    port: int = 53,
+    tcp: bool = False,
+    search: Union[bool, List[str]] = True,
+    source: Optional[str] = None,
+) -> "List[Any]": ...
 
 
 def resolve_dnspython(
@@ -320,6 +386,46 @@ def _resolve_system_once(
         if parsed is not None and parsed not in seen:
             seen.append(parsed)
     return seen
+
+
+@overload
+def resolve_system(
+    query: "HostLike",
+    rdtype: "Literal['a', 'A']",
+    *,
+    timeout: Optional[float] = 5.0,
+    search: Union[bool, List[str]] = True,
+) -> "List[IPv4Address]": ...
+
+
+@overload
+def resolve_system(
+    query: "HostLike",
+    rdtype: "Literal['aaaa', 'AAAA']",
+    *,
+    timeout: Optional[float] = 5.0,
+    search: Union[bool, List[str]] = True,
+) -> "List[IPv6Address]": ...
+
+
+@overload
+def resolve_system(
+    query: "HostLike",
+    rdtype: "Literal['ptr', 'PTR']",
+    *,
+    timeout: Optional[float] = 5.0,
+    search: Union[bool, List[str]] = True,
+) -> "List[str]": ...
+
+
+@overload
+def resolve_system(
+    query: "HostLike",
+    rdtype: "Optional[Union[str, Tuple[str, ...]]]" = None,
+    *,
+    timeout: Optional[float] = 5.0,
+    search: Union[bool, List[str]] = True,
+) -> "List[Any]": ...
 
 
 def resolve_system(
@@ -680,6 +786,50 @@ def _resolve_nslookup_once(
     return results
 
 
+@overload
+def resolve_nslookup(
+    query: "HostLike",
+    rdtype: "Literal['a', 'A']",
+    *,
+    ns: Optional[str] = None,
+    timeout: Optional[float] = 5.0,
+    search: Union[bool, List[str]] = True,
+) -> "List[IPv4Address]": ...
+
+
+@overload
+def resolve_nslookup(
+    query: "HostLike",
+    rdtype: "Literal['aaaa', 'AAAA']",
+    *,
+    ns: Optional[str] = None,
+    timeout: Optional[float] = 5.0,
+    search: Union[bool, List[str]] = True,
+) -> "List[IPv6Address]": ...
+
+
+@overload
+def resolve_nslookup(
+    query: "HostLike",
+    rdtype: "Literal['ptr', 'PTR']",
+    *,
+    ns: Optional[str] = None,
+    timeout: Optional[float] = 5.0,
+    search: Union[bool, List[str]] = True,
+) -> "List[str]": ...
+
+
+@overload
+def resolve_nslookup(
+    query: "HostLike",
+    rdtype: Optional[str] = None,
+    *,
+    ns: Optional[str] = None,
+    timeout: Optional[float] = 5.0,
+    search: Union[bool, List[str]] = True,
+) -> "List[Any]": ...
+
+
 def resolve_nslookup(
     query: "HostLike",
     rdtype: Optional[str] = None,
@@ -788,6 +938,70 @@ def resolve_nslookup(
     if last_error is not None:
         raise last_error
     return []
+
+
+@overload
+def resolve(
+    query: "HostLike",
+    rdtype: "Literal['a', 'A']",
+    *,
+    ns: Optional[Union[str, List[str]]] = None,
+    timeout: Optional[float] = 5.0,
+    port: int = 53,
+    tcp: bool = False,
+    search: Union[bool, List[str]] = True,
+    backends: "Optional[Union[str, List[str]]]" = None,
+    strict: bool = False,
+    source: Optional[Union[str, List[str]]] = None,
+) -> "List[IPv4Address]": ...
+
+
+@overload
+def resolve(
+    query: "HostLike",
+    rdtype: "Literal['aaaa', 'AAAA']",
+    *,
+    ns: Optional[Union[str, List[str]]] = None,
+    timeout: Optional[float] = 5.0,
+    port: int = 53,
+    tcp: bool = False,
+    search: Union[bool, List[str]] = True,
+    backends: "Optional[Union[str, List[str]]]" = None,
+    strict: bool = False,
+    source: Optional[Union[str, List[str]]] = None,
+) -> "List[IPv6Address]": ...
+
+
+@overload
+def resolve(
+    query: "HostLike",
+    rdtype: "Literal['ptr', 'PTR']",
+    *,
+    ns: Optional[Union[str, List[str]]] = None,
+    timeout: Optional[float] = 5.0,
+    port: int = 53,
+    tcp: bool = False,
+    search: Union[bool, List[str]] = True,
+    backends: "Optional[Union[str, List[str]]]" = None,
+    strict: bool = False,
+    source: Optional[Union[str, List[str]]] = None,
+) -> "List[str]": ...
+
+
+@overload
+def resolve(
+    query: "HostLike",
+    rdtype: "Optional[Union[str, Tuple[str, ...]]]" = None,
+    *,
+    ns: Optional[Union[str, List[str]]] = None,
+    timeout: Optional[float] = 5.0,
+    port: int = 53,
+    tcp: bool = False,
+    search: Union[bool, List[str]] = True,
+    backends: "Optional[Union[str, List[str]]]" = None,
+    strict: bool = False,
+    source: Optional[Union[str, List[str]]] = None,
+) -> "List[Any]": ...
 
 
 def resolve(
@@ -1281,6 +1495,62 @@ def _question(query: str, rdtype: "Optional[str]") -> "Tuple[str, str]":
     return query, rdtype
 
 
+@overload
+def resolve_wire(
+    query: "HostLike",
+    rdtype: "Literal['a', 'A']",
+    *,
+    ns: Optional[Union[str, List[str]]] = None,
+    timeout: Optional[float] = 5.0,
+    port: int = 53,
+    tcp: bool = False,
+    search: Union[bool, List[str]] = True,
+    source: Optional[Union[str, List[str]]] = None,
+) -> "List[IPv4Address]": ...
+
+
+@overload
+def resolve_wire(
+    query: "HostLike",
+    rdtype: "Literal['aaaa', 'AAAA']",
+    *,
+    ns: Optional[Union[str, List[str]]] = None,
+    timeout: Optional[float] = 5.0,
+    port: int = 53,
+    tcp: bool = False,
+    search: Union[bool, List[str]] = True,
+    source: Optional[Union[str, List[str]]] = None,
+) -> "List[IPv6Address]": ...
+
+
+@overload
+def resolve_wire(
+    query: "HostLike",
+    rdtype: "Literal['ptr', 'PTR']",
+    *,
+    ns: Optional[Union[str, List[str]]] = None,
+    timeout: Optional[float] = 5.0,
+    port: int = 53,
+    tcp: bool = False,
+    search: Union[bool, List[str]] = True,
+    source: Optional[Union[str, List[str]]] = None,
+) -> "List[str]": ...
+
+
+@overload
+def resolve_wire(
+    query: "HostLike",
+    rdtype: Optional[str] = None,
+    *,
+    ns: Optional[Union[str, List[str]]] = None,
+    timeout: Optional[float] = 5.0,
+    port: int = 53,
+    tcp: bool = False,
+    search: Union[bool, List[str]] = True,
+    source: Optional[Union[str, List[str]]] = None,
+) -> "List[Any]": ...
+
+
 def resolve_wire(
     query: "HostLike",
     rdtype: Optional[str] = None,
@@ -1411,6 +1681,50 @@ def _urllib_fetch(
         if isinstance(exc, _socket.timeout) or isinstance(reason, _socket.timeout):
             raise ResolutionTimeoutError("%s: %s" % (url, reason)) from exc
         raise ResolutionError("%s: %s" % (url, reason)) from exc
+
+
+@overload
+def resolve_doh(
+    query: "HostLike",
+    url: str,
+    *,
+    rdtype: "Literal['a', 'A']",
+    timeout: Optional[float] = 5.0,
+    fetch: "Optional[Callable[[str, bytes, dict, Optional[float]], bytes]]" = None,
+) -> "List[IPv4Address]": ...
+
+
+@overload
+def resolve_doh(
+    query: "HostLike",
+    url: str,
+    *,
+    rdtype: "Literal['aaaa', 'AAAA']",
+    timeout: Optional[float] = 5.0,
+    fetch: "Optional[Callable[[str, bytes, dict, Optional[float]], bytes]]" = None,
+) -> "List[IPv6Address]": ...
+
+
+@overload
+def resolve_doh(
+    query: "HostLike",
+    url: str,
+    *,
+    rdtype: "Literal['ptr', 'PTR']",
+    timeout: Optional[float] = 5.0,
+    fetch: "Optional[Callable[[str, bytes, dict, Optional[float]], bytes]]" = None,
+) -> "List[str]": ...
+
+
+@overload
+def resolve_doh(
+    query: "HostLike",
+    url: str,
+    *,
+    rdtype: Optional[str] = None,
+    timeout: Optional[float] = 5.0,
+    fetch: "Optional[Callable[[str, bytes, dict, Optional[float]], bytes]]" = None,
+) -> "List[Any]": ...
 
 
 def resolve_doh(

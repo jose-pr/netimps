@@ -30,7 +30,7 @@ name from its own bundled typeshed, and this file never runs.
 from __future__ import annotations
 
 import socket
-from typing import Iterator, Optional, Tuple, Union
+from typing import Any, Iterator, List, Optional, Tuple, Union
 
 from typing_extensions import assert_type
 
@@ -74,6 +74,17 @@ from netimps import (
     unmap,
     tcp_check,
     get_hostname,
+    discover_mtu,
+    ping,
+    resolve,
+    resolve_dnspython,
+    resolve_doh,
+    resolve_nslookup,
+    resolve_system,
+    resolve_wire,
+    split_host,
+    wait_for_port,
+    PingResult,
 )
 
 
@@ -381,3 +392,31 @@ assert_type(tcp_check(Host("www.example.com"), 443), bool)
 assert_type(tcp_check(FQDN("www.example.com"), 443), bool)
 assert_type(get_hostname(), str)
 assert_type(get_hostname(fqdn=True), str)
+
+
+# `rdtype` picks the element type of every resolver's list; anything the
+# package does not model is a list of whatever the record decodes to.
+assert_type(resolve("h", "a"), List[IPv4Address])
+assert_type(resolve("h", "AAAA"), List[IPv6Address])
+assert_type(resolve("h", "aaaa", ns="192.0.2.53", tcp=True), List[IPv6Address])
+assert_type(resolve("192.0.2.1", "ptr"), List[str])
+assert_type(resolve("h"), List[Any])
+assert_type(resolve("h", "mx"), List[Any])
+assert_type(resolve("h", ("a", "aaaa")), List[Any])
+assert_type(resolve_system("h", "a"), List[IPv4Address])
+assert_type(resolve_system("h", "ptr"), List[str])
+assert_type(resolve_nslookup("h", "aaaa"), List[IPv6Address])
+assert_type(resolve_dnspython("h", "a", ns="192.0.2.53"), List[IPv4Address])
+assert_type(resolve_dnspython("h", "txt"), List[Any])
+assert_type(resolve_wire("h", "aaaa", source="192.0.2.1"), List[IPv6Address])
+assert_type(resolve_doh("h", "https://dns.example/q", rdtype="a"), List[IPv4Address])
+assert_type(resolve_doh("h", "https://dns.example/q"), List[Any])
+
+# Options are keyword-only, and the options `discover_mtu` forwards to `ping`
+# are named rather than swallowed by a `**kwargs`.
+assert_type(ping("h", tries=3, method="tcp", port=80), PingResult)
+assert_type(ping("h").rtt, Optional[float])
+assert_type(discover_mtu("h", tries=3, ipv6=False, ttl=64), Optional[int])
+assert_type(wait_for_port("h", 80, deadline=5.0, timeout=1.0), bool)
+assert_type(split_host("example.com:80", default_port=443), Tuple[str, Optional[int]])
+assert_type(is_broadcast("10.0.0.255"), bool)

@@ -48,7 +48,19 @@ from ._mac import MACAddress
 from ._parse import parse, try_parse
 from ._ping import ping
 from ._scheme import coerce_port as _coerce_port
-from typing import Any, Iterable, Iterator, List, NamedTuple, Optional, Tuple, Union
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Literal,
+    NamedTuple,
+    Optional,
+    Tuple,
+    Union,
+    cast as _cast,
+)
 
 InterfaceQuery = Union[
     Interface,
@@ -1860,8 +1872,10 @@ def discover_mtu(
     src: "InterfaceLike" = None,
     port: int = 80,
     probe: bool = True,
-    method: str = "icmp",
-    **ping_kwargs,
+    method: "Literal['icmp', 'tcp', 'udp']" = "icmp",
+    tries: int = 1,
+    ipv6: "Optional[bool]" = None,
+    ttl: "Optional[int]" = None,
 ) -> "Optional[int]":
     """Measure the path MTU to ``dst`` in bytes, or ``None`` if undiscoverable.
 
@@ -1903,10 +1917,14 @@ def discover_mtu(
         ``"icmp"`` or ``"udp"`` when the answer must be measured.
     :param probe: set ``False`` to skip probing entirely and just return
         :func:`get_pmtu` -- the kernel's cached answer, usually ``None``.
-    :param ping_kwargs: passed straight to :func:`ping` for ``method="icmp"``,
-        so anything it accepts works here -- ``ipv6=True`` to force the family,
-        ``tries=3`` to tolerate a lossy path. ``size`` and ``dont_fragment``
-        are set by the search itself and cannot be overridden.
+    :param tries: probes per size, passed to :func:`ping` for ``method="icmp"``;
+        ``tries=3`` tolerates a lossy path.
+    :param ipv6: force the family; ``None`` takes whichever ``dst`` resolves to.
+        Applies to every method.
+    :param ttl: initial hop limit of the ICMP probes.
+
+    ``size`` and ``dont_fragment`` are what the search varies, so they are not
+    parameters.
 
     Returns the MTU **including headers** (payload + 28 for IPv4 + ICMP), so it
     is directly comparable with :attr:`Interface.mtu`. Returns ``None`` when
@@ -1927,11 +1945,12 @@ def discover_mtu(
     port = _coerce_port(port)
     if not probe:
         # Explicitly asked for the kernel's cached answer only.
-        return get_pmtu(dst, port, ipv6=ping_kwargs.get("ipv6"))
+        return get_pmtu(dst, port, ipv6=ipv6)
 
-    method = (method or "icmp").lower()
-    if method not in ("icmp", "udp", "tcp"):
-        raise ValueError("method must be 'icmp', 'udp' or 'tcp', got %r" % (method,))
+    lowered = (method or "icmp").lower()
+    if lowered not in ("icmp", "udp", "tcp"):
+        raise ValueError("method must be 'icmp', 'udp' or 'tcp', got %r" % (lowered,))
+    method = _cast("Literal['icmp', 'tcp', 'udp']", lowered)
 
     if method == "tcp":
         # TCP cannot probe: the kernel segments the stream, so a large send()
@@ -1945,18 +1964,12 @@ def discover_mtu(
         # Using the v4 figure for a v6 path would under-report by 20 bytes.
         return mss + _tcp_header_overhead(dst)
 
-    for owned in ("size", "dont_fragment"):
-        if owned in ping_kwargs:
-            raise TypeError(
-                "discover_mtu sets %r itself -- it is what the search varies" % (owned,)
-            )
-
     if method == "udp":
-        return _discover_mtu_udp(dst, port, low, high, timeout, ping_kwargs.get("ipv6"))
+        return _discover_mtu_udp(dst, port, low, high, timeout, ipv6)
 
     from ._ping import supports_dont_fragment
 
-    if not supports_dont_fragment(dst, ping_kwargs.get("ipv6")):
+    if not supports_dont_fragment(dst, ipv6):
         # The binary search is only meaningful when the probe cannot be
         # fragmented. Where the platform's ping has no DF flag for this
         # family -- BSD's ping6 -- passing dont_fragment=True raises, and
@@ -1969,6 +1982,16 @@ def discover_mtu(
     # v6 path would under-report by 20 bytes.
     overhead = _ip_header_bytes(dst) + 8
 
+    # Only what the caller changed is forwarded, so ``ping`` keeps owning its
+    # own defaults.
+    forwarded: "Dict[str, Any]" = {}
+    if tries != 1:
+        forwarded["tries"] = tries
+    if ipv6 is not None:
+        forwarded["ipv6"] = ipv6
+    if ttl is not None:
+        forwarded["ttl"] = ttl
+
     def survives(mtu: int) -> bool:
         payload = mtu - overhead
         if payload < 0:
@@ -1980,7 +2003,7 @@ def discover_mtu(
                 dont_fragment=True,
                 timeout=timeout,
                 src=src,
-                **ping_kwargs,
+                **forwarded,
             )
         )
 

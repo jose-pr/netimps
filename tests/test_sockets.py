@@ -930,7 +930,7 @@ def test_discover_mtu_forwards_ping_kwargs(monkeypatch):
 @pytest.mark.parametrize("owned", ["size", "dont_fragment"])
 def test_discover_mtu_rejects_search_owned_kwargs(owned):
     """Overriding what the search varies would silently break the result."""
-    with pytest.raises(TypeError, match="sets"):
+    with pytest.raises(TypeError, match="unexpected keyword"):
         netimps.discover_mtu("10.0.0.1", **{owned: 1})
 
 

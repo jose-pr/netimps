@@ -67,7 +67,7 @@ lookups, `get_default_port`/`get_default_scheme`, still return `None` instead:
 **Several parameters are named `ipv6=`** and mean one thing throughout --
 `True` IPv6, `False` IPv4, `None` (the default) whichever the resolver
 answers with: `Host.ip`, `get_source_ip`, `get_route`, `count_hops`, `get_pmtu`,
-`ping`, and `discover_mtu` via `**ping_kwargs`. A literal `dst` decides for
+`ping`, and `discover_mtu`. A literal `dst` decides for
 itself.
 
 ## Types vs parsing — read this first
@@ -313,7 +313,7 @@ so nothing is lost. Pass an existing enumeration in a loop; it is a syscall.
 - **`subtract(networks, remove) -> List[IPNetwork]`** — set difference, which
   `ipaddress` omits (it ships `collapse_addresses` but nothing to punch holes).
   Result is collapsed.
-- **`join_host(host, port=None) -> str`** — the **inverse** of
+- **`join_host(host: HostLike, port=None) -> str`** — the **inverse** of
   `split_host`, and the direction everyone writes by hand and gets wrong on
   IPv6:
 
@@ -440,6 +440,11 @@ and `resolve_doh` an unreadable *reply* is not raised as such: it becomes a
 `ResolutionError` whose `__cause__` is the `DNSDecodeError`.
 
 **`resolve(query, rdtype=None, *, ns=None, timeout=5.0, port=53, tcp=False, search=True, backends=None, strict=False, source=None)`**
+
+**The element type follows `rdtype`, for `resolve` and for each backend below:**
+`"a"` gives `List[IPv4Address]`, `"aaaa"` `List[IPv6Address]`, `"ptr"`
+`List[str]` (case-insensitive), and `None`, a tuple of types or any other
+record type `List[Any]`. A type checker selects the overload from the literal.
 
 `query` accepts `HostLike` (a hostname string, an address string, an
 `IPv4Address`/`IPv6Address`, or an `IPv4Interface`/`IPv6Interface` -- its
@@ -649,6 +654,8 @@ names a DoH endpoint wants that answer alone.
 ## Reachability
 
 **`ping(dst, *, tries=1, timeout=1.0, ipv6=None, src=None, size=None, ttl=None, dont_fragment=False, method="icmp", port=None) -> PingResult`**
+
+`method` is `"icmp" | "tcp" | "udp"`.
 
 `PingResult` is **truthy on success** and compares equal to `bool`, so
 `if ping(host):` and `== True` keep working, while carrying `.ok`, `.dst`,
@@ -978,7 +985,7 @@ failure. `tcp` and `udp` also report `rtt`; only ICMP reports `ttl`.
   IPv4-only lookup used before returned `None` for a v6 destination, read as
   "never answered" rather than "never asked". **`None` means "no answer", never
   "unreachable"** — firewalls routinely drop ICMP even for an elevated process.
-- **`discover_mtu(dst, *, low=576, high=9000, timeout=1.0, src=None, port=80, probe=True, method="icmp", **ping_kwargs)`**
+- **`discover_mtu(dst, *, low=576, high=9000, timeout=1.0, src=None, port=80, probe=True, method="icmp", tries=1, ipv6=None, ttl=None)`**
   — **measures** the path MTU by binary-searching probes, so packets really
   traverse the path. Returns the MTU **including headers**, comparable with
   `Interface.mtu`.
@@ -997,10 +1004,11 @@ failure. `tcp` and `udp` also report `rtt`; only ICMP reports `ttl`.
   fragmented and reassembled, every size survives, and the search would return
   `high` as though it had measured something.
 
-  Extra `**ping_kwargs` reach `ping` for the ICMP method (`ipv6=`, `tries=`);
-  the `udp` method reads only `ipv6=` from them. `size` and `dont_fragment` are
-  what the search varies, so passing either raises `TypeError`. `probe=False`
-  skips probing entirely and returns `get_pmtu` instead.
+  `tries=` and `ttl=` reach `ping` for the ICMP method; `ipv6=` applies to
+  every method. `size` and `dont_fragment` are what the search varies, so they
+  are not parameters and passing either raises `TypeError`. `probe=False` skips
+  probing entirely and returns `get_pmtu` instead. `method` is
+  `"icmp" | "tcp" | "udp"`.
 - **`get_tcp_mss(dst, port, *, timeout=3.0) -> int | None`** — the negotiated TCP
   maximum segment size. **Opens a real connection** to read it, then closes.
   MSS is normally the path MTU minus 40, so a reduced value signals a tunnel
@@ -1269,7 +1277,7 @@ takes "another name".
 
 ## Broadcast and payload sizing
 
-**`is_broadcast(address, interface=None, *, cache=False)`** — whether *address* is an IPv4
+**`is_broadcast(address: IPAddressLike, interface: Interface | None = None, *, cache=False)`** — whether *address* is an IPv4
 broadcast, limited **or** subnet. What a wildcard-bound server asks about
 `Datagram.local_address` before answering: RFC 1123 says a TFTP server ignores a
 broadcast request, and DHCP must tell a broadcast DISCOVER from a unicast RENEW.

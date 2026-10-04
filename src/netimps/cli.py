@@ -239,7 +239,7 @@ class Ping(_Base):
             self.dst,
             tries=self.count,
             timeout=self.timeout,
-            method=self.method,
+            method=_ty.cast("_ty.Literal['icmp', 'tcp', 'udp']", self.method),
             port=self.port,
             size=self.size,
             src=self.source,
@@ -450,7 +450,7 @@ class Mtu(_Base):
                 self.dst,
                 timeout=self.timeout,
                 port=self.port,
-                method=self.method,
+                method=_ty.cast("_ty.Literal['icmp', 'tcp', 'udp']", self.method),
             )
         payload = {
             "dst": self.dst,

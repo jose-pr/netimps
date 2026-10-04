@@ -274,7 +274,7 @@ def subtract(
 
 
 def split_host(
-    text: "Union[str, IPAddress, IPInterface, Any]",
+    text: "HostLike",
     *,
     default_port: Optional[int] = None,
 ) -> "Tuple[str, Optional[int]]":
@@ -779,7 +779,7 @@ def get_hostname(*, fqdn: bool = False) -> str:
     return _platform.node()
 
 
-def join_host(host: "Union[str, IPAddress, Any]", port: "Optional[int]" = None) -> str:
+def join_host(host: "HostLike", port: "Optional[int]" = None) -> str:
     """Build ``"host:port"`` from its parts -- the inverse of :func:`split_host`.
 
     The direction everyone writes by hand and gets wrong on IPv6, because a bare

@@ -18,7 +18,7 @@ import sys as _sys
 from subprocess import DEVNULL as _DEVNULL
 from subprocess import TimeoutExpired as _SubprocessTimeout
 from subprocess import run as _run
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Literal, Optional, Tuple, cast as _cast
 
 from ._iface_spec import InterfaceLike, interface_address as _interface_address
 from ._ip import HostLike, IPAddress, _dst_argument
@@ -530,7 +530,7 @@ def ping(
     size: Optional[int] = None,
     ttl: Optional[int] = None,
     dont_fragment: bool = False,
-    method: str = "icmp",
+    method: "Literal['icmp', 'tcp', 'udp']" = "icmp",
     port: "Optional[int]" = None,
 ) -> "PingResult":
     """Ping ``dst``; the result is truthy if it answered.
@@ -665,9 +665,10 @@ def ping(
             "dst %r starts with '-' and would be read as an option, not a host" % (dst,)
         )
 
-    method = (method or "icmp").lower()
-    if method not in ("icmp", "tcp", "udp"):
-        raise ValueError("method must be 'icmp', 'tcp' or 'udp', got %r" % (method,))
+    lowered = (method or "icmp").lower()
+    if lowered not in ("icmp", "tcp", "udp"):
+        raise ValueError("method must be 'icmp', 'tcp' or 'udp', got %r" % (lowered,))
+    method = _cast("Literal['icmp', 'tcp', 'udp']", lowered)
 
     # Validate every argument the same way for every method. These used to be
     # checked only on the ICMP path, so the same bad value raised for one method
