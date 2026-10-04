@@ -62,13 +62,15 @@ Requires Python 3.9+. No hard runtime dependencies.
 
 ```
 src/netimps/
-├── __init__.py    # the public surface: generic parse/try_parse/is_valid
+├── __init__.py    # the public surface: every export is declared in __all__
+├── _exceptions.py # private: the exception hierarchy
 ├── _ip/           # private package: IP types, CIDR maths, classification, Host
 │   ├── _types.py     # IP aliases, the builder tables, ip_literal
 │   ├── _host.py      # Host, HostLike, get_hostname, the loose host value
 │   ├── _hosttext.py  # split_host, split_zone, join_host
 │   ├── _cidr.py      # collapse, subtract
 │   └── _classify.py  # named networks, unmap, is_wildcard, is_link_scoped
+├── _parse.py      # private: the generic parse/try_parse/is_valid, above _ip, _fqdn and _mac
 ├── _mac.py        # private: MACAddress value type
 ├── _scheme.py     # private: scheme <-> port registry, shared port coercion
 ├── cli.py         # public: duho-backed CLI (needs the `cli` extra)
@@ -218,6 +220,13 @@ map:
   loopback only, and **nothing in it may be mocked**. A claim about another
   platform needs a measurement on that platform (a `ci-*` tag runs the matrix),
   not a passing test here.
+- **A test patches the module whose globals the code reads.** A private
+  package re-exports names from its modules in its `__init__`, and that copy is
+  a different binding: `monkeypatch.setattr(netimps._dns, "resolve", ...)` leaves
+  `_dns._lookup.resolve` alone and the test passes without testing anything.
+  Patch `netimps._dns._lookup`, or `netimps._ping._probe._socket` for the
+  `socket` module as `_ping` sees it. `tests/test_import_structure.py` keeps a
+  function-local import from hiding such a binding.
 - **Don't collapse the per-platform `sockaddr` layouts** in `_ifaddrs/_sockaddr.py`.
   macOS/BSD have a leading `sa_len` byte Linux lacks; using the Linux layout on
   BSD decodes `AF_INET` as `512` and *silently* drops every address instead of
@@ -418,6 +427,8 @@ Tests live in `tests/` and run via `pytest -q` from a checkout;
 | `test_udp_datagram.py` | `send(src=<address>)` without enumeration, truncation on both receive paths, `Datagram.destination` / `is_unicast`, `datagrams(on_error=)` |
 | `test_bind_defaults.py` | `bind()` family inference, the `connreset` default, the hint in the error message, the buffer warning |
 | `test_msg.py` | `recvmsg`/`sendmsg` on every platform, and the `socket` patch (install, reverse, no-op on POSIX) |
+| `test_dns_search_candidates.py` | the names each resolver backend asks about for a given `search=`, which differ by backend |
+| `test_import_structure.py` | import direction: no name taken from the root, no module over 500 lines and no function-local sibling import without a recorded reason |
 | `test_cli.py` | the CLI; skips itself when the `cli` extra is absent |
 | `test_platform_smoke.py` | the **only** non-mocked tests — the real `ping`/`ping6` binary and real loopback sockets |
 | `typing/api.py` | the static-typing contract; never executed, checked by mypy with `typing/consumer.ini` |
