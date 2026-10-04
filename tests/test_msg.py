@@ -472,15 +472,16 @@ def test_winsock_alignment_and_header_size():
     on 32-bit and silently misparses everything on 64-bit.
     """
     from netimps import _winsock
+    from netimps._winsock import _abi, _cmsg
 
     import ctypes
 
-    assert _winsock._ALIGN == ctypes.sizeof(ctypes.c_void_p)
+    assert _abi._ALIGN == ctypes.sizeof(ctypes.c_void_p)
     # WSACMSGHDR is {SIZE_T len; INT level; INT type}.
-    assert _winsock._CMSGHDR_SIZE == ctypes.sizeof(ctypes.c_size_t) + 2 * ctypes.sizeof(
+    assert _abi._CMSGHDR_SIZE == ctypes.sizeof(ctypes.c_size_t) + 2 * ctypes.sizeof(
         ctypes.c_int
     )
-    assert _winsock.CMSG_LEN(0) == _winsock._align(_winsock._CMSGHDR_SIZE)
+    assert _winsock.CMSG_LEN(0) == _cmsg._align(_abi._CMSGHDR_SIZE)
     assert _winsock.CMSG_SPACE(4) >= _winsock.CMSG_LEN(4)
     assert _winsock.available() is True
 
@@ -494,12 +495,13 @@ def test_winsock_control_parser_stops_at_the_buffer_end():
     allocation.
     """
     from netimps import _winsock
+    from netimps._winsock import _abi, _cmsg
 
     import ctypes
 
     # Built from the real struct rather than a format string: the header mixes
     # SIZE_T with INT, which `struct` cannot express portably in standard mode.
-    header = _winsock._WSACMSGHDR(
+    header = _abi._WSACMSGHDR(
         cmsg_len=_winsock.CMSG_LEN(4), cmsg_level=socket.IPPROTO_IP, cmsg_type=19
     )
     buffer = bytes(
@@ -507,23 +509,23 @@ def test_winsock_control_parser_stops_at_the_buffer_end():
     )
     payload = b"\x7f\x00\x00\x01"
     padded = buffer + payload.ljust(
-        _winsock._align(_winsock._CMSGHDR_SIZE) - len(buffer) + 4, b"\x00"
+        _cmsg._align(_abi._CMSGHDR_SIZE) - len(buffer) + 4, b"\x00"
     )
 
     # Honest buffer: the one cmsg parses.
-    parsed = _winsock._parse_control(padded, len(padded))
+    parsed = _cmsg._parse_control(padded, len(padded))
     assert len(parsed) == 1
     assert parsed[0][0] == socket.IPPROTO_IP and parsed[0][1] == 19
 
     # Lying length: Winsock really does report more than it wrote, so the parser
     # must clamp to the allocation instead of indexing past it.
-    clamped = _winsock._parse_control(padded, 4096)
+    clamped = _cmsg._parse_control(padded, 4096)
     assert all(len(data) <= len(padded) for _, _, data in clamped)
 
     # A header claiming less than its own size stops the walk rather than looping.
-    short = _winsock._WSACMSGHDR(cmsg_len=1, cmsg_level=0, cmsg_type=0)
+    short = _abi._WSACMSGHDR(cmsg_len=1, cmsg_level=0, cmsg_type=0)
     short_bytes = ctypes.string_at(ctypes.byref(short), ctypes.sizeof(short))
-    assert _winsock._parse_control(bytes(short_bytes), len(short_bytes)) == []
+    assert _cmsg._parse_control(bytes(short_bytes), len(short_bytes)) == []
 
 
 @pytest.mark.skipif(IS_WINDOWS, reason="importing _winsock off Windows must fail")

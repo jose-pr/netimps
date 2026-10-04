@@ -2,7 +2,8 @@
 
 A comment or docstring that narrates what the code "used to" do is true only
 at one version and wrong for every reader after it; the changelog is where a
-change is recorded. This scans ``src/netimps/*.py`` and ``src/netimps/AGENTS.md``
+change is recorded. This scans every ``.py`` under ``src/netimps`` (the private
+packages included) and ``src/netimps/AGENTS.md``
 for that wording and fails naming the file and line.
 
 A phrase that is a fact and not history goes in ``_ALLOWED`` with a reason.
@@ -37,7 +38,7 @@ _ALLOWED = (
 
 
 def _sources():
-    return sorted(_PACKAGE.glob("*.py")) + [_PACKAGE / "AGENTS.md"]
+    return sorted(_PACKAGE.rglob("*.py")) + [_PACKAGE / "AGENTS.md"]
 
 
 def _allowed(line):
@@ -50,7 +51,10 @@ def _offences():
         text = path.read_text(encoding="utf-8")
         for number, line in enumerate(text.splitlines(), 1):
             if _HISTORY.search(line) and not _allowed(line):
-                found.append("%s:%d: %s" % (path.name, number, line.strip()))
+                found.append(
+                    "%s:%d: %s"
+                    % (path.relative_to(_PACKAGE).as_posix(), number, line.strip())
+                )
     return found
 
 

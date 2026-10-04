@@ -81,7 +81,12 @@ src/netimps/
 ├── _fqdn.py       # private: FQDN domain-name value type (label algebra)
 ├── _msg.py        # private: cross-platform recvmsg/sendmsg + the socket patch
 ├── _aio.py        # private: add_reader polyfill, so arecv works on a Proactor loop
-├── _winsock.py    # private: ctypes WSARecvMsg/WSASendMsg (Windows only, never imported elsewhere)
+├── _winsock/      # private package: ctypes WSARecvMsg/WSASendMsg (Windows only, never imported elsewhere)
+│   ├── _abi.py       # ws2_32, the structures, argtypes
+│   ├── _cmsg.py      # cmsg sizes, control-buffer walk and build
+│   ├── _sockaddr.py  # sockaddr <-> address tuple
+│   ├── _calls.py     # recvmsg, sendmsg
+│   └── _ioctl.py     # SIO_UDP_CONNRESET
 ├── _iface_spec.py # private: shared InterfaceLike coercion (MAC/name/Interface -> address)
 └── py.typed       # PEP 561 marker — the package ships inline type hints
 ```
