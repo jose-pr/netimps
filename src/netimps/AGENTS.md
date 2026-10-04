@@ -1677,8 +1677,10 @@ wrapped socket expires, on every supported Python (before 3.10
   `True` for such an endpoint and `False` for one bound to an address, where
   `send(src=)` sends unpinned. IPv4 has no pin by interface index there, so an
   `Interface` (or name or MAC) given as `src` pins that interface's IPv4 address,
-  and a `src` naming no IPv4 address raises `ValueError`. IPv6 on FreeBSD works
-  as on macOS.
+  and a `src` naming no IPv4 address raises `ValueError`. A `src` of `0.0.0.0`
+  is sent unpinned: the kernel refuses a zero source there (errno 22), and
+  unpinned is what Linux and macOS make of one. IPv6 on FreeBSD works as on
+  macOS.
 - **Windows is supported, as of the Winsock backend.** Both flags are `True`
   there for v4, v6 **and** dual-stack `::`, on 3.9 through 3.14, via
   `WSARecvMsg`/`WSASendMsg` — see **Ancillary data** above. `UDPEndpoint` calls

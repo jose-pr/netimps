@@ -811,6 +811,8 @@ def _recv_both_ways(dest="127.0.0.1", bind_to="0.0.0.0"):
     from netimps import _udp
 
     option = _udp._IP_PKTINFO
+    if option is None:
+        pytest.skip("no IPv4 IP_PKTINFO on this platform")
     out = {}
     for label in ("native", "patched"):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

@@ -136,6 +136,16 @@ def test_an_address_is_pinned_by_the_source_message(freebsd_v4):
         assert endpoint._pktinfo_control("10.1.2.3") == expected
 
 
+def test_a_zero_source_sends_no_message(freebsd_v4):
+    """The kernel refuses a zero source (errno 22), so none is sent.
+
+    Linux and macOS read a zero address as "kernel chooses"; leaving the
+    message out asks FreeBSD for the same thing.
+    """
+    with UDPEndpoint(bind("0.0.0.0", 0)) as endpoint:
+        assert endpoint._pktinfo_control("0.0.0.0") is None
+
+
 def test_an_interface_is_pinned_by_its_ipv4_address(freebsd_v4):
     spec = Interface(
         name="em0",

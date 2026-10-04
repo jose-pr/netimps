@@ -723,6 +723,10 @@ class UDPEndpoint:
                     "cannot pin src %r on FreeBSD: IPv4 is pinned by address "
                     "and it names no IPv4 address" % (src,)
                 )
+            if local.is_unspecified:
+                # The kernel refuses a zero source (errno 22) where Linux and
+                # macOS read it as "kernel chooses". No message asks the same.
+                return None
             return _freebsd.source_control(local)
 
         if send_type is None:  # pragma: no cover - the by-address case returned

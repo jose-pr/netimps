@@ -628,6 +628,9 @@ def test_udp_endpoint_send_rejects_an_unresolvable_source():
 def test_udp_endpoint_degrades_without_pktinfo(monkeypatch):
     """No IP_PKTINFO must mean empty interface fields, not a failure."""
     monkeypatch.setattr(_udp, "_IP_PKTINFO", None)
+    # FreeBSD carries IPv4 arrival data without IP_PKTINFO; a platform with
+    # neither is what this simulates.
+    monkeypatch.setattr(_udp._freebsd, "IS_FREEBSD", False)
     with UDPEndpoint(bind("127.0.0.1", 0)) as endpoint:
         assert endpoint.has_pktinfo is False
         # Same constant serves both directions for IPv4, so neither is claimed.
@@ -839,6 +842,10 @@ def test_windows_refuses_an_index_only_source_rather_than_sending_from_zero(
 
 
 @pytest.mark.skipif(os.name == "nt", reason="the POSIX half of the zero-address rule")
+@pytest.mark.skipif(
+    sys.platform.startswith("freebsd"),
+    reason="FreeBSD pins an IPv4 source by address only; it has no index pin",
+)
 def test_posix_packs_a_zero_source_for_an_index_only_pin(monkeypatch):
     """The counterpart: on POSIX a zero address *is* "kernel chooses".
 
