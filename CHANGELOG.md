@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Malformed text raises `NetimpsValueError`** from `parse`, `MACAddress`,
+  `Fqdn`, `normalize_host`, `join_host` and the query check of
+  `resolve_nslookup`; message unchanged. It is a `ValueError`, so
+  `except ValueError` still catches it. `parse` now also converts the
+  `ipaddress` builders' own errors, chained as `__cause__`.
 - `ResolutionError` and `AddressInUseError` now also derive from
   `NetimpsError`. Every existing `except` clause keeps matching.
 - `resolve_wire` and `resolve_doh` chain an unreadable reply's

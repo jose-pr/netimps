@@ -62,6 +62,7 @@ from __future__ import annotations
 import sys as _sys
 from typing import Any, Iterable, Iterator, List, Optional, Tuple, Union
 from ._dns import resolve
+from ._exceptions import NetimpsValueError
 from ._parse import is_valid
 from ._ping import ping
 
@@ -99,7 +100,7 @@ def _idna_encode(label: str) -> str:
     try:
         return label.encode("idna").decode("ascii")
     except UnicodeError as exc:
-        raise ValueError("label %r is not encodable as IDNA: %s" % (label, exc))
+        raise NetimpsValueError("label %r is not encodable as IDNA: %s" % (label, exc))
 
 
 class Fqdn:
@@ -142,7 +143,7 @@ class Fqdn:
                 )
 
         if not flat:
-            raise ValueError("Fqdn requires at least one label")
+            raise NetimpsValueError("Fqdn requires at least one label")
 
         for index, part in enumerate(flat):
             last = index == len(flat) - 1
@@ -156,12 +157,12 @@ class Fqdn:
                 # Caught here rather than falling through to the empty-label
                 # check, which would report "consecutive dots" for a string
                 # that has no dots at all.
-                raise ValueError("a name cannot be empty")
+                raise NetimpsValueError("a name cannot be empty")
             # Only the final part may carry the root dot; `Fqdn("a.", "b")`
             # would otherwise silently produce a name with a hole in it.
             if text.endswith(".") and text != ".":
                 if not last:
-                    raise ValueError(
+                    raise NetimpsValueError(
                         "only the last part may end in a dot, got %r at position %d"
                         % (text, index)
                     )
@@ -169,13 +170,13 @@ class Fqdn:
                 text = text[:-1]
             if text == ".":
                 if not last:
-                    raise ValueError("the root label may only come last")
+                    raise NetimpsValueError("the root label may only come last")
                 absolute = True
                 continue
             labels.extend(text.split(".") if "." in text else [text])
 
         if not labels:
-            raise ValueError("Fqdn requires at least one label")
+            raise NetimpsValueError("Fqdn requires at least one label")
 
         # Reject an address *before* the label rules, so the error names the
         # real problem: "10.0.0.1" would otherwise pass every label check and
@@ -185,7 +186,7 @@ class Fqdn:
 
         candidate = ".".join(labels)
         if is_valid(candidate, IPAddress) or is_valid(candidate.strip("[]"), IPAddress):
-            raise ValueError(
+            raise NetimpsValueError(
                 "%r is an IP address, not a domain name -- use netimps.Host for "
                 "a value that may be either" % (candidate,)
             )
@@ -193,13 +194,13 @@ class Fqdn:
         encoded = []
         for label in labels:
             if not label:
-                raise ValueError(
+                raise NetimpsValueError(
                     "empty label in %r -- consecutive dots are not a name"
                     % (candidate,)
                 )
             label = _idna_encode(label)
             if len(label) > MAX_LABEL_LENGTH:
-                raise ValueError(
+                raise NetimpsValueError(
                     "label %r is %d octets, over the %d-octet limit"
                     % (label, len(label), MAX_LABEL_LENGTH)
                 )
@@ -207,7 +208,7 @@ class Fqdn:
 
         total = len(".".join(encoded))
         if total > MAX_NAME_LENGTH:
-            raise ValueError(
+            raise NetimpsValueError(
                 "name is %d octets, over the %d-octet limit" % (total, MAX_NAME_LENGTH)
             )
 
@@ -599,7 +600,7 @@ class Fqdn:
         reversed name can pass through a form that parses as an address.
         """
         if not labels:
-            raise ValueError("a name needs at least one label")
+            raise NetimpsValueError("a name needs at least one label")
         instance = object.__new__(cls)
         object.__setattr__(instance, "_labels", tuple(labels))
         object.__setattr__(instance, "_absolute", bool(absolute))

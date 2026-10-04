@@ -42,7 +42,11 @@ from subprocess import run as _run
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from . import _dnswire
-from ._exceptions import ResolutionError, ResolutionTimeoutError
+from ._exceptions import (
+    NetimpsValueError,
+    ResolutionError,
+    ResolutionTimeoutError,
+)
 from ._ip import AddressLike, _dst_argument
 from ._parse import try_parse
 
@@ -566,15 +570,15 @@ def _check_nslookup_query(query: str) -> None:
     reaches interactive mode by the same route.
     """
     if not query.strip():
-        raise ValueError("query must be a non-empty hostname or address")
+        raise NetimpsValueError("query must be a non-empty hostname or address")
     if query.startswith("-"):
-        raise ValueError(
+        raise NetimpsValueError(
             "refusing to look up %r: a leading '-' is read as an nslookup "
             "option, not a name, and nslookup has no '--' separator to "
             "escape it with" % (query,)
         )
     if any(ch.isspace() or ord(ch) < 0x20 or ord(ch) == 0x7F for ch in query):
-        raise ValueError(
+        raise NetimpsValueError(
             "refusing to look up %r: a hostname or address cannot contain "
             "whitespace or control characters" % (query,)
         )

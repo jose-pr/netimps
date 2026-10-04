@@ -14,6 +14,8 @@ from __future__ import annotations
 import re as _re
 from typing import Optional, Union
 
+from ._exceptions import NetimpsValueError
+
 __all__ = ["MACAddress", "MACLike"]
 
 #: Anything :class:`MACAddress` accepts. ``bytearray`` is listed because the
@@ -75,7 +77,9 @@ class MACAddress:
         if isinstance(value, (bytes, bytearray)):
             octets = bytes(value)
             if len(octets) != 6:
-                raise ValueError("MAC address must be 6 bytes, got %d" % len(octets))
+                raise NetimpsValueError(
+                    "MAC address must be 6 bytes, got %d" % len(octets)
+                )
             self._octets = octets
             return
         if isinstance(value, bool):
@@ -84,13 +88,13 @@ class MACAddress:
             raise TypeError("Cannot build MACAddress from %r" % (type(value).__name__,))
         if isinstance(value, int):
             if value < 0 or value > 0xFFFFFFFFFFFF:
-                raise ValueError("MAC integer out of range: %r" % (value,))
+                raise NetimpsValueError("MAC integer out of range: %r" % (value,))
             self._octets = value.to_bytes(6, "big")
             return
         if isinstance(value, str):
             text = value.strip()
             if not self._VALID_MAC.match(text):
-                raise ValueError("Invalid MAC address: %r" % (value,))
+                raise NetimpsValueError("Invalid MAC address: %r" % (value,))
             hexdigits = _re.sub(r"[.:-]", "", text)
             self._octets = bytes.fromhex(hexdigits)
             return

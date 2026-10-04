@@ -116,6 +116,10 @@ keyword. Key behaviours:
 - **Networks are non-strict by default**, unlike the stdlib:
   `parse("10.0.0.5/24", IPNetwork)` normalises to `10.0.0.0/24` instead of
   raising. Pass `strict=True` for stdlib behaviour.
+- **Malformed input raises `NetimpsValueError`** (a `ValueError`), including
+  the `ipaddress` builders' own `AddressValueError`/`NetmaskValueError`, which
+  are chained as `__cause__`. A callable `type` that is not one of the
+  package's builders raises whatever it raises.
 - **Only `ValueError`/`TypeError` count as "invalid".** Anything else (an
   `OSError` from a network-touching builder, a bug in it) propagates rather
   than being disguised as a rejected value.
@@ -386,7 +390,12 @@ caller would already catch, so an existing `except ValueError` /
 | `AddressInUseError` | `NetimpsError`, `OSError` | `bind()` found the address taken |
 
 A caller's own mistake (a bad option, a wrong argument type) is plain
-`ValueError` / `TypeError`, never a `NetimpsError`.
+`ValueError` / `TypeError`, never a `NetimpsError`. `NetimpsValueError` is what
+a function whose job is to turn text into a value raises for text it cannot
+read: `parse`, `MACAddress(...)`, `Fqdn(...)`, `split`-style host and port
+splitting (`normalize_host`, `join_host`) and `resolve_nslookup`'s query
+check. A bad option elsewhere (`ping`'s `ttl`, `tcp_check`'s port, a
+`timeout`) stays a plain `ValueError`.
 
 **`ResolutionError`** — a backend could not even *attempt* the
 query: a missing `nslookup` binary, `dnspython` not installed, an `rdtype` the

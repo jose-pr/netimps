@@ -13,6 +13,8 @@ import ipaddress as _ipaddress
 import socket as _socket
 from typing import TYPE_CHECKING, Any, Iterable, List, Optional, Tuple, Union
 
+from ._exceptions import NetimpsValueError
+
 if TYPE_CHECKING:
     # Type-only, to keep `Host.fqdn` precisely annotated without a runtime
     # cycle: `_fqdn` imports this module's `IPAddress` to reject an address
@@ -397,17 +399,17 @@ def normalize_host(
             # `None` and turned it into the hostname "None", which is the worst
             # kind of answer: a plausible one that is wrong, and one a caller
             # cannot detect. An int or a list went the same way.
-            raise ValueError(
+            raise NetimpsValueError(
                 "host must be a string, an address, a Host or an Fqdn, got %r" % (text,)
             )
     if not text.strip():
-        raise ValueError("host must be a non-empty string, got %r" % (text,))
+        raise NetimpsValueError("host must be a non-empty string, got %r" % (text,))
     text = text.strip()
 
     if text.startswith("["):
         end = text.find("]")
         if end == -1:
-            raise ValueError("unclosed '[' in %r" % (text,))
+            raise NetimpsValueError("unclosed '[' in %r" % (text,))
         host = text[1:end]
         rest = text[end + 1 :]
         if not rest:
@@ -415,7 +417,7 @@ def normalize_host(
         elif rest.startswith(":"):
             port = _parse_port(rest[1:], text)
         else:
-            raise ValueError("unexpected %r after ']' in %r" % (rest, text))
+            raise NetimpsValueError("unexpected %r after ']' in %r" % (rest, text))
     elif text.count(":") > 1:
         # More than one colon and no brackets: a bare IPv6 address is the only
         # thing that can be, and splitting would turn "::1" into host "::"
@@ -423,7 +425,7 @@ def normalize_host(
         # assumption returned the whole unparseable string as the host, which
         # is a confident wrong answer the caller cannot detect.
         if not _is_ipv6_literal(text):
-            raise ValueError(
+            raise NetimpsValueError(
                 "%r has several colons but is not an IPv6 address; "
                 "bracket it as [host]:port if a port was meant" % (text,)
             )
@@ -435,7 +437,7 @@ def normalize_host(
         host, port = text, default_port
 
     if not host:
-        raise ValueError("empty host in %r" % (text,))
+        raise NetimpsValueError("empty host in %r" % (text,))
     return host, port
 
 
@@ -456,9 +458,9 @@ def _parse_port(raw: str, original: str) -> int:
     try:
         port = int(raw)
     except (TypeError, ValueError):
-        raise ValueError("invalid port %r in %r" % (raw, original))
+        raise NetimpsValueError("invalid port %r in %r" % (raw, original))
     if not 0 <= port <= 65535:
-        raise ValueError("port out of range in %r" % (original,))
+        raise NetimpsValueError("port out of range in %r" % (original,))
     return port
 
 
@@ -641,7 +643,7 @@ def join_host(host: "Union[str, IPAddress, Any]", port: "Optional[int]" = None) 
     :raises ValueError: for an empty host, or a port outside 0-65535.
     """
     if host is None:
-        raise ValueError("host must not be None")
+        raise NetimpsValueError("host must not be None")
 
     # An interface carries an address plus a prefix; the address is the part a
     # socket address wants.
@@ -651,7 +653,7 @@ def join_host(host: "Union[str, IPAddress, Any]", port: "Optional[int]" = None) 
 
     text = str(host).strip()
     if not text:
-        raise ValueError("host must not be empty")
+        raise NetimpsValueError("host must not be empty")
 
     if text.startswith("[") or text.endswith("]"):
         # A mismatched bracket has to raise, not fall through: `"[::1"` is not an
@@ -659,11 +661,11 @@ def join_host(host: "Union[str, IPAddress, Any]", port: "Optional[int]" = None) 
         # which is garbage the caller cannot detect. `normalize_host` rejects the
         # same input, and the pair must agree.
         if not (text.startswith("[") and text.endswith("]")):
-            raise ValueError("mismatched brackets in %r" % (text,))
+            raise NetimpsValueError("mismatched brackets in %r" % (text,))
         # Already bracketed: validate the inside rather than trusting it, so a
         # malformed literal is caught here and not by the caller's resolver.
         if not _is_ipv6_literal(text[1:-1]):
-            raise ValueError("%r is bracketed but not an IPv6 address" % (text,))
+            raise NetimpsValueError("%r is bracketed but not an IPv6 address" % (text,))
         text = text[1:-1]
 
     if _is_ipv6_literal(text):
@@ -677,7 +679,7 @@ def join_host(host: "Union[str, IPAddress, Any]", port: "Optional[int]" = None) 
 
     port = int(port)
     if not 0 <= port <= 65535:
-        raise ValueError("port must be in 0-65535, got %r" % (port,))
+        raise NetimpsValueError("port must be in 0-65535, got %r" % (port,))
     return "%s:%d" % (text, port)
 
 

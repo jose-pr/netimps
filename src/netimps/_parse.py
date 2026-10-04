@@ -22,6 +22,7 @@ from typing import (
 )
 from typing import get_origin as _typing_get_origin
 
+from ._exceptions import NetimpsValueError
 from ._ip import _BUILDER_DEFAULTS, _BUILDERS, _CONCRETE, IPAddress
 
 if TYPE_CHECKING:
@@ -174,9 +175,11 @@ def parse(  # type: ignore[no-redef]  # the overloads above are the signature
     address with a prefix normalises to its network instead of raising. Extra
     ``kwargs`` pass through to the underlying builder.
 
-    Raises :class:`ValueError` on malformed input or a family mismatch, and
-    :class:`TypeError` for an unusable ``type``. Use :func:`try_parse` for the
-    non-raising form.
+    Raises :class:`NetimpsValueError` (a :class:`ValueError`) on malformed input
+    or a family mismatch -- including the ``ipaddress`` builders' own errors --
+    and :class:`TypeError` for an unusable ``type``. A callable ``type`` that is
+    not one of the package's builders raises whatever it raises. Use
+    :func:`try_parse` for the non-raising form.
     """
     # Guarded: an unhashable ``type`` would make these lookups raise TypeError,
     # which try_parse would then swallow into `default` -- turning a caller bug
@@ -193,10 +196,17 @@ def parse(  # type: ignore[no-redef]  # the overloads above are the signature
 
     options = dict(_BUILDER_DEFAULT_TABLE.get(builder, {}))
     options.update(kwargs)
-    result = builder(value, **options)
+    try:
+        result = builder(value, **options)
+    except NetimpsValueError:
+        raise
+    except ValueError as exc:
+        # `ipaddress` raises its own ValueError subclasses (`AddressValueError`,
+        # `NetmaskValueError`) or a plain one; a caller catches one type.
+        raise NetimpsValueError(str(exc)) from exc
 
     if wanted is not None and not isinstance(result, type):
-        raise ValueError("%r is not a %s" % (value, type.__name__))
+        raise NetimpsValueError("%r is not a %s" % (value, type.__name__))
     return result
 
 

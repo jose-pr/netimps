@@ -206,3 +206,57 @@ def test_wire_chains_an_unreadable_reply_as_the_cause():
         thread.join(3)
         junk.close()
     assert isinstance(caught.value.__cause__, DNSDecodeError)
+
+
+# --------------------------------------------------------------------------- #
+# Which ValueError is the package's, and which is the caller's own mistake.
+# --------------------------------------------------------------------------- #
+_MALFORMED_TEXT = [
+    pytest.param(lambda: netimps.parse("not an address"), id="parse"),
+    pytest.param(
+        lambda: netimps.parse("10.0.0.0/33", netimps.IPNetwork), id="parse-net"
+    ),
+    pytest.param(lambda: netimps.parse("::1", netimps.IPv4Address), id="parse-family"),
+    pytest.param(lambda: netimps.MACAddress("not a mac"), id="MACAddress"),
+    pytest.param(lambda: netimps.Fqdn("a..b"), id="Fqdn"),
+    pytest.param(lambda: netimps.normalize_host("[::1"), id="normalize_host"),
+    pytest.param(
+        lambda: netimps.normalize_host("host:notaport"), id="normalize_host-port"
+    ),
+    pytest.param(lambda: netimps.join_host("", 80), id="join_host"),
+    pytest.param(lambda: netimps.resolve_nslookup("-evil"), id="nslookup-query"),
+]
+
+
+@pytest.mark.parametrize("call", _MALFORMED_TEXT)
+def test_malformed_text_raises_the_package_value_error(call):
+    """A caller catching `NetimpsValueError` must see every text-to-value
+    failure, and `except ValueError` must keep working for them."""
+    with pytest.raises(NetimpsValueError) as caught:
+        call()
+    assert isinstance(caught.value, ValueError)
+
+
+def test_parse_chains_the_ipaddress_error_as_the_cause():
+    with pytest.raises(NetimpsValueError) as caught:
+        netimps.parse("10.0.0.0/33", netimps.IPNetwork)
+    assert isinstance(caught.value.__cause__, ValueError)
+
+
+def test_a_caller_option_error_is_a_plain_value_error():
+    """A bad option is the caller's mistake, not something netimps reports:
+    it must be distinguishable by type from a malformed-text failure."""
+    with pytest.raises(ValueError) as caught:
+        netimps.tcp_check("127.0.0.1", 70000)
+    assert not isinstance(caught.value, NetimpsError)
+
+
+def test_a_custom_parse_callable_keeps_its_own_error():
+    """`parse` wraps only the package's builders, not a caller's callable."""
+
+    def picky(value):
+        raise ValueError("mine")
+
+    with pytest.raises(ValueError) as caught:
+        netimps.parse("x", picky)
+    assert not isinstance(caught.value, NetimpsError)
