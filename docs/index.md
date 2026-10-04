@@ -49,6 +49,10 @@ A few behaviours are deliberate:
 
 - **`Interface.is_loopback` is never derived from the name** — `lo`, `lo0` and
   `Loopback Pseudo-Interface 1` share no spelling.
+- **`Interface.is_up` says whether an interface is usable** (`IFF_UP` and
+  `IFF_RUNNING`, or the Windows operational status). On Windows an address the
+  system marks tentative or duplicate is left out, so a media-disconnected
+  adapter stays listed without the `169.254` address it cannot bind.
 - **Concrete types are strict about family.** `parse("::1", IPAddress)` works;
   `parse("::1", IPv4Address)` raises rather than quietly returning v6.
 - **`resolve` raises on a malformed query** rather than returning `[]` — a

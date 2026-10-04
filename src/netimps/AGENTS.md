@@ -261,11 +261,17 @@ is deliberately not used.
 | `.index` | `if_nametoindex` value, `0` if unknown |
 | `.mac` | `MACAddress` or `None`; an all-zero hardware address is reported as `None` |
 | `.ips` | every address with its real prefix, as a **tuple** |
-| `.ipv4` / `.ipv6` | the split views |
+| `.ipv4` / `.ipv6` | the split views, **tuples** like `.ips` |
 | `.mtu` | link MTU in bytes, or `None` |
 | `.primary_ip(ipv6=False, *, loopback_ok=True)` | pick **one** entry from `.ips`, ranked routable → loopback → link-local, or `None` |
+| `.is_up` | `bool` or `None`: `IFF_UP` and `IFF_RUNNING` on POSIX, the operational status on Windows; `None` when the system did not say |
 | `.is_loopback` | the **kernel's** loopback flag when it was reported, otherwise derived from the addresses |
-| `.raw` | `None` unless `raw=True`; platform-specific leftovers |
+| `.raw` | `None` unless `raw=True`; a **read-only mapping** of platform-specific leftovers, tuples where the system gave a list |
+
+The constructor raises `TypeError` for a field of the wrong type: `name` is a `str`,
+`index` an `int`, `mac` a `MACAddress` or `None`, each of `ips` an
+`IPv4Interface`/`IPv6Interface`, `mtu` an `int` or `None`, `is_up` and `is_loopback`
+a `bool` or `None`. `repr` is a constructor call that rebuilds an equal value.
 
 - **`is_loopback` is the kernel's answer, and never the name.** `IFF_LOOPBACK`
   on POSIX, `IF_TYPE_SOFTWARE_LOOPBACK` on Windows, captured during
@@ -281,11 +287,29 @@ is deliberately not used.
   loopback MAC as `00:00:00:00:00:00` where macOS and Windows report nothing;
   the all-zero address is normalised away.
 - **`.raw` is not portable** and sits outside the stability guarantee — the
-  escape hatch for adapter GUIDs, `IFF_*` flags, WMI correlation.
-- **Never raises for enumeration failure.** If the native call is unavailable it
-  degrades to hostname resolution, where **prefixes are fiction** (every address
-  becomes `/32` or `/128` under an interface named `"<unknown>"`, with
-  no flag reported). Check `iface.name == "<unknown>"` to detect it.
+  escape hatch for adapter GUIDs, `IFF_*` flags, WMI correlation. It is
+  read-only, so a cached result shares nothing a caller could change.
+- **`is_up` and a down interface.** POSIX keeps the addresses of an interface
+  that is down: they are configured and can be bound, and `is_up` is how a caller
+  tells. **On Windows an adapter that is down stays listed** with its name, MAC,
+  index and MTU, but an address the system marks tentative or duplicate is left
+  out of `ips`: a media-disconnected adapter holds a self-assigned `169.254`
+  address in the state *Tentative*, which `bind` refuses with `WSAEADDRNOTAVAIL`
+  and `ipconfig` does not show. Deprecated and preferred addresses are kept.
+- **The Windows `index` is `IfIndex`, or `Ipv6IfIndex` when that is 0** (an
+  adapter with IPv4 unbound).
+- **BSD netmasks.** The kernel trims a netmask sockaddr after its last non-zero
+  byte, so a short or empty one stands for the zero-filled mask: FreeBSD's `lo0`
+  (`ifconfig`: `netmask 0x0`) is `127.0.0.1/0`.
+- **Degrades when the platform will not answer.** An `OSError` from the native
+  call gives hostname resolution, where **prefixes are fiction** (every address
+  becomes `/32` or `/128` under an interface named `"<unknown>"`, with no flag
+  reported, the reason in `raw["reason"]` and logged once at debug). Check
+  `iface.name == "<unknown>"` to detect it. Any other exception is a defect in
+  the walk and propagates.
+- **`clear_interface_cache()` also discards an enumeration already running**: its
+  result is not stored, so `get_interfaces(cache=math.inf)` after a clear never
+  serves a snapshot that predates it.
 - **`primary_ip()` is a selection, not "the" address** — an adapter routinely
   has several. It returns the **same element type as `.ips`** (an
   `ip_interface`, carrying the prefix) and the result *is* one of them; use
@@ -302,8 +326,8 @@ is deliberately not used.
   real NIC has no loopback entry so the rank takes nothing from it. A NIC
   holding *only* a link-local address still yields it, and `loopback_ok=False`
   skips the loopback rank rather than returning `None`.
-- `__eq__` compares name, index, MAC, addresses and MTU, and the hash covers
-  exactly those; the loopback flag and `.raw` are deliberately outside both.
+- `__eq__` compares name, index, MAC, addresses, MTU and `is_up`, and the hash
+  covers exactly those; the loopback flag and `.raw` are deliberately outside both.
 
 **`iter_addresses(interfaces=None, *, family=None)`** — the flattened
 `(interface, address)` view, yielded once per address rather than per adapter,

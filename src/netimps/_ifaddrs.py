@@ -48,11 +48,13 @@ from __future__ import annotations
 import ctypes as _ctypes
 from functools import partial as _partial
 import ipaddress as _ipaddress
+import logging as _logging
 import socket as _socket
 import struct as _struct
 import sys as _sys
 import threading as _threading
 import time as _time
+from types import MappingProxyType as _MappingProxyType
 from ctypes import (
     POINTER,
     Structure,
@@ -72,6 +74,7 @@ from typing import (
     Iterable,
     Iterator,
     List,
+    Mapping,
     Optional,
     Sequence,
     Tuple,
@@ -92,6 +95,8 @@ __all__ = [
 
 _IPInterface = Union[_ipaddress.IPv4Interface, _ipaddress.IPv6Interface]
 
+_log = _logging.getLogger(__name__)
+
 #: True on macOS and the BSDs, whose ``sockaddr`` carries a leading ``sa_len``
 #: byte that Linux does not have. See ``_SockaddrHeader`` below -- this single
 #: flag is the difference between reading the address family correctly and
@@ -108,6 +113,10 @@ _AF_LINK = 18  # macOS / BSD
 
 #: ``IFF_LOOPBACK`` in ``ifa_flags``. Same value (8) on Linux and on the BSDs.
 _IFF_LOOPBACK = 0x8
+#: ``IFF_UP`` and ``IFF_RUNNING`` in ``ifa_flags``: configured up, and the link
+#: has carrier. The same values (0x1, 0x40) on Linux and on the BSDs.
+_IFF_UP = 0x1
+_IFF_RUNNING = 0x40
 #: ``IF_TYPE_SOFTWARE_LOOPBACK`` in ``IP_ADAPTER_ADDRESSES.IfType`` (IANA
 #: ifType 24), the Windows spelling of the same fact.
 _IF_TYPE_SOFTWARE_LOOPBACK = 24
@@ -119,6 +128,36 @@ _IF_TYPE_SOFTWARE_LOOPBACK = 24
 #: exactly 65507 through :func:`netimps.max_udp_payload`, which is the measured
 #: largest UDP payload loopback actually delivers.
 _UNBOUNDED_MTU = 65535
+
+
+def _freeze(value: Any) -> Any:
+    """``value`` with every list a tuple and every mapping read-only."""
+    if isinstance(value, Mapping):
+        return _MappingProxyType({key: _freeze(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return tuple(_freeze(item) for item in value)
+    return value
+
+
+def _thaw(value: Any) -> Any:
+    """The inverse of :func:`_freeze` for what pickle can carry: plain dicts."""
+    if isinstance(value, Mapping):
+        return {key: _thaw(item) for key, item in value.items()}
+    return value
+
+
+def _check_optional(name: str, value: object, kind: type) -> None:
+    """``TypeError`` unless ``value`` is ``None`` or exactly of ``kind``'s family.
+
+    A ``bool`` is not accepted where an ``int`` is asked for.
+    """
+    if value is None:
+        return
+    if not isinstance(value, kind) or (kind is int and isinstance(value, bool)):
+        raise TypeError(
+            "%s must be %s or None, not %r"
+            % (name, kind.__name__, type(value).__name__)
+        )
 
 
 class Interface:
@@ -145,25 +184,38 @@ class Interface:
             :func:`netimps.max_udp_payload` derives from it, and Linux reports its
             own ``lo`` as 65536 rather than as nothing. This is the **link** MTU;
             for a path see :func:`netimps.discover_mtu`.
+        is_up: Whether the interface is usable: ``IFF_UP`` and ``IFF_RUNNING``
+            on POSIX, the operational status (``IfOperStatusUp``) on Windows.
+            ``None`` when the system did not say. POSIX keeps the addresses of
+            an interface that is down, since they are configured and can be
+            bound; on Windows an adapter that is down stays listed with its name,
+            MAC, index and MTU, and an address the system marks tentative or
+            duplicate is left out of ``ips``.
         is_loopback: The kernel's own loopback flag (``IFF_LOOPBACK`` on POSIX,
             ``IF_TYPE_SOFTWARE_LOOPBACK`` on Windows) when the enumeration
             reported one; otherwise derived from the addresses. The constructor
             argument of the same name is ``None`` for "not reported" -- the
             degraded enumeration path, and objects built by hand.
         raw: ``None`` unless enumerated with ``get_interfaces(raw=True)``, in
-            which case a platform-specific dict of leftovers. **Not portable**
-            and explicitly outside the stability guarantee.
+            which case a **read-only** mapping of platform-specific leftovers,
+            with a tuple wherever the system gave a list. **Not portable** and
+            explicitly outside the stability guarantee.
+
+    The constructor raises :class:`TypeError` for a field of the wrong type
+    (``mac`` must be a :class:`MACAddress`, each of ``ips`` an
+    ``IPv4Interface``/``IPv6Interface``).
     """
 
-    __slots__ = ("name", "index", "mac", "ips", "mtu", "_is_loopback", "raw")
+    __slots__ = ("name", "index", "mac", "ips", "mtu", "is_up", "_is_loopback", "raw")
 
     name: str
     index: int
     mac: "Optional[MACAddress]"
     ips: "Tuple[_IPInterface, ...]"
     mtu: "Optional[int]"
+    is_up: "Optional[bool]"
     _is_loopback: "Optional[bool]"
-    raw: "Optional[Dict[str, Any]]"
+    raw: "Optional[Mapping[str, Any]]"
 
     def __init__(
         self,
@@ -173,16 +225,41 @@ class Interface:
         mac: "Optional[MACAddress]" = None,
         ips: "Optional[Iterable[_IPInterface]]" = None,
         mtu: "Optional[int]" = None,
-        raw: "Optional[Dict[str, Any]]" = None,
+        raw: "Optional[Mapping[str, Any]]" = None,
         is_loopback: "Optional[bool]" = None,
+        is_up: "Optional[bool]" = None,
     ) -> None:
+        if not isinstance(name, str):
+            raise TypeError("name must be str, not %r" % (type(name).__name__,))
+        if not isinstance(index, int) or isinstance(index, bool):
+            raise TypeError("index must be int, not %r" % (type(index).__name__,))
+        _check_optional("mac", mac, MACAddress)
+        _check_optional("mtu", mtu, int)
+        _check_optional("is_loopback", is_loopback, bool)
+        _check_optional("is_up", is_up, bool)
+        if raw is not None and not isinstance(raw, Mapping):
+            raise TypeError(
+                "raw must be a mapping or None, not %r" % (type(raw).__name__,)
+            )
+        if isinstance(ips, (str, bytes)):
+            raise TypeError("ips must be an iterable of IPv4Interface/IPv6Interface")
+        entries = () if ips is None else tuple(ips)
+        for entry in entries:
+            if not isinstance(
+                entry, (_ipaddress.IPv4Interface, _ipaddress.IPv6Interface)
+            ):
+                raise TypeError(
+                    "ips must hold IPv4Interface/IPv6Interface, not %r"
+                    % (type(entry).__name__,)
+                )
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "index", index)
         object.__setattr__(self, "mac", mac)
-        object.__setattr__(self, "ips", () if ips is None else tuple(ips))
+        object.__setattr__(self, "ips", entries)
         object.__setattr__(self, "mtu", mtu)
+        object.__setattr__(self, "is_up", is_up)
         object.__setattr__(self, "_is_loopback", is_loopback)
-        object.__setattr__(self, "raw", raw)
+        object.__setattr__(self, "raw", None if raw is None else _freeze(raw))
 
     def __reduce__(self) -> "Tuple[Any, Tuple[Any, ...]]":
         """Pickle and copy through the constructor.
@@ -198,8 +275,9 @@ class Interface:
                 mac=self.mac,
                 ips=self.ips,
                 mtu=self.mtu,
-                raw=self.raw,
+                raw=None if self.raw is None else _thaw(self.raw),
                 is_loopback=self._is_loopback,
+                is_up=self.is_up,
             ),
             (),
         )
@@ -322,23 +400,27 @@ class Interface:
         return None
 
     @property
-    def ipv4(self) -> "List[_ipaddress.IPv4Interface]":
-        """Just the IPv4 addresses."""
-        return [ip for ip in self.ips if isinstance(ip, _ipaddress.IPv4Interface)]
+    def ipv4(self) -> "Tuple[_ipaddress.IPv4Interface, ...]":
+        """Just the IPv4 addresses, as a tuple like :attr:`ips`."""
+        return tuple(ip for ip in self.ips if isinstance(ip, _ipaddress.IPv4Interface))
 
     @property
-    def ipv6(self) -> "List[_ipaddress.IPv6Interface]":
-        """Just the IPv6 addresses."""
-        return [ip for ip in self.ips if isinstance(ip, _ipaddress.IPv6Interface)]
+    def ipv6(self) -> "Tuple[_ipaddress.IPv6Interface, ...]":
+        """Just the IPv6 addresses, as a tuple like :attr:`ips`."""
+        return tuple(ip for ip in self.ips if isinstance(ip, _ipaddress.IPv6Interface))
 
     def __repr__(self) -> str:
-        return "Interface(name=%r, index=%r, mac=%r, ips=%r, mtu=%r)" % (
+        """A constructor call that rebuilds an equal value."""
+        text = "Interface(name=%r, index=%r, mac=%r, ips=%r, mtu=%r" % (
             self.name,
             self.index,
-            None if self.mac is None else str(self.mac),
-            [str(ip) for ip in self.ips],
+            self.mac,
+            self.ips,
             self.mtu,
         )
+        if self.is_up is not None:
+            text += ", is_up=%r" % (self.is_up,)
+        return text + ")"
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Interface):
@@ -349,6 +431,7 @@ class Interface:
             and self.mac == other.mac
             and self.ips == other.ips
             and self.mtu == other.mtu
+            and self.is_up == other.is_up
         )
 
     def __hash__(self) -> int:
@@ -357,9 +440,9 @@ class Interface:
         Defining ``__eq__`` without this sets ``__hash__`` to ``None``, which
         made ``set(get_interfaces())`` -- de-duplicating adapters, the obvious
         operation on the package's flagship return value -- raise
-        ``TypeError``. :attr:`raw` is a dict and is left out of both.
+        ``TypeError``. :attr:`raw` is left out of both.
         """
-        return hash((self.name, self.index, self.mac, self.ips, self.mtu))
+        return hash((self.name, self.index, self.mac, self.ips, self.mtu, self.is_up))
 
 
 # ---------------------------------------------------------------------------
@@ -382,11 +465,13 @@ class _Pending:
         mtu: "Optional[int]",
         is_loopback: bool,
         raw: "Optional[Dict[str, Any]]",
+        is_up: "Optional[bool]" = None,
     ) -> None:
         self.name = name
         self.index = index
         self.mtu = mtu
         self.is_loopback = is_loopback
+        self.is_up = is_up
         self.raw = raw
         self.mac: "Optional[MACAddress]" = None
         self.ips: "List[_IPInterface]" = []
@@ -400,7 +485,27 @@ class _Pending:
             mtu=self.mtu,
             raw=self.raw,
             is_loopback=self.is_loopback,
+            is_up=self.is_up,
         )
+
+
+def _posix_is_up(flags: int) -> bool:
+    """Configured up *and* with carrier: ``IFF_UP`` and ``IFF_RUNNING``."""
+    return bool(flags & _IFF_UP) and bool(flags & _IFF_RUNNING)
+
+
+def _bsd_mask_bytes(sa_len: int, address_offset: int, mask: bytes) -> bytes:
+    """The netmask bytes a BSD ``sockaddr`` really carries, zero-filled to width.
+
+    The kernel trims a netmask sockaddr after its last non-zero byte, and
+    ``sa_len`` says how much is left: 0 for an all-zero mask (FreeBSD's
+    loopback, which ``ifconfig`` prints as ``netmask 0x0``), 5 for
+    ``255.0.0.0``. ``address_offset`` is where the address bytes begin inside
+    the sockaddr (4 for ``sockaddr_in``, 8 for ``sockaddr_in6``). Whatever the
+    struct overlay read past ``sa_len`` is not the mask and is replaced by zero.
+    """
+    present = max(0, min(sa_len - address_offset, len(mask)))
+    return bytes(mask[:present]) + bytes(len(mask) - present)
 
 
 def _prefix_from_netmask(packed: bytes) -> int:
@@ -661,6 +766,7 @@ def _posix_interfaces(want_raw: bool) -> "List[Interface]":
                     # interface carries the same flags, so the first is enough.
                     is_loopback=bool(flags & _IFF_LOOPBACK),
                     raw={"flags": flags, "families": []} if want_raw else None,
+                    is_up=_posix_is_up(flags),
                 )
                 found[name] = iface
 
@@ -676,7 +782,14 @@ def _posix_interfaces(want_raw: bool) -> "List[Interface]":
                 prefix = 32
                 if node.ifa_netmask:
                     mask = _cast_sockaddr(node.ifa_netmask, _SockaddrIn)
-                    prefix = _prefix_from_netmask(bytes(mask.sin_addr))
+                    packed = bytes(mask.sin_addr)
+                    if _HAS_SA_LEN:
+                        packed = _bsd_mask_bytes(
+                            node.ifa_netmask.contents.sa_len,
+                            _SockaddrIn.sin_addr.offset,
+                            packed,
+                        )
+                    prefix = _prefix_from_netmask(packed)
                 built = _make_ip_interface(addr, prefix)
                 if built is not None:
                     iface.ips.append(built)
@@ -687,7 +800,14 @@ def _posix_interfaces(want_raw: bool) -> "List[Interface]":
                 prefix = 128
                 if node.ifa_netmask:
                     mask6 = _cast_sockaddr(node.ifa_netmask, _SockaddrIn6)
-                    prefix = _prefix_from_netmask(bytes(mask6.sin6_addr))
+                    packed6 = bytes(mask6.sin6_addr)
+                    if _HAS_SA_LEN:
+                        packed6 = _bsd_mask_bytes(
+                            node.ifa_netmask.contents.sa_len,
+                            _SockaddrIn6.sin6_addr.offset,
+                            packed6,
+                        )
+                    prefix = _prefix_from_netmask(packed6)
                 # Link-local addresses are only meaningful with their scope.
                 # ip_interface rejects the %scope suffix, so build without it
                 # and note the scope in raw only.
@@ -776,6 +896,34 @@ if _IS_WINDOWS:
     ]
 
 
+#: ``IP_DAD_STATE``: the duplicate-address-detection state of an address.
+#: Tentative (1) is still being checked and Duplicate (2) lost the check;
+#: neither can be bound or sent from. Deprecated (3) and Preferred (4) can.
+_IP_DAD_STATE_TENTATIVE = 1
+_IP_DAD_STATE_DUPLICATE = 2
+
+#: ``IF_OPER_STATUS``: Up is 1, Unknown 4. Down, testing, dormant, not present
+#: and lower-layer-down are all "not usable".
+_IF_OPER_STATUS_UP = 1
+_IF_OPER_STATUS_UNKNOWN = 4
+
+
+def _address_is_usable(dad_state: int) -> bool:
+    """False for an address the system marks tentative or duplicate."""
+    return dad_state not in (_IP_DAD_STATE_TENTATIVE, _IP_DAD_STATE_DUPLICATE)
+
+
+def _windows_is_up(oper_status: int) -> "Optional[bool]":
+    if oper_status == _IF_OPER_STATUS_UNKNOWN:
+        return None
+    return oper_status == _IF_OPER_STATUS_UP
+
+
+def _windows_index(if_index: int, ipv6_if_index: int) -> int:
+    """``IfIndex`` is the IPv4 index and is 0 on an adapter with IPv4 unbound."""
+    return int(if_index) or int(ipv6_if_index)
+
+
 def _win_sockaddr_to_str(lp_sockaddr: int) -> "Optional[str]":
     """Decode a Windows sockaddr pointer to a textual address."""
     if not lp_sockaddr:
@@ -856,6 +1004,8 @@ def _windows_interfaces(want_raw: bool) -> "List[Interface]":
         while addr_ptr:
             entry = addr_ptr.contents
             addr_ptr = entry.Next
+            if not _address_is_usable(int(entry.DadState)):
+                continue
             text = _win_sockaddr_to_str(entry.Address.lpSockaddr)
             if text is None:
                 continue
@@ -897,10 +1047,11 @@ def _windows_interfaces(want_raw: bool) -> "List[Interface]":
         interfaces.append(
             Interface(
                 name=name,
-                index=int(node.IfIndex),
+                index=_windows_index(node.IfIndex, node.Ipv6IfIndex),
                 mac=mac,
                 ips=ips,
                 mtu=mtu if mtu > 0 else None,
+                is_up=_windows_is_up(int(node.OperStatus)),
                 # IfType is the Windows spelling of IFF_LOOPBACK.
                 is_loopback=int(node.IfType) == _IF_TYPE_SOFTWARE_LOOPBACK,
                 raw=raw,
@@ -915,7 +1066,9 @@ def _windows_interfaces(want_raw: bool) -> "List[Interface]":
 # ---------------------------------------------------------------------------
 
 
-def _fallback_interfaces(want_raw: bool) -> "List[Interface]":
+def _fallback_interfaces(
+    want_raw: bool, reason: "Optional[BaseException]" = None
+) -> "List[Interface]":
     """Last-resort enumeration via ``getaddrinfo(gethostname())``.
 
     **Prefixes here are fiction.** There is no portable stdlib way to learn an
@@ -954,7 +1107,14 @@ def _fallback_interfaces(want_raw: bool) -> "List[Interface]":
             mac=None,
             ips=ips,
             raw=(
-                {"degraded": True, "reason": "native enumeration unavailable"}
+                {
+                    "degraded": True,
+                    "reason": (
+                        "native enumeration unavailable"
+                        if reason is None
+                        else str(reason) or type(reason).__name__
+                    ),
+                }
                 if want_raw
                 else None
             ),
@@ -999,6 +1159,11 @@ def _mac(octets: bytes) -> "Optional[MACAddress]":
 INTERFACE_CACHE_TTL = 1.0
 
 _CACHE_LOCK = _threading.Lock()
+#: Bumped by :func:`clear_interface_cache`. An enumeration stores its result
+#: only if no clear happened since it began.
+_GENERATION = 0
+#: Whether the fallback has been logged: once is enough.
+_fallback_logged = False
 #: ``raw`` flag -> (monotonic stamp, interfaces). Keyed by ``raw`` because the two
 #: return different data and sharing one entry would hand a caller the wrong shape.
 _INTERFACE_CACHE: "Dict[bool, Tuple[float, List[Interface]]]" = {}
@@ -1011,7 +1176,9 @@ def clear_interface_cache() -> None:
     watched netlink, or handled ``WM_NETWORKCHANGE`` -- and should not wait out
     the TTL. Harmless when nothing is cached.
     """
+    global _GENERATION
     with _CACHE_LOCK:
+        _GENERATION += 1
         _INTERFACE_CACHE.clear()
 
 
@@ -1054,38 +1221,30 @@ def _enumerate_interfaces(raw: bool) -> "List[Interface]":
     with _CACHE_LOCK:
         _ENUMERATIONS += 1
 
+    global _fallback_logged
     try:
         if _IS_WINDOWS:
             return _windows_interfaces(raw)
         return _posix_interfaces(raw)
-    except (OSError, AttributeError, ValueError):
-        return _fallback_interfaces(raw)
+    except OSError as exc:
+        # Only "the platform would not answer" degrades. A defect in the walk
+        # (a bad pointer, a missing symbol) raises and is not mistaken for a
+        # host with one interface.
+        if not _fallback_logged:
+            _fallback_logged = True
+            _log.debug(
+                "native interface enumeration failed, using hostname lookup: %s", exc
+            )
+        return _fallback_interfaces(raw, exc)
 
 
 def _copy_interfaces(found: "List[Interface]") -> "List[Interface]":
-    """The cached interfaces as the caller's own list, with no shared dict.
+    """The cached interfaces as the caller's own list.
 
-    An :class:`Interface` cannot change after construction, so the stored
-    objects are handed out as they are. The one exception is ``raw``, a dict a
-    caller could still mutate, so an interface that carries one is rebuilt
-    around a copy of it; those exist only after ``get_interfaces(raw=True)``.
+    An :class:`Interface` is immutable all the way down, ``raw`` included, so
+    the stored objects are handed out as they are.
     """
-    return [
-        (
-            iface
-            if iface.raw is None
-            else Interface(
-                name=iface.name,
-                index=iface.index,
-                mac=iface.mac,
-                ips=iface.ips,
-                mtu=iface.mtu,
-                raw=dict(iface.raw),
-                is_loopback=iface._is_loopback,
-            )
-        )
-        for iface in found
-    ]
+    return list(found)
 
 
 def get_interfaces(
@@ -1145,14 +1304,18 @@ def get_interfaces(
     that a packet flood can deny service on its own.
 
     **A cached call returns the same immutable objects, in a fresh list.**
-    ``Interface`` cannot change after construction and ``ips`` is a tuple, so
-    one caller cannot corrupt another's view; only ``raw``, a dict, is copied.
+    ``Interface`` cannot change after construction, ``ips`` is a tuple and
+    ``raw`` a read-only mapping, so one caller cannot corrupt another's view.
+    :func:`clear_interface_cache` also discards the result of an enumeration
+    that was already running when it was called.
 
-    Never raises for enumeration failure: if the native call is unavailable it
-    degrades to a hostname-resolution fallback in which prefixes are *not*
-    real (every address becomes a ``/32``/``/128`` under an interface named
-    ``"<unknown>"``). A degraded result is cached like any other -- it is the
-    honest answer for as long as the native call keeps failing.
+    Does not raise when the platform will not answer (an ``OSError`` from the
+    native call): it degrades to a hostname-resolution fallback in which
+    prefixes are *not* real (every address becomes a ``/32``/``/128`` under an
+    interface named ``"<unknown>"``, with the reason in ``raw`` and logged once
+    at debug). A degraded result is cached like any other -- it is the honest
+    answer for as long as the native call keeps failing. Any other exception is
+    a defect and propagates.
     """
     if cache is False:
         return _enumerate_interfaces(raw)
@@ -1167,6 +1330,8 @@ def get_interfaces(
         entry = _INTERFACE_CACHE.get(bool(raw))
         if entry is not None and (_time.monotonic() - entry[0]) < ttl:
             return _copy_interfaces(entry[1])
+        generation = _GENERATION
+    started = _time.monotonic()
 
     # Enumerated outside the lock: it is a syscall, and holding a lock across it
     # would serialise every thread behind the slowest platform call. Two threads
@@ -1174,7 +1339,10 @@ def get_interfaces(
     # the contention.
     found = _enumerate_interfaces(raw)
     with _CACHE_LOCK:
-        _INTERFACE_CACHE[bool(raw)] = (_time.monotonic(), found)
+        # Stamped when the enumeration began, and dropped if the cache was
+        # cleared meanwhile: the snapshot predates whatever the clear was for.
+        if _GENERATION == generation:
+            _INTERFACE_CACHE[bool(raw)] = (started, found)
     # The freshly enumerated list is already the caller's own, so it is handed
     # back directly; only a cache *hit* has to copy.
     return _copy_interfaces(found)

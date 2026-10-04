@@ -136,7 +136,20 @@ def test_interfaces_json_shape(capsys):
     payload = json.loads(out)
     assert isinstance(payload, list) and payload
     entry = payload[0]
-    assert {"name", "index", "mac", "mtu", "is_loopback", "addresses"} <= set(entry)
+    assert {"name", "index", "mac", "mtu", "is_loopback", "is_up", "addresses"} <= set(
+        entry
+    )
+
+
+def test_interfaces_json_with_raw_is_serialisable(capsys):
+    _, out, _ = _run(capsys, "interfaces", "--json", "--raw")
+    assert all("raw" in entry for entry in json.loads(out))
+
+
+def test_interfaces_text_marks_a_down_interface(capsys):
+    _, out, _ = _run(capsys, "interfaces")
+    down = [i for i in netimps.get_interfaces() if i.is_up is False]
+    assert out.count("[down]") == len(down)
 
 
 def test_interfaces_unknown_name_is_an_error(capsys):

@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`Interface.is_up`**: `True` when the interface is usable (`IFF_UP` and
+  `IFF_RUNNING` on POSIX, the operational status on Windows), `False` when it is
+  not, `None` when the system did not say; part of equality, the hash and the
+  repr, and shown by `netimps interfaces` (`[down]`, and `is_up` in `--json`).
+
 - **`UDPEndpoint.asend(data, dst, port, *, src=None)`**: `send` awaited, on
   every loop type. It waits for writability, with the loop running, when the
   kernel's send buffer is full.
@@ -272,6 +277,37 @@ probe says so in its prefix.
   `addr` command use it; `Host(x).resolve()` gives `(fqdn, ip)`.
 
 ### Fixed
+
+- **Windows no longer lists addresses it cannot bind.** An address the system
+  marks tentative or duplicate is left out of `Interface.ips`: the four
+  media-disconnected adapters on the review machine each held a `169.254`
+  address in the state *Tentative*, which `bind` refused with `WSAEADDRNOTAVAIL`
+  while `is_local_address` and `primary_ip` returned it. The adapters stay
+  listed, with `is_up` false. The Windows interface index falls back to
+  `Ipv6IfIndex` when `IfIndex` is 0, so an adapter with IPv4 unbound is not
+  reported as having no index.
+
+- **`Interface` is a value type that checks itself.** The constructor raises
+  `TypeError` for a wrong-typed field (it accepted `mac="notamac"`, `ips="ab"`
+  and `name=5`), `ipv4` and `ipv6` are tuples like `ips`, `raw` is a read-only
+  mapping with tuples inside (a list inside a cached `raw` was shared between
+  callers), and `repr` is a constructor call that rebuilds an equal value
+  (it printed the addresses as text).
+
+- **`clear_interface_cache()` is not lost to an enumeration in flight.** A
+  thread that began before the clear stored its pre-clear snapshot afterwards,
+  and `get_interfaces(cache=math.inf)` served it indefinitely; a clear now
+  invalidates every enumeration started before it.
+
+- **A defect in the native interface walk is not reported as a degraded host.**
+  The dispatch caught `OSError`, `AttributeError` and `ValueError`, so a bad
+  pointer read became a one-interface answer; only `OSError` degrades, with the
+  reason in `raw` and logged once at debug.
+
+- **On FreeBSD an address with a zero netmask is `/0`, not `/8`.** The kernel
+  trims a netmask sockaddr after its last non-zero byte and the bytes it omits
+  are zero; `127.0.0.1` on `lo0` (`ifconfig`: `netmask 0x0`) was reported as
+  `127.0.0.1/8`.
 
 - **`retry`, `backoff_delays` and `Backoff` share one set of argument rules,
   checked when they are called.** `backoff_delays` was a generator, so

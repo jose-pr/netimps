@@ -182,7 +182,8 @@ class Interfaces(_Base):
                         "mtu": i.mtu,
                         "is_loopback": i.is_loopback,
                         "addresses": [str(a) for a in i.ips],
-                        "raw": i.raw,
+                        "is_up": i.is_up,
+                        "raw": None if i.raw is None else dict(i.raw),
                     }
                     for i in found
                 ],
@@ -192,6 +193,8 @@ class Interfaces(_Base):
 
         for iface in found:
             flags = " [loopback]" if iface.is_loopback else ""
+            if iface.is_up is False:
+                flags += " [down]"
             print("%s%s" % (iface.name, flags))
             print("  index %s   mac %s   mtu %s" % (iface.index, iface.mac, iface.mtu))
             for address in iface.ips:

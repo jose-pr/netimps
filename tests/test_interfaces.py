@@ -6,6 +6,7 @@ consistency) rather than specific addresses, plus the pure helpers and the
 fallback path, which are testable exactly.
 """
 
+import collections.abc
 import ctypes
 import ipaddress
 import math
@@ -263,7 +264,7 @@ def test_enumerated_macs_are_never_all_zero():
 def test_raw_is_opt_in():
     assert all(i.raw is None for i in get_interfaces())
     with_raw = get_interfaces(raw=True)
-    assert all(isinstance(i.raw, dict) for i in with_raw)
+    assert all(isinstance(i.raw, collections.abc.Mapping) for i in with_raw)
 
 
 def test_enumeration_is_stable():
@@ -792,13 +793,14 @@ def test_a_cached_call_cannot_be_corrupted_by_its_caller():
     assert isinstance(second[0].ips, tuple)
 
 
-def test_a_cached_raw_dict_is_also_copied():
-    """`.raw` is a dict, so it is the one field a caller could still mutate."""
+def test_a_cached_raw_mapping_cannot_be_changed_by_a_caller():
+    """`.raw` is read-only, so a cache hit shares nothing a caller could poison."""
     found = netimps.get_interfaces(raw=True, cache=math.inf)
     with_raw = [i for i in found if i.raw is not None]
     if not with_raw:
         pytest.skip("this platform populated no raw data")
-    with_raw[0].raw["poison"] = True
+    with pytest.raises(TypeError):
+        with_raw[0].raw["poison"] = True
     again = netimps.get_interfaces(raw=True, cache=math.inf)
     assert all("poison" not in (i.raw or {}) for i in again)
 
@@ -1143,3 +1145,265 @@ def test_bind_does_not_scope_a_routable_interface_address():
         assert sock.getsockname()[3] == 0
     finally:
         sock.close()
+
+
+# --------------------------------------------------------------------------- #
+# Interface state, validation and the shape of the value                       #
+# --------------------------------------------------------------------------- #
+
+
+def test_is_up_is_part_of_the_value():
+    base = dict(name="eth0", index=2)
+    up = Interface(**base, is_up=True)
+    down = Interface(**base, is_up=False)
+    assert up.is_up is True and down.is_up is False
+    assert Interface(**base).is_up is None
+    assert up != down and hash(up) != hash(down)
+    import copy
+    import pickle
+
+    assert copy.deepcopy(up) == up and pickle.loads(pickle.dumps(down)) == down
+
+
+@pytest.mark.parametrize(
+    "flags, expected",
+    [
+        (0x1 | 0x40 | 0x8, True),  # IFF_UP | IFF_RUNNING | IFF_LOOPBACK
+        (0x1, False),  # configured up, no carrier
+        (0x40, False),
+        (0, False),
+    ],
+)
+def test_posix_is_up_needs_both_flags(flags, expected):
+    assert _ifaddrs._posix_is_up(flags) is expected
+
+
+@pytest.mark.parametrize(
+    "status, expected",
+    [(1, True), (2, False), (3, False), (5, False), (6, False), (7, False), (4, None)],
+)
+def test_windows_is_up_reads_the_operational_status(status, expected):
+    """IfOperStatusUp is 1; Unknown (4) is "the system did not say"."""
+    assert _ifaddrs._windows_is_up(status) is expected
+
+
+@pytest.mark.parametrize(
+    "state, kept",
+    [(0, True), (1, False), (2, False), (3, True), (4, True)],
+)
+def test_a_tentative_or_duplicate_address_is_left_out(state, kept):
+    """IpDadStateTentative is 1, Duplicate 2, Deprecated 3, Preferred 4."""
+    assert _ifaddrs._address_is_usable(state) is kept
+
+
+def test_the_windows_index_falls_back_to_the_ipv6_index():
+    assert _ifaddrs._windows_index(0, 12) == 12
+    assert _ifaddrs._windows_index(7, 12) == 7
+    assert _ifaddrs._windows_index(0, 0) == 0
+
+
+@pytest.mark.skipif(not _ifaddrs._IS_WINDOWS, reason="the Windows adapter walk")
+def test_on_windows_no_listed_ipv4_address_is_one_the_system_refuses():
+    """Ground truth is a real bind: a media-disconnected adapter's tentative
+    169.254 address failed with WSAEADDRNOTAVAIL (10049) yet was listed."""
+    refused = []
+    for iface in get_interfaces():
+        for entry in iface.ipv4:
+            probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                probe.bind((str(entry.ip), 0))
+            except OSError as exc:
+                refused.append((iface.name, str(entry), exc.errno))
+            finally:
+                probe.close()
+    assert refused == []
+
+
+@pytest.mark.skipif(not _ifaddrs._IS_WINDOWS, reason="the Windows adapter walk")
+def test_on_windows_a_down_adapter_stays_listed_with_is_up_false():
+    for iface in get_interfaces(raw=True):
+        status = iface.raw["oper_status"]
+        assert iface.is_up is (True if status == 1 else None if status == 4 else False)
+        if iface.is_up is False:
+            assert not iface.ipv4 or all(not a.ip.is_link_local for a in iface.ipv4)
+
+
+def test_the_loopback_interface_is_up():
+    loopback = [i for i in get_interfaces() if i.is_loopback]
+    if not loopback or loopback[0].name == "<unknown>":
+        pytest.skip("no native enumeration here")
+    assert loopback[0].is_up is True
+
+
+def test_ipv4_and_ipv6_are_tuples_like_ips():
+    iface = Interface(
+        "x",
+        ips=[ipaddress.ip_interface("10.0.0.5/24"), ipaddress.ip_interface("::1/128")],
+    )
+    assert isinstance(iface.ipv4, tuple) and isinstance(iface.ipv6, tuple)
+    assert [str(a) for a in iface.ipv4] == ["10.0.0.5/24"]
+    assert [str(a) for a in iface.ipv6] == ["::1/128"]
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        dict(name=5),
+        dict(name="x", index="x"),
+        dict(name="x", index=True),
+        dict(name="x", mac="notamac"),
+        dict(name="x", ips="ab"),
+        dict(name="x", ips=["10.0.0.5/24"]),
+        dict(name="x", ips=[ipaddress.ip_address("10.0.0.5")]),
+        dict(name="x", mtu="big"),
+        dict(name="x", is_up="yes"),
+        dict(name="x", is_loopback=1),
+    ],
+)
+def test_the_constructor_type_checks_every_field(arguments):
+    with pytest.raises(TypeError):
+        Interface(**arguments)
+
+
+def test_the_repr_is_a_constructor_call_that_round_trips():
+    iface = Interface(
+        "eth0",
+        2,
+        mac=MACAddress("aa:bb:cc:dd:ee:ff"),
+        ips=[
+            ipaddress.ip_interface("10.0.0.5/24"),
+            ipaddress.ip_interface("fe80::1/64"),
+        ],
+        mtu=1500,
+        is_up=True,
+    )
+    scope = dict(vars(netimps))
+    scope.update(vars(ipaddress))
+    assert eval(repr(iface), scope) == iface
+    bare = Interface("lo")
+    assert eval(repr(bare), scope) == bare
+
+
+def test_raw_is_read_only_and_a_cache_hit_shares_nothing_mutable(monkeypatch):
+    monkeypatch.setattr(
+        _ifaddrs,
+        "_posix_interfaces",
+        lambda raw: [
+            Interface("a", 1, raw={"flags": 1, "families": [2, 10]}),
+        ],
+    )
+    monkeypatch.setattr(_ifaddrs, "_IS_WINDOWS", False)
+    netimps.clear_interface_cache()
+    try:
+        first = get_interfaces(raw=True, cache=True)[0]
+        assert first.raw["families"] == (2, 10)
+        with pytest.raises(TypeError):
+            first.raw["families"] = ()
+        with pytest.raises(TypeError):
+            first.raw["added"] = 1
+        with pytest.raises(AttributeError):
+            first.raw["families"].append(3)
+        again = get_interfaces(raw=True, cache=True)[0]
+        assert again.raw == first.raw
+    finally:
+        netimps.clear_interface_cache()
+
+
+def test_raw_is_not_part_of_equality_and_survives_pickle():
+    import pickle
+
+    iface = Interface("a", 1, raw={"flags": 1, "families": [2]})
+    assert pickle.loads(pickle.dumps(iface)).raw == iface.raw
+    assert iface == Interface("a", 1)
+
+
+def test_clearing_the_cache_during_an_enumeration_is_not_lost(monkeypatch):
+    """A thread that began before the clear must not store its stale snapshot."""
+    import threading
+
+    started, release = threading.Event(), threading.Event()
+    calls = []
+
+    def enumerate_(raw):
+        calls.append(1)
+        if len(calls) == 1:
+            started.set()
+            release.wait(5)
+            return [Interface("stale-before-change", 1)]
+        return [Interface("fresh", 1)]
+
+    monkeypatch.setattr(_ifaddrs, "_enumerate_interfaces", enumerate_)
+    netimps.clear_interface_cache()
+    try:
+        worker = threading.Thread(target=lambda: get_interfaces(cache=math.inf))
+        worker.start()
+        assert started.wait(5)
+        netimps.clear_interface_cache()
+        release.set()
+        worker.join(5)
+        assert [i.name for i in get_interfaces(cache=math.inf)] == ["fresh"]
+    finally:
+        netimps.clear_interface_cache()
+
+
+def test_a_bug_in_the_native_walk_is_not_reported_as_a_degraded_host(monkeypatch):
+    """Only ``OSError`` means "the platform would not answer"."""
+
+    def broken(_raw):
+        raise ValueError("NULL pointer access")
+
+    monkeypatch.setattr(_ifaddrs, "_windows_interfaces", broken)
+    monkeypatch.setattr(_ifaddrs, "_posix_interfaces", broken)
+    with pytest.raises(ValueError):
+        get_interfaces()
+
+
+def test_the_fallback_says_why_and_logs_once(monkeypatch, caplog, no_such_host):
+    import logging
+
+    def refuse(_raw):
+        raise OSError("getifaddrs unavailable")
+
+    monkeypatch.setattr(_ifaddrs, "_windows_interfaces", refuse)
+    monkeypatch.setattr(_ifaddrs, "_posix_interfaces", refuse)
+    monkeypatch.setattr(_ifaddrs, "_fallback_logged", False)
+    with caplog.at_level(logging.DEBUG, logger="netimps._ifaddrs"):
+        first = get_interfaces(raw=True)[0]
+        get_interfaces(raw=True)
+    assert first.raw["degraded"] is True
+    assert "getifaddrs unavailable" in first.raw["reason"]
+    assert (
+        len([r for r in caplog.records if "getifaddrs unavailable" in r.message]) == 1
+    )
+
+
+# --------------------------------------------------------------------------- #
+# BSD netmask sockaddrs: the bytes a short sockaddr omits are zero             #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "sa_len, offset, mask, expected",
+    [
+        # FreeBSD lo0, `ifconfig` shows "netmask 0x0": sa_len 0, nothing present.
+        (0, 4, b"\xff\x00\x00\x00", b"\x00\x00\x00\x00"),
+        # An ordinary full-length sockaddr_in: unchanged.
+        (16, 4, b"\xff\xff\xff\x00", b"\xff\xff\xff\x00"),
+        # 255.255.0.0 sent as the 6 bytes that reach the last non-zero octet.
+        (6, 4, b"\xff\xff\xaa\xaa", b"\xff\xff\x00\x00"),
+        # 255.0.0.0 in 5 bytes.
+        (5, 4, b"\xff\x55\x55\x55", b"\xff\x00\x00\x00"),
+        # sockaddr_in6 /64: its address starts 8 bytes in, 16 + 8 reach it all.
+        (24, 8, b"\xff" * 8 + b"\x00" * 8, b"\xff" * 8 + b"\x00" * 8),
+        (0, 8, b"\xff" * 16, b"\x00" * 16),
+    ],
+)
+def test_a_short_bsd_netmask_is_the_zero_filled_mask_it_stands_for(
+    sa_len, offset, mask, expected
+):
+    assert _ifaddrs._bsd_mask_bytes(sa_len, offset, mask) == expected
+
+
+def test_a_zero_length_netmask_is_prefix_zero():
+    mask = _ifaddrs._bsd_mask_bytes(0, 4, b"\xff\x00\x00\x00")
+    assert _ifaddrs._prefix_from_netmask(mask) == 0
