@@ -20,10 +20,13 @@ from __future__ import annotations
 
 import errno as _errno
 from functools import partial as _partial
+import ipaddress as _ipaddress
+import logging as _logging
 import socket as _socket
 import struct as _struct
 import sys as _sys
 import time as _time
+import weakref as _weakref
 
 from . import _proc
 from ._iface_spec import InterfaceLike, interface_address as _interface_address
@@ -89,6 +92,8 @@ __all__ = [
     "discover_mtu",
     "get_tcp_mss",
 ]
+
+_log = _logging.getLogger(__name__)
 
 _IS_WINDOWS = _sys.platform == "win32"
 _IS_LINUX = _sys.platform.startswith("linux")
@@ -158,13 +163,13 @@ def bind(
     address: "HostLike" = "",
     port: int = 0,
     *,
-    family: int = _socket.AF_INET,
+    family: "Optional[int]" = None,
     kind: int = _socket.SOCK_DGRAM,
     reuse_address: bool = True,
     allow_address_takeover: bool = False,
     reuse_port: bool = False,
     broadcast: bool = False,
-    connreset: bool = True,
+    connreset: "Optional[bool]" = None,
     interface: "InterfaceLike" = None,
     options: "Iterable[Tuple[int, int, Any]]" = (),
     listen: "Optional[int]" = None,
@@ -192,6 +197,14 @@ def bind(
         address and guessing one (the network address? the first host?) would be
         worse than refusing.
     :param port: local port; ``0`` lets the OS choose.
+    :param family: ``AF_INET`` or ``AF_INET6``. ``None`` (the default) takes the
+        family from what was given: an IPv6 literal, or an *interface* whose
+        address is IPv6, gives ``AF_INET6``; an IPv4 literal gives ``AF_INET``;
+        a name gives ``AF_INET`` when it has an IPv4 address and ``AF_INET6``
+        when it has only IPv6. The wildcard ``""`` is IPv4: a wildcard says
+        nothing about the family, and an IPv6 wildcard (``"::"``) must be asked
+        for. A family that contradicts the address fails in the socket layer,
+        as it always has.
     :param interface: bind to this adapter's address instead of ``address``.
         Accepts an :class:`Interface`, a MAC, an adapter name or an address --
         the same union as ``ping(src=)``. Raises :class:`ValueError` if it
@@ -206,12 +219,13 @@ def bind(
     :param reuse_port: sets ``SO_REUSEPORT``. **A no-op where the option does
         not exist** (Windows) rather than an error, so the same call works
         everywhere.
-    :param connreset: Windows only, and only for UDP. Pass ``False`` to turn
+    :param connreset: Windows only, and only for UDP. ``False`` turns
         ``SIO_UDP_CONNRESET`` off, so that an ICMP port-unreachable provoked by
         an earlier send stops being reported as
-        :class:`ConnectionResetError` on a *later*, unrelated receive. A no-op
-        everywhere else. See :func:`disable_connreset` for why the default is
-        to leave it alone.
+        :class:`ConnectionResetError` on a *later*, unrelated receive; ``True``
+        leaves the platform default (reporting on). ``None`` (the default) is
+        ``False`` for a datagram socket and leaves any other socket alone. A
+        no-op everywhere but Windows. See :func:`disable_connreset`.
     :param options: extra ``(level, name, value)`` triples -- or
         :class:`SocketOption` values -- for anything not covered by the named
         arguments.
@@ -235,9 +249,12 @@ def bind(
        the same intent, and the literal option is available only by asking for
        it by its consequence: ``allow_address_takeover=True``.
 
-    Raises :class:`OSError` if the bind fails -- see :func:`bind_error_hint`
-    for turning that into something a user can act on. The socket is closed
-    before the exception propagates, so a failed call leaks nothing.
+    Raises :class:`OSError` if the bind fails, with the text of
+    :func:`bind_error_hint` in its message when that function recognises the
+    failure: ``str(exc)`` is already something a user can act on. An address
+    that is taken is always :class:`AddressInUseError`; any other failure keeps
+    its own :class:`OSError` subclass and ``errno``. The socket is closed before
+    the exception propagates, so a failed call leaks nothing.
     """
     # Coerced through the same helper `ping`, `resolve` and `UDPEndpoint.send`
     # use, so one union is accepted everywhere rather than this one entry point
@@ -245,10 +262,18 @@ def bind(
     address = _dst_argument(address) if address != "" else ""
 
     if interface is not None:
-        resolved = _interface_address(interface, want_ipv6=(family == _socket.AF_INET6))
+        resolved = _interface_address(
+            interface, want_ipv6=None if family is None else family == _socket.AF_INET6
+        )
         if resolved is None:
             raise ValueError("cannot resolve interface %r to an address" % (interface,))
         address = str(resolved)
+        if family is None:
+            family = (
+                _socket.AF_INET6
+                if getattr(resolved, "version", 4) == 6
+                else _socket.AF_INET
+            )
         if getattr(resolved, "version", None) == 6 and resolved.is_link_local:
             # A link-local bind needs its zone: the same address can exist on
             # several adapters, so the kernel cannot tell which is meant.
@@ -260,6 +285,9 @@ def bind(
             zone = _interface_index(interface, strict=False)
             if zone and "%" not in address:
                 address = "%s%%%d" % (address, int(zone))
+
+    if family is None:
+        family = _infer_family(address, kind)
 
     sock = _socket.socket(family, kind)
     try:
@@ -328,7 +356,7 @@ def bind(
                     pass  # present but refused by this kernel -- not fatal
         if broadcast:
             sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_BROADCAST, 1)
-        if not connreset and kind == _socket.SOCK_DGRAM:
+        if kind == _socket.SOCK_DGRAM and (connreset is None or not connreset):
             disable_connreset(sock)
         for level, name, value in options:
             sock.setsockopt(level, name, value)
@@ -336,7 +364,7 @@ def bind(
         try:
             sock.bind(_sockaddr_for_bind(family, address, port))
         except OSError as exc:
-            raise _as_in_use(exc, port) from exc
+            raise _with_hint(exc, port) from exc
         if listen is not None and kind == _socket.SOCK_STREAM:
             sock.listen(listen)
     except BaseException:
@@ -345,26 +373,66 @@ def bind(
     return sock
 
 
+def _infer_family(address: str, kind: int) -> int:
+    """The address family *address* implies; ``AF_INET`` when it implies none.
+
+    An empty address is the IPv4 wildcard. A literal decides by its version. A
+    name is looked up and takes ``AF_INET`` when it has an IPv4 address, so a
+    name that used to bind as IPv4 still does; a name with only IPv6 addresses
+    gets ``AF_INET6``, and one that does not resolve is left to the socket layer
+    to refuse.
+    """
+    if not address:
+        return _socket.AF_INET
+    try:
+        return (
+            _socket.AF_INET6
+            if _ipaddress.ip_address(address.split("%", 1)[0]).version == 6
+            else _socket.AF_INET
+        )
+    except ValueError:
+        pass
+    try:
+        families = {
+            info[0]
+            for info in _socket.getaddrinfo(address, None, type=kind)
+            if info[0] in (_socket.AF_INET, _socket.AF_INET6)
+        }
+    except OSError:
+        return _socket.AF_INET
+    if _socket.AF_INET in families or not families:
+        return _socket.AF_INET
+    return _socket.AF_INET6
+
+
 #: Winsock codes that mean "the address is taken", whatever Python wrapped them
 #: in. 10048 is WSAEADDRINUSE; 10013 is WSAEACCES, which on a bind means the
 #: address is held exclusively rather than that the caller lacks a privilege.
 _WSA_IN_USE = frozenset((10048, 10013))
 
 
-def _as_in_use(exc: "OSError", port: "Optional[int]") -> "OSError":
-    """Return :class:`AddressInUseError` for an in-use failure, else ``exc``.
+def _with_hint(exc: "OSError", port: "Optional[int]") -> "OSError":
+    """Return *exc* rebuilt so its message carries :func:`bind_error_hint`.
 
-    Classified here rather than left to the caller because ``bind`` already knows
-    -- it is the code that writes the hint. Returning the original untouched for
-    anything else keeps genuine privilege failures (POSIX ``EACCES`` on a low
-    port) exactly as they were.
+    An address that is taken becomes :class:`AddressInUseError`, classified here
+    because ``bind`` already knows -- it is the code that writes the hint. Any
+    other failure the hint recognises keeps its class and ``errno`` (a POSIX
+    ``EACCES`` on a low port stays a :class:`PermissionError`: narrowing it to
+    "in use" would be the same misdiagnosis in the other direction); one it does
+    not recognise is returned untouched.
     """
     winerror = getattr(exc, "winerror", None)
     in_use = winerror in _WSA_IN_USE or exc.errno == _errno.EADDRINUSE
-    if not in_use:
-        return exc
     hint = bind_error_hint(exc, port)
-    error = AddressInUseError(_errno.EADDRINUSE, hint or "address already in use")
+    if not in_use and hint is None:
+        return exc
+    if in_use:
+        error: "OSError" = AddressInUseError(
+            _errno.EADDRINUSE, hint or "address already in use"
+        )
+    else:
+        detail = exc.strerror or str(exc)
+        error = type(exc)(exc.errno, "%s (%s)" % (hint, detail))
     # Keep the platform's own code reachable; __cause__ carries the rest.
     if winerror is not None:
         try:
@@ -422,10 +490,12 @@ def bind_error_hint(
 
     The raw ``OSError`` from a failed bind is famously unhelpful, and the errno
     differs per platform -- Windows reports ``WinError 10013``/``10048`` where
-    POSIX reports ``EACCES``/``EADDRINUSE``::
+    POSIX reports ``EACCES``/``EADDRINUSE``. :func:`bind` already puts this text
+    in the exception it raises; call this for an ``OSError`` that came from
+    somewhere else, such as a stdlib ``socket.bind``::
 
         try:
-            sock = bind("", 67)
+            sock.bind(("", 67))
         except OSError as exc:
             raise OSError(bind_error_hint(exc, 67) or str(exc)) from exc
 
@@ -2176,11 +2246,12 @@ def disable_connreset(sock: "_socket.socket") -> bool:
     why :class:`netimps.UDPEndpoint`'s MTU probing connects. The knowledge was
     here; the switch was not.
 
-    **Not on by default**, in :func:`bind` or anywhere else. The report is
-    occasionally what a caller wants -- a client talking to one peer learns the
-    peer is gone -- and turning it off silently would remove information from
-    code that never asked. A *server* loop almost always wants it off; pass
-    ``bind(..., connreset=False)`` or call this.
+    **Not applied to a socket you did not ask for.** The report is occasionally
+    what a caller wants -- a client talking to one peer learns the peer is gone
+    -- so this is a call, not a hidden side effect. :func:`bind` makes it for a
+    datagram socket by default, which is what a server loop wants; pass
+    ``bind(..., connreset=True)`` to keep the report, or call this on a socket
+    from elsewhere.
 
     **There is no stdlib route to this.** Measured on 3.14: CPython exports no
     ``socket.SIO_UDP_CONNRESET`` on any version, and even given the documented
@@ -2238,6 +2309,9 @@ def set_buffer_size(
     alone, so this cannot undo a caller's earlier tuning. ``None`` skips a
     direction. A refused option is skipped rather than raised, and the
     corresponding return value is whatever the socket reports.
+
+    A shortfall is logged once per socket, at ``WARNING`` on this module's
+    logger (``netimps._sockets``); the package installs no handler.
     """
     for option, wanted in (
         (_socket.SO_RCVBUF, receive),
@@ -2259,4 +2333,21 @@ def set_buffer_size(
         except OSError:  # pragma: no cover - a socket that reports neither
             return 0
 
-    return _current(_socket.SO_RCVBUF), _current(_socket.SO_SNDBUF)
+    granted = (_current(_socket.SO_RCVBUF), _current(_socket.SO_SNDBUF))
+    short = [
+        "%s: asked for %d bytes, granted %d" % (name, wanted, got)
+        for name, wanted, got in (
+            ("SO_RCVBUF", receive, granted[0]),
+            ("SO_SNDBUF", send, granted[1]),
+        )
+        if wanted is not None and got < wanted
+    ]
+    if short and sock not in _warned_short:
+        _warned_short.add(sock)
+        _log.warning("socket buffer smaller than requested (%s)", "; ".join(short))
+    return granted
+
+
+#: Sockets already warned about, so a retry loop logs one shortfall, not one per
+#: attempt. Weak: it must not keep a closed socket alive.
+_warned_short: "_weakref.WeakSet[_socket.socket]" = _weakref.WeakSet()

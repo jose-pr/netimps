@@ -90,6 +90,17 @@ probe says so in its prefix.
 
 ### Changed
 
+- **`bind()` defaults, breaking.** `family=None` (was `AF_INET`) infers the
+  family from the address, so `bind("::1")` is an IPv6 socket; the wildcard
+  `""` stays IPv4, and a name is IPv4 when it has an IPv4 address.
+  `connreset=None` (was `True`) means off for a datagram socket and
+  untouched for any other; `True` and `False` still force it. On Windows an
+  unconnected UDP socket from `bind()` no longer raises `ConnectionResetError`
+  on a later receive after an ICMP port-unreachable. A failed `bind()` now
+  carries the `bind_error_hint` text in the message of every failure that
+  function recognises, keeping its `OSError` subclass and `errno`;
+  `set_buffer_size` logs one `WARNING` per socket when the kernel grants less
+  than was asked.
 - **`Host`, `MACAddress`, `PingResult`, `Route` and `Interface` are read-only.**
   Assigning to or deleting any attribute raises `AttributeError`; build a new
   value instead. All six value types (`FQDN` already was) copy and pickle.

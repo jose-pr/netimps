@@ -67,6 +67,7 @@ from netimps import (
     is_local_address,
     is_valid,
     is_wildcard,
+    bind,
     join_host,
     max_udp_payload,
     parse,
@@ -420,3 +421,8 @@ assert_type(discover_mtu("h", tries=3, ipv6=False, ttl=64), Optional[int])
 assert_type(wait_for_port("h", 80, deadline=5.0, timeout=1.0), bool)
 assert_type(split_host("example.com:80", default_port=443), Tuple[str, Optional[int]])
 assert_type(is_broadcast("10.0.0.255"), bool)
+
+# `family` is optional and inferred; `connreset` is a tri-state.
+assert_type(bind("::1", 0), socket.socket)
+assert_type(bind(family=None, connreset=None), socket.socket)
+assert_type(bind("", 67, family=socket.AF_INET, connreset=False), socket.socket)

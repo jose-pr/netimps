@@ -751,14 +751,24 @@ failure. `tcp` and `udp` also report `rtt`; only ICMP reports `ttl`.
 
 ## Socket helpers
 
-- **`bind(address="", port=0, *, family=AF_INET, kind=SOCK_DGRAM, reuse_address=True, allow_address_takeover=False, reuse_port=False, broadcast=False, connreset=True, interface=None, options=(), listen=None)`**
-  — create, configure and bind in one call. `interface` accepts the usual union
+- **`bind(address="", port=0, *, family=None, kind=SOCK_DGRAM, reuse_address=True, allow_address_takeover=False, reuse_port=False, broadcast=False, connreset=None, interface=None, options=(), listen=None)`**
+  — create, configure and bind in one call. `family=None` takes the family
+  from the address: an IPv6 literal (or an `interface=` whose address is
+  IPv6) gives `AF_INET6`, an IPv4 literal `AF_INET`, and a name `AF_INET`
+  when it has an IPv4 address, else `AF_INET6`. **The wildcard `""` is
+  IPv4**; ask for `"::"` to listen on IPv6. `connreset=None` is `False` for a
+  datagram socket (Windows: an ICMP port-unreachable does not surface as
+  `ConnectionResetError` on a later receive) and leaves other sockets alone;
+  `True` keeps the platform's reporting. `interface` accepts the usual union
   (`Interface`, MAC, adapter name, address) and **raises `ValueError`** if
   unresolvable rather than silently binding the wildcard. `reuse_port` is a
   **no-op where `SO_REUSEPORT` does not exist** (Windows), not an error;
   `listen` is ignored for datagram sockets. The socket is closed before any
   exception propagates, so a failed call leaks nothing. A failed bind raises
-  `OSError` — see `bind_error_hint`.
+  `OSError` whose message already leads with the `bind_error_hint` text where
+  that recognises the failure; an address that is taken is always
+  `AddressInUseError`, any other failure keeps its own `OSError` subclass and
+  `errno`.
 
   > **`reuse_address=True` is not one socket option, and does nothing for UDP.**
   > On POSIX it sets `SO_REUSEADDR` **only for a stream socket**, where it
@@ -823,7 +833,7 @@ failure. `tcp` and `udp` also report `rtt`; only ICMP reports `ttl`.
   port-unreachable provoked by an earlier send as `ConnectionResetError` on a
   *later, unrelated* receive, which kills a server's receive loop over a packet
   some other host did not want. Returns whether anything changed (`False` off
-  Windows). Also reachable as `bind(..., connreset=False)`.
+  Windows). `bind()` already applies it to every datagram socket it makes.
 
   This is the inverse face of a rule documented under `discover_mtu`: POSIX
   delivers asynchronous ICMP errors only to *connected* sockets, so the surprise
@@ -836,8 +846,9 @@ failure. `tcp` and `udp` also report `rtt`; only ICMP reports `ttl`.
   `WSAIoctl` by `ctypes`. A `getattr(socket, "SIO_UDP_CONNRESET", None)` version
   — the obvious one — is a silent no-op on every platform.
 
-  **Not on by default.** The report is sometimes wanted: a client talking to one
-  peer learns the peer is gone. A server loop almost always wants it off.
+  **A call, not a hidden side effect on a socket you made elsewhere.** The report
+  is sometimes wanted: a client talking to one peer learns the peer is gone, so
+  `bind(..., connreset=True)` keeps it. A server loop almost always wants it off.
 - **`set_buffer_size(sock, *, receive=None, send=None) -> (receive, send)`** — grow
   `SO_RCVBUF`/`SO_SNDBUF` and report what was **granted**, read back with
   `getsockopt` rather than echoed from the request. Default UDP buffers are small
@@ -849,7 +860,9 @@ failure. `tcp` and `udp` also report `rtt`; only ICMP reports `ttl`.
   also *doubles* what is asked, so a read-back above the request is normal there
   and not a bug. The silent partial grant is the failure mode, hence the return
   value. Only ever grows, so it cannot undo earlier tuning; `None` skips a
-  direction, and both `None` is a pure query.
+  direction, and both `None` is a pure query. A shortfall is logged once per
+  socket at `WARNING` on `logging.getLogger("netimps._sockets")`; no handler is
+  installed.
 
   > **A link-local `interface=` address is bound with its zone.** The same
   > `fe80::` address can exist on several adapters, so the kernel cannot tell
@@ -863,6 +876,8 @@ failure. `tcp` and `udp` also report `rtt`; only ICMP reports `ttl`.
   for a bind failure, recognising POSIX errnos *and* Windows `10013`/`10048`.
   Returns `None` for anything unrecognised, so the caller keeps the original
   error. **Does not raise** — what to do with a failure is the caller's call.
+  `bind()` already puts this text in its own exception; call this for an
+  `OSError` from elsewhere.
 - **The adapter enumeration is cacheable, and it is opt-in**:
   `get_interfaces(cache=...)`, and the same argument on `get_interface`,
   `iter_interfaces` and `is_local_address`. `cache=False` (the default) never
@@ -1656,9 +1671,9 @@ wrapped socket expires, on every supported Python (before 3.10
   Falls back to the endpoint's own bound address, then the wildcard: a reply from
   the wrong address still beats no reply. The own-address fallback is skipped
   when it is in the wrong family, so a v6 wildcard listener answering a v4 client
-  goes to the v4 wildcard rather than offering `::` to an `AF_INET` socket. `connreset=False` by default, inverted
-  from `bind()`, because a server loop must not die when an earlier answer draws
-  an ICMP port-unreachable from a client that has gone.
+  goes to the v4 wildcard rather than offering `::` to an `AF_INET` socket. `connreset=False` by default, as `bind()` does for a datagram socket,
+  because a server loop must not die when an earlier answer draws an ICMP
+  port-unreachable from a client that has gone.
 
   **`port` also takes any iterable of ports**, tried in order, for a server that
   pins transfer ports to a range a firewall can allow (`tftp-hpa -R`,

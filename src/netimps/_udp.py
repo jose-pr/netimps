@@ -851,9 +851,10 @@ class UDPEndpoint:
           ``datagram.interface_index``, or the bind fails with "invalid
           argument".
 
-        ``connreset=False`` by default, unlike :func:`netimps.bind`: a reply
-        socket is a server's, and a server loop should not die because an earlier
-        answer drew an ICMP port-unreachable from a client that had gone away.
+        ``connreset=False``, as :func:`netimps.bind` does for a datagram socket:
+        a reply socket is a server's, and a server loop should not die because an
+        earlier answer drew an ICMP port-unreachable from a client that had gone
+        away.
         The non-hijackable bind options apply as everywhere else.
 
         :param datagram: a :class:`Datagram` from :meth:`recv`. Its
@@ -866,8 +867,7 @@ class UDPEndpoint:
             -R``, ``dnsmasq --tftp-port-range``). The iterable is materialised
             once and reused for each address candidate, so a generator is safe
             -- but it must be finite. Empty raises :class:`ValueError`.
-        :param connreset: passed to :func:`netimps.bind`; see above for why the
-            default is inverted here.
+        :param connreset: passed to :func:`netimps.bind`; see above.
         :raises AddressInUseError: every port was held on an otherwise bindable
             address. Deliberately *not* a fallback to a different address.
         """
