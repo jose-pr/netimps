@@ -197,7 +197,7 @@ def register_port(scheme: str, port: int, *, canonical: bool = False) -> None:
     previous = _DEFAULT_PORTS.get(scheme)
     _DEFAULT_PORTS[scheme] = port
     if previous is not None and previous != port:
-        # The scheme moved. Leaving the old reverse entry in place is how the
+        # The scheme moved. Leaving the stale reverse entry in place is how the
         # registry ends up stating both "myproto is 8888" and "9999 is
         # myproto" at once; hand the vacated slot to whichever scheme still
         # claims that port, if any.
