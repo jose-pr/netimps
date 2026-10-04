@@ -285,3 +285,75 @@ def test_no_public_parameter_is_bare_any():
             if pname not in hints or hints[pname] is typing.Any:
                 bare.append(f"{name}({pname})")
     assert bare == [], f"{len(bare)} parameters are bare Any or unannotated: {bare}"
+
+
+# --- methods -------------------------------------------------------------------
+
+# Positional arguments (``self`` excluded) of each public method that takes more
+# than one. A method absent from this table takes at most one; every other
+# option is keyword-only.
+METHOD_POSITIONAL = {
+    "FQDN.decode_at": 2,
+    "FQDN.try_parse": 2,
+    "Host.try_parse": 2,
+    "MACAddress.hex": 2,
+    "MACAddress.try_parse": 2,
+    "UDPEndpoint.asend": 3,
+    "UDPEndpoint.reply_socket": 2,
+    "UDPEndpoint.send": 3,
+}
+
+
+def _public_methods():
+    for cname in sorted(netimps.__all__):
+        cls = getattr(netimps, cname)
+        if not inspect.isclass(cls) or cls.__module__.split(".")[0] != "netimps":
+            continue
+        for mname, _member in inspect.getmembers(cls):
+            if mname.startswith("_"):
+                continue
+            raw = inspect.getattr_static(cls, mname)
+            func = raw.fget if isinstance(raw, property) else raw
+            if isinstance(func, (staticmethod, classmethod)):
+                func = func.__func__
+            if not inspect.isfunction(func):
+                continue
+            params = list(inspect.signature(func).parameters.values())
+            if not isinstance(raw, staticmethod):
+                params = params[1:]  # self or cls
+            yield cname, mname, params
+
+
+def test_method_options_are_keyword_only_past_the_counted_positionals():
+    """``recv(1500, False)`` and ``reply_socket(d, 0, True)`` read as nothing."""
+    wrong = {}
+    for cname, mname, params in _public_methods():
+        if cname in EXEMPT:
+            continue
+        count = sum(
+            1 for p in params if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+        )
+        allowed = METHOD_POSITIONAL.get("%s.%s" % (cname, mname), 1)
+        if count > allowed:
+            wrong["%s.%s" % (cname, mname)] = (count, allowed)
+    assert wrong == {}, f"methods take too many positionals: {wrong}"
+
+
+def test_no_method_carries_a_test_hook_in_its_signature():
+    """A parameter named ``_sleep`` or ``_random`` is a seam, not an option."""
+    hooks = [
+        "%s.%s(%s)" % (cname, mname, p.name)
+        for cname, mname, params in _public_methods()
+        for p in params
+        if p.name.startswith("_")
+    ]
+    for name, obj, sig in _callables():
+        hooks += ["%s(%s)" % (name, p) for p in sig.parameters if p.startswith("_")]
+    assert hooks == []
+
+
+def test_udp_endpoint_names_its_destination_dst():
+    """Every function that takes a destination calls it ``dst``."""
+    for method in ("send", "asend"):
+        names = list(inspect.signature(getattr(netimps.UDPEndpoint, method)).parameters)
+        assert names[:4] == ["self", "data", "dst", "port"], (method, names)

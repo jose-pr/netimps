@@ -77,6 +77,21 @@ def _jittered(
     return max(value, 0.0)
 
 
+#: Test seams, not options: replacing them makes the schedule's randomness and
+#: the sleeping deterministic. ``_random`` is a ``random.random``-like
+#: callable, or ``None`` for the real one.
+_sleep: "Callable[[float], None]" = _time.sleep
+_random: "Optional[Callable[[], float]]" = None
+
+
+def _draw() -> "Callable[[], float]":
+    if _random is not None:
+        return _random
+    import random
+
+    return random.random
+
+
 def backoff_delays(
     attempts: int = 3,
     delay: float = 0.5,
@@ -86,7 +101,6 @@ def backoff_delays(
     jitter: float = 0.1,
     jitter_seconds: "Optional[float]" = None,
     symmetric: bool = False,
-    _random=None,
 ) -> "Iterator[float]":
     """Yield the delay before each retry -- ``attempts - 1`` values.
 
@@ -138,11 +152,7 @@ def backoff_delays(
             "jitter_seconds must be non-negative, got %r" % (jitter_seconds,)
         )
 
-    if _random is None:
-        import random as _random_module
-
-        _random = _random_module.random
-
+    draw = _draw()
     current = delay
     for _ in range(attempts - 1):
         yield _jittered(
@@ -151,7 +161,7 @@ def backoff_delays(
             jitter,
             jitter_seconds,
             symmetric,
-            _random,
+            draw,
         )
         current *= multiplier
 
@@ -215,7 +225,6 @@ class Backoff:
         jitter: float = 0.0,
         jitter_seconds: "Optional[float]" = None,
         symmetric: bool = False,
-        _random=None,
     ) -> None:
         if delay < 0:
             raise ValueError("delay must be non-negative, got %r" % (delay,))
@@ -225,11 +234,6 @@ class Backoff:
             raise ValueError(
                 "jitter_seconds must be non-negative, got %r" % (jitter_seconds,)
             )
-        if _random is None:
-            import random as _random_module
-
-            _random = _random_module.random
-
         self._base = float(delay)
         # Never below 1.0: a "backoff" that shrinks the wait on repeated loss
         # is always a bug, and silently accepting 0.5 would make a session
@@ -241,7 +245,7 @@ class Backoff:
         self._jitter = jitter
         self._jitter_seconds = jitter_seconds
         self._symmetric = symmetric
-        self._random = _random
+        self._random = _draw()
         self._current = self._base
         self._attempt = 0
         self._delay = self._compute()
@@ -300,8 +304,6 @@ def retry(
     on_retry: "Optional[Callable[[int, BaseException, float], None]]" = None,
     jitter_seconds: "Optional[float]" = None,
     symmetric: bool = False,
-    _sleep=_time.sleep,
-    _random=None,
 ) -> "Any":
     """Call ``func()``, retrying transient failures with exponential backoff.
 
@@ -343,7 +345,6 @@ def retry(
             jitter=jitter,
             jitter_seconds=jitter_seconds,
             symmetric=symmetric,
-            _random=_random,
         )
     )
 

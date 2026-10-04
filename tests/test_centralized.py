@@ -27,7 +27,7 @@ from netimps import (
     is_local_address,
     retry,
 )
-from netimps import _iface_spec, _udp
+from netimps import _iface_spec, _retry, _udp
 
 # --------------------------------------------------------------------------- #
 # bind                                                                         #
@@ -927,9 +927,15 @@ def test_host_equality_and_falsiness():
 # --------------------------------------------------------------------------- #
 
 
+@pytest.fixture(autouse=True)
+def _no_real_sleep(monkeypatch):
+    """Nothing here waits: a test that wants the waits records them itself."""
+    monkeypatch.setattr(_retry, "_sleep", lambda _: None)
+
+
 def test_retry_returns_on_first_success():
     calls = []
-    assert retry(lambda: calls.append(1) or "ok", _sleep=lambda _: None) == "ok"
+    assert retry(lambda: calls.append(1) or "ok") == "ok"
     assert len(calls) == 1
 
 
@@ -942,7 +948,7 @@ def test_retry_recovers_after_transient_failures():
             raise OSError("transient")
         return "ok"
 
-    assert retry(flaky, attempts=5, _sleep=lambda _: None) == "ok"
+    assert retry(flaky, attempts=5) == "ok"
     assert len(calls) == 3
 
 
@@ -953,7 +959,7 @@ def test_retry_reraises_the_last_error_unwrapped():
         raise OSError("still broken")
 
     with pytest.raises(OSError, match="still broken"):
-        retry(always_fails, attempts=3, _sleep=lambda _: None)
+        retry(always_fails, attempts=3)
 
 
 def test_retry_does_not_retry_caller_bugs():
@@ -964,7 +970,7 @@ def test_retry_does_not_retry_caller_bugs():
         raise ValueError("malformed")
 
     with pytest.raises(ValueError):
-        retry(bad_call, attempts=5, _sleep=lambda _: None)
+        retry(bad_call, attempts=5)
     assert len(calls) == 1, "a ValueError will fail identically next time"
 
 
@@ -976,12 +982,13 @@ def test_retry_attempts_counts_total_calls():
         raise OSError("no")
 
     with pytest.raises(OSError):
-        retry(failing, attempts=1, _sleep=lambda _: None)
+        retry(failing, attempts=1)
     assert len(calls) == 1, "attempts=1 means one call and no sleeping"
 
 
-def test_retry_sleeps_with_growing_delays():
+def test_retry_sleeps_with_growing_delays(monkeypatch):
     slept = []
+    monkeypatch.setattr(_retry, "_sleep", slept.append)
 
     def failing():
         raise OSError("no")
@@ -993,7 +1000,6 @@ def test_retry_sleeps_with_growing_delays():
             delay=1.0,
             multiplier=2.0,
             jitter=0,
-            _sleep=slept.append,
         )
     assert slept == [1.0, 2.0, 4.0]
 
@@ -1011,7 +1017,6 @@ def test_retry_reports_each_attempt():
             delay=0.5,
             jitter=0,
             on_retry=lambda n, exc, wait: seen.append((n, wait)),
-            _sleep=lambda _: None,
         )
     assert seen == [(1, 0.5), (2, 1.0)]
 
@@ -1024,8 +1029,9 @@ def test_backoff_delays_are_capped():
     assert len(delays) == 7  # attempts - 1
 
 
-def test_backoff_jitter_only_shortens():
+def test_backoff_jitter_only_shortens(monkeypatch):
     """Jitter must never push a delay past max_delay."""
+    monkeypatch.setattr(_retry, "_random", lambda: 1.0)
     delays = list(
         backoff_delays(
             attempts=6,
@@ -1033,7 +1039,6 @@ def test_backoff_jitter_only_shortens():
             multiplier=1.0,
             max_delay=4.0,
             jitter=0.5,
-            _random=lambda: 1.0,
         )
     )
     assert all(0 <= d <= 4.0 for d in delays)
@@ -1173,19 +1178,20 @@ def _old_schedule(attempts, delay, multiplier, max_delay, jitter, rand):
         dict(attempts=1, delay=1.0, multiplier=2.0, max_delay=5.0, jitter=0.1),
     ],
 )
-def test_the_default_schedule_is_unchanged(kwargs):
+def test_the_default_schedule_is_unchanged(kwargs, monkeypatch):
     """Adding the modes must not have moved the default by a float.
 
     Asserted against a copy of the old loop rather than against recorded
     numbers, so it keeps meaning something if the defaults are ever retuned --
     and including the `jitter=0` case, which must still draw no randomness.
     """
-    assert list(backoff_delays(_random=_seeded(), **kwargs)) == list(
+    monkeypatch.setattr(_retry, "_random", _seeded())
+    assert list(backoff_delays(**kwargs)) == list(
         _old_schedule(rand=_seeded(), **kwargs)
     )
 
 
-def test_jitter_seconds_is_absolute_and_spreads_both_ways():
+def test_jitter_seconds_is_absolute_and_spreads_both_ways(monkeypatch):
     """RFC 2131 §4.1: "randomized by the value of a uniform random number
     chosen from the range -1 to +1" -- seconds, not a fraction.
 
@@ -1193,6 +1199,7 @@ def test_jitter_seconds_is_absolute_and_spreads_both_ways():
     it, so neither DHCP standard could be expressed with it. Both signs
     occurring is the whole assertion; a mean near zero is the second half.
     """
+    monkeypatch.setattr(_retry, "_random", _seeded(1))
     deltas = [
         value - 10.0
         for value in backoff_delays(
@@ -1201,7 +1208,6 @@ def test_jitter_seconds_is_absolute_and_spreads_both_ways():
             multiplier=1.0,
             max_delay=1000.0,
             jitter_seconds=1.0,
-            _random=_seeded(1),
         )
     ]
     assert any(d > 0 for d in deltas), "never longer -- not symmetric"
@@ -1210,8 +1216,9 @@ def test_jitter_seconds_is_absolute_and_spreads_both_ways():
     assert abs(sum(deltas) / len(deltas)) < 0.1
 
 
-def test_symmetric_makes_the_fractional_jitter_two_sided():
+def test_symmetric_makes_the_fractional_jitter_two_sided(monkeypatch):
     """RFC 8415 §15: `RT = 2*RTprev + RAND*RTprev`, RAND uniform in [-0.1, +0.1]."""
+    monkeypatch.setattr(_retry, "_random", _seeded(3))
     fractions = [
         value / 10.0 - 1.0
         for value in backoff_delays(
@@ -1221,7 +1228,6 @@ def test_symmetric_makes_the_fractional_jitter_two_sided():
             max_delay=1000.0,
             jitter=0.1,
             symmetric=True,
-            _random=_seeded(3),
         )
     ]
     assert any(f > 0 for f in fractions)
@@ -1230,7 +1236,9 @@ def test_symmetric_makes_the_fractional_jitter_two_sided():
     assert abs(sum(fractions) / len(fractions)) < 0.01
 
 
-def test_a_symmetric_delay_may_exceed_max_delay_because_the_rfcs_say_so():
+def test_a_symmetric_delay_may_exceed_max_delay_because_the_rfcs_say_so(
+    monkeypatch,
+):
     """**The one place this diverges from the default mode's contract.**
 
     RFC 8415 applies its jitter *after* the cap -- `if RT > MRT: RT = MRT +
@@ -1245,6 +1253,7 @@ def test_a_symmetric_delay_may_exceed_max_delay_because_the_rfcs_say_so():
     would silently reintroduce the synchronisation the mode is chosen to
     prevent.
     """
+    monkeypatch.setattr(_retry, "_random", _seeded(7))
     values = list(
         backoff_delays(
             attempts=200,
@@ -1252,7 +1261,6 @@ def test_a_symmetric_delay_may_exceed_max_delay_because_the_rfcs_say_so():
             multiplier=2.0,
             max_delay=64.0,
             jitter_seconds=1.0,
-            _random=_seeded(7),
         )
     )
     assert any(v > 64.0 for v in values), "clamped at the cap -- symmetry lost"
@@ -1260,8 +1268,11 @@ def test_a_symmetric_delay_may_exceed_max_delay_because_the_rfcs_say_so():
     assert all(v >= 0.0 for v in values)
 
 
-def test_the_default_mode_still_treats_max_delay_as_a_hard_ceiling():
+def test_the_default_mode_still_treats_max_delay_as_a_hard_ceiling(
+    monkeypatch,
+):
     """The divergence above must not have leaked into the default."""
+    monkeypatch.setattr(_retry, "_random", _seeded(11))
     values = list(
         backoff_delays(
             attempts=300,
@@ -1269,33 +1280,32 @@ def test_the_default_mode_still_treats_max_delay_as_a_hard_ceiling():
             multiplier=2.0,
             max_delay=5.0,
             jitter=0.1,
-            _random=_seeded(11),
         )
     )
     assert all(0.0 <= v <= 5.0 for v in values), (min(values), max(values))
 
 
-def test_no_mode_can_produce_a_negative_delay():
+def test_no_mode_can_produce_a_negative_delay(monkeypatch):
     """A negative sleep is the failure the clamp at zero exists for."""
     for kwargs in (
         dict(jitter_seconds=100.0),
         dict(jitter=1.0, symmetric=True),
         dict(jitter=1.0),
     ):
+        monkeypatch.setattr(_retry, "_random", _seeded(5))
         values = list(
             backoff_delays(
                 attempts=200,
                 delay=0.05,
                 multiplier=1.0,
                 max_delay=1000.0,
-                _random=_seeded(5),
                 **kwargs,
             )
         )
         assert all(v >= 0.0 for v in values), (kwargs, min(values))
 
 
-def test_an_absolute_amplitude_is_capped_at_the_delay():
+def test_an_absolute_amplitude_is_capped_at_the_delay(monkeypatch):
     """Otherwise a sub-second delay loses its distribution entirely.
 
     With `delay=0.1` and a requested +/-1 s, an uncapped draw is negative about
@@ -1305,6 +1315,7 @@ def test_an_absolute_amplitude_is_capped_at_the_delay():
     both. For RFC 2131's real schedule the cap never engages: it starts at 4 s
     against a 1 s amplitude.
     """
+    monkeypatch.setattr(_retry, "_random", _seeded(5))
     values = list(
         backoff_delays(
             attempts=201,
@@ -1312,7 +1323,6 @@ def test_an_absolute_amplitude_is_capped_at_the_delay():
             multiplier=1.0,
             max_delay=1000.0,
             jitter_seconds=1.0,
-            _random=_seeded(5),
         )
     )
     assert all(0.0 <= v <= 0.2 + 1e-12 for v in values), (min(values), max(values))
@@ -1324,10 +1334,12 @@ def test_jitter_seconds_must_be_non_negative():
         list(backoff_delays(jitter_seconds=-1.0))
 
 
-def test_retry_passes_the_new_modes_through():
+def test_retry_passes_the_new_modes_through(monkeypatch):
     """`retry` shares the schedule, so the modes have to reach it."""
     waits = []
     calls = []
+    monkeypatch.setattr(_retry, "_sleep", waits.append)
+    monkeypatch.setattr(_retry, "_random", _seeded(1))
 
     def flaky():
         calls.append(1)
@@ -1341,8 +1353,6 @@ def test_retry_passes_the_new_modes_through():
             multiplier=1.0,
             max_delay=1000.0,
             jitter_seconds=1.0,
-            _sleep=waits.append,
-            _random=_seeded(1),
         )
     assert len(calls) == 4
     assert all(9.0 <= w <= 11.0 for w in waits), waits
@@ -1368,12 +1378,13 @@ def test_backoff_grows_on_advance_and_resets_on_progress():
     assert timer.delay == 1.0
 
 
-def test_backoff_delay_is_stable_between_advances():
+def test_backoff_delay_is_stable_between_advances(monkeypatch):
     """Arming a deadline, logging it and comparing against it must see one
     value. A property that re-jittered per read would be a trap for exactly
     the code this exists for.
     """
-    timer = Backoff(delay=1.0, jitter=0.5, max_delay=30.0, _random=_seeded())
+    monkeypatch.setattr(_retry, "_random", _seeded())
+    timer = Backoff(delay=1.0, jitter=0.5, max_delay=30.0)
     first = timer.delay
     # Repeated reads must not re-draw.
     assert [timer.delay for _ in range(10)] == [first] * 10
@@ -1411,14 +1422,14 @@ def test_backoff_jitter_is_off_by_default_unlike_backoff_delays():
     assert [timer.delay, timer.advance(), timer.advance()] == [1.0, 2.0, 4.0]
 
 
-def test_backoff_accepts_the_symmetric_modes_too():
+def test_backoff_accepts_the_symmetric_modes_too(monkeypatch):
     """A DHCP client wants the timer *and* the RFC jitter."""
+    monkeypatch.setattr(_retry, "_random", _seeded(9))
     timer = Backoff(
         delay=4.0,
         multiplier=2.0,
         max_delay=64.0,
         jitter_seconds=1.0,
-        _random=_seeded(9),
     )
     seen = [timer.delay] + [timer.advance() for _ in range(6)]
     for value, base in zip(seen, [4, 8, 16, 32, 64, 64, 64]):

@@ -462,6 +462,14 @@ async def _datagrams_on_error(endpoint: UDPEndpoint) -> None:
         assert_type(packet, Datagram)
 
 
+def _endpoint_options(endpoint: UDPEndpoint) -> None:
+    assert_type(endpoint.recv(1500, resolve_interface=False), Datagram)
+    assert_type(endpoint.send(b"x", "h", 9, src="127.0.0.1"), int)
+    assert_type(
+        endpoint.reply_socket(Datagram(b"", ("h", 1)), 0, connreset=True), socket.socket
+    )
+
+
 async def _asend(endpoint: UDPEndpoint) -> None:
     assert_type(await endpoint.asend(b"x", "127.0.0.1", 9, src="127.0.0.1"), int)
 

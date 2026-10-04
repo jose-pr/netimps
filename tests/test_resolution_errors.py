@@ -80,7 +80,7 @@ def test_retry_repeats_an_outage_by_default():
         raise ResolutionError("resolver unreachable")
 
     with pytest.raises(ResolutionError):
-        retry(attempt, attempts=3, delay=0.0, jitter=0.0, _sleep=lambda s: None)
+        retry(attempt, attempts=3, delay=0.0, jitter=0.0)
     assert len(calls) == 3
 
 
@@ -98,7 +98,6 @@ def test_retry_can_leave_out_a_name_that_does_not_exist():
             delay=0.0,
             jitter=0.0,
             retryable=(ConnectionError, TimeoutError),
-            _sleep=lambda s: None,
         )
     assert len(calls) == 1
 

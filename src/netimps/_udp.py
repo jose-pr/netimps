@@ -572,7 +572,7 @@ class UDPEndpoint:
         return found
 
     @_builtin_timeout
-    def recv(self, bufsize: int = 65535, resolve_interface: bool = True) -> Datagram:
+    def recv(self, bufsize: int = 65535, *, resolve_interface: bool = True) -> Datagram:
         """Receive one datagram.
 
         :param resolve_interface: look the arrival index up in
@@ -778,8 +778,9 @@ class UDPEndpoint:
     def send(
         self,
         data: bytes,
-        address: "HostLike",
+        dst: "HostLike",
         port: int,
+        *,
         src: "InterfaceLike" = None,
     ) -> int:
         """Send a datagram, optionally forcing the *src* interface.
@@ -824,7 +825,7 @@ class UDPEndpoint:
         A timeout set on the socket raises the builtin :class:`TimeoutError`
         on every supported Python.
         """
-        target = (_dst_argument(address), int(port))
+        target = (_dst_argument(dst), int(port))
 
         if src is None:
             return self.socket.sendto(data, target)
@@ -888,6 +889,7 @@ class UDPEndpoint:
         self,
         datagram: "Datagram",
         port: "Union[int, Iterable[int]]" = 0,
+        *,
         connreset: bool = False,
     ) -> "_socket.socket":
         """A new socket bound so replies leave from the address the client used.
@@ -1063,7 +1065,7 @@ class UDPEndpoint:
         ) from last
 
     async def arecv(
-        self, bufsize: int = 65535, resolve_interface: bool = True
+        self, bufsize: int = 65535, *, resolve_interface: bool = True
     ) -> "Datagram":
         """:meth:`recv`, awaited. Same arguments, same :class:`Datagram`.
 
@@ -1115,7 +1117,7 @@ class UDPEndpoint:
         previous = sock.gettimeout()
         sock.settimeout(0.0)
         try:
-            return self.recv(bufsize, resolve_interface)
+            return self.recv(bufsize, resolve_interface=resolve_interface)
         finally:
             try:
                 sock.settimeout(previous)
@@ -1161,8 +1163,8 @@ class UDPEndpoint:
     async def datagrams(
         self,
         bufsize: int = 65535,
-        resolve_interface: bool = True,
         *,
+        resolve_interface: bool = True,
         on_error: "Optional[Callable[[BaseException], bool]]" = None,
     ) -> "AsyncIterator[Datagram]":
         """Yield datagrams until the endpoint is closed -- ``async for`` sugar.
@@ -1183,7 +1185,7 @@ class UDPEndpoint:
         """
         while True:
             try:
-                yield await self.arecv(bufsize, resolve_interface)
+                yield await self.arecv(bufsize, resolve_interface=resolve_interface)
             except (RuntimeError, OSError, ValueError) as exc:
                 if self._closed_for_async():
                     return

@@ -105,6 +105,16 @@ probe says so in its prefix.
 
 ### Changed
 
+- **Method options are keyword-only, breaking.** `UDPEndpoint.recv`, `arecv`
+  and `datagrams` take `bufsize` positionally and `resolve_interface` by name;
+  `UDPEndpoint.send(data, dst, port, *, src=None)` names its destination `dst`
+  (it was `address`) and takes `src` by name; `reply_socket(datagram, port=0,
+  *, connreset=False)`; `Interface.primary_ip(ipv6=False, *, loopback_ok=True)`.
+  `retry`, `backoff_delays` and `Backoff` no longer take `_sleep` and `_random`
+  parameters; the test seams are the module-level `netimps._retry._sleep` and
+  `netimps._retry._random`. `UDPEndpoint.datagrams()` is typed
+  `AsyncIterator[Datagram]`.
+
 - **`bind()` defaults, breaking.** `family=None` (was `AF_INET`) infers the
   family from the address, so `bind("::1")` is an IPv6 socket; the wildcard
   `""` stays IPv4, and a name is IPv4 when it has an IPv4 address.

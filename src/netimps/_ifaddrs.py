@@ -244,7 +244,7 @@ class Interface:
         return has_loopback
 
     def primary_ip(
-        self, ipv6: bool = False, loopback_ok: bool = True
+        self, ipv6: bool = False, *, loopback_ok: bool = True
     ) -> "Optional[_IPInterface]":
         """Pick the one entry that best represents this interface, or ``None``.
 

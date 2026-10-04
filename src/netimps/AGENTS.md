@@ -40,7 +40,10 @@ parameter must be named, so `ping("h", 3)` is a `TypeError` and
 where the keyword-only options begin. Constructors follow the same rule
 (`Interface(name, index, *, mac=..., ...)`); `recvmsg`, `sendmsg`, `CMSG_LEN`
 and `CMSG_SPACE` keep the standard library's shapes, and the `Datagram` and
-`SocketOption` named tuples are positional by nature.
+`SocketOption` named tuples are positional by nature. Methods follow the
+same rule: after the operand (and the second one where the signature shows
+it) the options are keyword-only, so `endpoint.recv(1500, False)` is a
+`TypeError` and `endpoint.recv(1500, resolve_interface=False)` the call.
 
 **Durations are seconds.** `timeout` bounds one attempt and `deadline` a whole
 operation made of several (`wait_for_port`); `PingResult.rtt` is a duration in
@@ -249,7 +252,7 @@ is deliberately not used.
 | `.ips` | every address with its real prefix, as a **tuple** |
 | `.ipv4` / `.ipv6` | the split views |
 | `.mtu` | link MTU in bytes, or `None` |
-| `.primary_ip(ipv6=False, loopback_ok=True)` | pick **one** entry from `.ips`, ranked routable → loopback → link-local, or `None` |
+| `.primary_ip(ipv6=False, *, loopback_ok=True)` | pick **one** entry from `.ips`, ranked routable → loopback → link-local, or `None` |
 | `.is_loopback` | the **kernel's** loopback flag when it was reported, otherwise derived from the addresses |
 | `.raw` | `None` unless `raw=True`; platform-specific leftovers |
 
@@ -1627,12 +1630,12 @@ datagram reports which interface it arrived on. Essential for broadcast
 protocols, where a wildcard-bound server otherwise cannot tell which network a
 request came from.
 
-`recv(bufsize=65535, resolve_interface=True) -> Datagram`, a `NamedTuple` of
+`recv(bufsize=65535, *, resolve_interface=True) -> Datagram`, a `NamedTuple` of
 `.data`, `.sender`, `.destination`, `.interface_index`, `.interface`,
 `.control_truncated` and `.truncated`, plus the property `.is_unicast`
 (`is_unicast(destination, interface)`, or `None` when `destination` is unknown
-because there was no pktinfo). `send(data, address, port, src=None) -> int` pins the
-outgoing interface; `address` accepts `HostLike` and `src` the usual loose
+because there was no pktinfo). `send(data, dst, port, *, src=None) -> int` pins the
+outgoing interface; `dst` accepts `HostLike` and `src` the usual loose
 interface spec (`Interface`, MAC, adapter name or address). `close()` closes
 the wrapped socket, and the endpoint is a **context manager**
 (`with UDPEndpoint(bind("", 67)) as endpoint:`) and an **async context
@@ -1714,9 +1717,9 @@ wrapped socket expires, on every supported Python (before 3.10
   ignores* a v6 cmsg on a v4 socket, so there is no correct silent behaviour
   available. An `OSError` from the kernel, meaning a source this host cannot
   send from, propagates; only platform incapability degrades to `sendto`.
-- **`async arecv(bufsize=65535, resolve_interface=True)`**,
+- **`async arecv(bufsize=65535, *, resolve_interface=True)`**,
   **`async asend(data, dst, port, *, src=None) -> int`** and
-  **`datagrams(bufsize=65535, resolve_interface=True, *, on_error=None) ->
+  **`datagrams(bufsize=65535, *, resolve_interface=True, on_error=None) ->
   AsyncIterator[Datagram]`** — `recv()` and `send()` awaited, and an `async for`
   over arrivals:
 
@@ -1789,7 +1792,7 @@ wrapped socket expires, on every supported Python (before 3.10
   interpreter rather than of any socket. `False` rather than an exception when a
   socket of that family cannot be created, so IPv6 being disabled is an answer
   and not an error.
-- **`reply_socket(datagram, port=0, connreset=False)`** — a socket bound so
+- **`reply_socket(datagram, port=0, *, connreset=False)`** — a socket bound so
   replies leave from the address the client addressed. The point of pktinfo, in
   one call:
 
