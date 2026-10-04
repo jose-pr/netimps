@@ -11,7 +11,7 @@ import socket
 import pytest
 
 import netimps
-from netimps import UdpEndpoint, bind, is_broadcast, max_udp_payload, parse
+from netimps import UDPEndpoint, bind, is_broadcast, max_udp_payload, parse
 from netimps._udp import Datagram
 
 IS_WINDOWS = os.name == "nt"
@@ -29,8 +29,8 @@ def test_reply_socket_answers_from_the_address_the_client_addressed():
     routing table prefers. DHCP and TFTP clients both check, and drop a reply
     that arrives from an address they did not talk to.
     """
-    with UdpEndpoint(bind("0.0.0.0", 0)) as server:
-        if not server.supports_pktinfo:
+    with UDPEndpoint(bind("0.0.0.0", 0)) as server:
+        if not server.has_pktinfo:
             pytest.skip("no pktinfo on this platform")
         server.socket.settimeout(5.0)
         port = server.socket.getsockname()[1]
@@ -65,8 +65,8 @@ def test_a_plain_reply_comes_from_the_wrong_address():
     may be unnecessary -- which is worth finding out from a failing test rather
     than never.
     """
-    with UdpEndpoint(bind("0.0.0.0", 0)) as server:
-        if not server.supports_pktinfo:
+    with UDPEndpoint(bind("0.0.0.0", 0)) as server:
+        if not server.has_pktinfo:
             pytest.skip("no pktinfo on this platform")
         server.socket.settimeout(5.0)
         port = server.socket.getsockname()[1]
@@ -108,7 +108,7 @@ def test_reply_socket_falls_back_for_an_unbindable_destination(label, local):
     not recognisable without the arrival interface's prefixes and shows up only
     as a bind failure.
     """
-    with UdpEndpoint(bind("0.0.0.0", 0)) as server:
+    with UDPEndpoint(bind("0.0.0.0", 0)) as server:
         datagram = Datagram(
             data=b"", sender=("127.0.0.1", 1), local_address=parse(local)
         )
@@ -121,7 +121,7 @@ def test_reply_socket_falls_back_for_an_unbindable_destination(label, local):
 
 def test_reply_socket_without_pktinfo_falls_straight_through():
     """`local_address is None` is the no-pktinfo case, not an error."""
-    with UdpEndpoint(bind("0.0.0.0", 0)) as server:
+    with UDPEndpoint(bind("0.0.0.0", 0)) as server:
         datagram = Datagram(data=b"", sender=("127.0.0.1", 1), local_address=None)
         sock = server.reply_socket(datagram)
         try:
@@ -132,7 +132,7 @@ def test_reply_socket_without_pktinfo_falls_straight_through():
 
 def test_reply_socket_prefers_the_endpoints_own_address_over_the_wildcard():
     """A listener pinned to one address should answer from it, not the wildcard."""
-    with UdpEndpoint(bind("127.0.0.1", 0)) as server:
+    with UDPEndpoint(bind("127.0.0.1", 0)) as server:
         datagram = Datagram(
             data=b"", sender=("127.0.0.1", 1), local_address=parse("255.255.255.255")
         )
@@ -157,8 +157,8 @@ def test_reply_socket_unmaps_a_dual_stack_v4_arrival():
     except OSError as exc:
         raw.close()
         pytest.skip("no dual-stack socket here: %s" % (exc,))
-    with UdpEndpoint(raw) as server:
-        if not server.supports_pktinfo:
+    with UDPEndpoint(raw) as server:
+        if not server.has_pktinfo:
             pytest.skip("no pktinfo on this platform")
         server.socket.settimeout(5.0)
         port = server.socket.getsockname()[1]
@@ -188,7 +188,7 @@ def test_reply_socket_disables_connreset_by_default():
     The default is inverted from `bind()` on purpose: a reply socket is a
     server's, and the report is only useful to a client talking to one peer.
     """
-    with UdpEndpoint(bind("0.0.0.0", 0)) as server:
+    with UDPEndpoint(bind("0.0.0.0", 0)) as server:
         datagram = Datagram(data=b"", sender=("127.0.0.1", 1), local_address=None)
         sock = server.reply_socket(datagram)
         try:
@@ -231,7 +231,7 @@ def _second_bind_is_refused(address, port):
 def test_reply_socket_takes_a_range_of_ports():
     """A server pinning transfer ports to a firewall-allowed range (`tftp-hpa
     -R`, `dnsmasq --tftp-port-range`) had no way through this method."""
-    with UdpEndpoint(bind("0.0.0.0", 0)) as server:
+    with UDPEndpoint(bind("0.0.0.0", 0)) as server:
         # Ask the OS for free ports rather than naming any: a hardcoded port
         # meets Windows' per-boot excluded ranges sooner or later.
         scouts = [_hold("127.0.0.1") for _ in range(3)]
@@ -260,7 +260,7 @@ def test_a_held_port_advances_the_port_not_the_address():
     client never addressed. An in-use port says nothing is wrong with the
     address, so the next port on the same address is the only correct move.
     """
-    with UdpEndpoint(bind("0.0.0.0", 0)) as server:
+    with UDPEndpoint(bind("0.0.0.0", 0)) as server:
         scouts = [_hold("127.0.0.1") for _ in range(2)]
         taken, free = (s.getsockname()[1] for s in scouts)
         scouts[1].close()  # `free` is now free; `taken` is still held.
@@ -292,7 +292,7 @@ def test_exhausting_the_ports_raises_rather_than_moving_address():
     bug. With every port held on a bindable address this now raises
     `AddressInUseError` and binds nothing.
     """
-    with UdpEndpoint(bind("0.0.0.0", 0)) as server:
+    with UDPEndpoint(bind("0.0.0.0", 0)) as server:
         holder = _hold("127.0.0.1")
         taken = holder.getsockname()[1]
 
@@ -316,7 +316,7 @@ def test_an_unbindable_address_still_advances_the_address():
     This is what keeps the two-axis fix from being a regression -- the fallback
     chain still exists, it is just no longer reached by an in-use port.
     """
-    with UdpEndpoint(bind("127.0.0.1", 0)) as server:
+    with UDPEndpoint(bind("127.0.0.1", 0)) as server:
         scouts = [_hold("127.0.0.1") for _ in range(2)]
         wanted = [s.getsockname()[1] for s in scouts]
         for s in scouts:
@@ -339,7 +339,7 @@ def test_a_generator_of_ports_survives_every_address_candidate():
     A generator passed straight through would be empty by the second candidate,
     which would turn the fallback chain into a silent single attempt.
     """
-    with UdpEndpoint(bind("127.0.0.1", 0)) as server:
+    with UDPEndpoint(bind("127.0.0.1", 0)) as server:
         scout = _hold("127.0.0.1")
         wanted = scout.getsockname()[1]
         scout.close()
@@ -403,7 +403,7 @@ def test_a_held_port_does_not_answer_from_another_address():
         if not _second_bind_is_refused(other, port):
             pytest.skip("this platform permits a second live bind here")
 
-        with UdpEndpoint(bind("127.0.0.1", 0)) as server:
+        with UDPEndpoint(bind("127.0.0.1", 0)) as server:
             datagram = Datagram(
                 data=b"", sender=("127.0.0.1", 1), local_address=parse(other)
             )
@@ -416,7 +416,7 @@ def test_a_held_port_does_not_answer_from_another_address():
 def test_an_empty_port_iterable_is_an_error_not_a_wildcard():
     """`port=[]` is a caller bug. Treating it as "any port" would bind something
     the caller's firewall rule does not cover."""
-    with UdpEndpoint(bind("0.0.0.0", 0)) as server:
+    with UDPEndpoint(bind("0.0.0.0", 0)) as server:
         datagram = Datagram(data=b"", sender=("127.0.0.1", 1), local_address=None)
         with pytest.raises(ValueError, match="empty"):
             server.reply_socket(datagram, port=[])
@@ -424,7 +424,7 @@ def test_an_empty_port_iterable_is_an_error_not_a_wildcard():
 
 def test_a_plain_int_port_still_works():
     """The int form is the common case and must not have become an iterable."""
-    with UdpEndpoint(bind("0.0.0.0", 0)) as server:
+    with UDPEndpoint(bind("0.0.0.0", 0)) as server:
         datagram = Datagram(data=b"", sender=("127.0.0.1", 1), local_address=None)
         sock = server.reply_socket(datagram, port=0)
         try:
@@ -480,7 +480,7 @@ def test_a_v4_client_of_a_dual_stack_listener_gets_a_real_reply(pktinfo):
     """
     listener = _dual_stack_listener()
     port = listener.getsockname()[1]
-    with UdpEndpoint(listener, pktinfo=pktinfo) as server:
+    with UDPEndpoint(listener, pktinfo=pktinfo) as server:
         client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             client.sendto(b"hello", ("127.0.0.1", port))
@@ -536,7 +536,7 @@ def test_the_reply_family_follows_the_sender_not_the_listener():
     Asserted on the `Datagram` rather than through a live dual-stack socket so
     it holds on a runner with no IPv6 at all.
     """
-    with UdpEndpoint(bind("127.0.0.1", 0)) as endpoint:
+    with UDPEndpoint(bind("127.0.0.1", 0)) as endpoint:
         mapped = Datagram(data=b"", sender=("::ffff:127.0.0.1", 1))
         assert endpoint._reply_family(mapped) == socket.AF_INET
         real_v6 = Datagram(data=b"", sender=("::1", 1, 0, 0))
@@ -736,7 +736,7 @@ def test_the_windows_loopback_mtu_matches_what_loopback_delivers():
 
 
 # --------------------------------------------------------------------------- #
-# supports_pktinfo                                                            #
+# has_pktinfo                                                            #
 # --------------------------------------------------------------------------- #
 
 
@@ -748,10 +748,10 @@ def test_supports_pktinfo_agrees_with_an_actual_endpoint():
     """
     probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        expected = UdpEndpoint(probe).supports_pktinfo
+        expected = UDPEndpoint(probe).has_pktinfo
     finally:
         probe.close()
-    assert netimps.supports_pktinfo(socket.AF_INET) == expected
+    assert netimps.has_pktinfo(socket.AF_INET) == expected
 
 
 def test_supports_pktinfo_does_not_feature_test_the_constant_name():
@@ -765,7 +765,7 @@ def test_supports_pktinfo_does_not_feature_test_the_constant_name():
 
     So on 3.9-3.11 the constant being absent must NOT make this False.
     """
-    answer = netimps.supports_pktinfo(socket.AF_INET)
+    answer = netimps.has_pktinfo(socket.AF_INET)
     if not hasattr(socket, "IP_PKTINFO"):
         # The interpreter lacks the name. The answer must come from the socket.
         assert (
@@ -786,11 +786,11 @@ def test_supports_pktinfo_is_cached_per_family(monkeypatch):
             super().__init__(*args, **kwargs)
 
     monkeypatch.setattr(netimps._udp._socket, "socket", Counting)
-    netimps.supports_pktinfo(socket.AF_INET)
-    netimps.supports_pktinfo(socket.AF_INET)
-    netimps.supports_pktinfo(socket.AF_INET)
+    netimps.has_pktinfo(socket.AF_INET)
+    netimps.has_pktinfo(socket.AF_INET)
+    netimps.has_pktinfo(socket.AF_INET)
     assert len(created) == 1, "probed more than once for one family"
-    netimps.supports_pktinfo(socket.AF_INET6)
+    netimps.has_pktinfo(socket.AF_INET6)
     assert len(created) == 2, "a second family must be probed separately"
     assert real is socket.socket or True
 
@@ -807,9 +807,9 @@ def test_supports_pktinfo_returns_false_rather_than_raising(monkeypatch):
         raise OSError("no such family")
 
     monkeypatch.setattr(netimps._udp._socket, "socket", refuse)
-    assert netimps.supports_pktinfo(socket.AF_INET6) is False
+    assert netimps.has_pktinfo(socket.AF_INET6) is False
 
 
 def test_supports_pktinfo_defaults_to_ipv4():
     netimps._udp._PKTINFO_SUPPORT.clear()
-    assert netimps.supports_pktinfo() == netimps.supports_pktinfo(socket.AF_INET)
+    assert netimps.has_pktinfo() == netimps.has_pktinfo(socket.AF_INET)

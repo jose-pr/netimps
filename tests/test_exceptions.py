@@ -218,11 +218,9 @@ _MALFORMED_TEXT = [
     ),
     pytest.param(lambda: netimps.parse("::1", netimps.IPv4Address), id="parse-family"),
     pytest.param(lambda: netimps.MACAddress("not a mac"), id="MACAddress"),
-    pytest.param(lambda: netimps.Fqdn("a..b"), id="Fqdn"),
-    pytest.param(lambda: netimps.normalize_host("[::1"), id="normalize_host"),
-    pytest.param(
-        lambda: netimps.normalize_host("host:notaport"), id="normalize_host-port"
-    ),
+    pytest.param(lambda: netimps.FQDN("a..b"), id="FQDN"),
+    pytest.param(lambda: netimps.split_host("[::1"), id="split_host"),
+    pytest.param(lambda: netimps.split_host("host:notaport"), id="split_host-port"),
     pytest.param(lambda: netimps.join_host("", 80), id="join_host"),
     pytest.param(lambda: netimps.resolve_nslookup("-evil"), id="nslookup-query"),
 ]
@@ -272,7 +270,7 @@ def test_udp_recv_timeout_is_the_builtin_timeout_error(pktinfo):
     sock = netimps.bind("127.0.0.1", 0)
     sock.settimeout(0.05)
     try:
-        with netimps.UdpEndpoint(sock, pktinfo=pktinfo) as endpoint:
+        with netimps.UDPEndpoint(sock, pktinfo=pktinfo) as endpoint:
             with pytest.raises(TimeoutError):
                 endpoint.recv()
     finally:

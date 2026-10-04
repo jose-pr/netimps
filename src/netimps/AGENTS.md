@@ -25,15 +25,15 @@ The package is consistent about what the first argument means:
 
 | Name | Meaning | Examples |
 | --- | --- | --- |
-| `dst` | where traffic is **sent** | `ping`, `tcp_check`, `wait_for_port`, `get_route`, `hop_count`, `discover_mtu`, `get_tcp_mss`, `get_pmtu`, `scan_ports(host)` |
-| `src` | where traffic is **sent from** | `ping(src=)`, `get_free_port(src=)`, `discover_mtu(src=)`, `UdpEndpoint.send(src=)` |
+| `dst` | where traffic is **sent** | `ping`, `tcp_check`, `wait_for_port`, `get_route`, `count_hops`, `discover_mtu`, `get_tcp_mss`, `get_pmtu`, `scan_ports(host)` |
+| `src` | where traffic is **sent from** | `ping(src=)`, `get_free_port(src=)`, `discover_mtu(src=)`, `UDPEndpoint.send(src=)` |
 | `host` / `network` | the thing being **examined** | `scan_ports(host)`, `scan_hosts(network)` |
-| `address` / `ip` | an address being **classified** (no DNS) | `get_ip`, `interface_for`, `interfaces_for`, `is_local_address`, `is_multicast`, `is_link_scoped` |
+| `address` / `ip` | an address being **classified** (no DNS) | `get_ip`, `get_interface`, `iter_interfaces`, `is_local_address`, `is_multicast`, `is_link_scoped` |
 
 `dst`/`src` are abbreviated symmetrically, matching packet-header convention.
 A `dst` accepts a hostname; an `address` does not.
 
-**Every `dst`-typed parameter accepts `AddressLike`** — a hostname string, an
+**Every `dst`-typed parameter accepts `HostLike`** — a hostname string, an
 address string, an existing `IPv4Address`/`IPv6Address`, or an
 `IPv4Interface`/`IPv6Interface` (its `.ip` is used, dropping the `/prefix`,
 which every consumer of a destination -- a subprocess argument, a socket
@@ -53,7 +53,7 @@ lookups, `get_default_port`/`get_default_scheme`, still return `None` instead:
 
 **Several parameters are named `ipv6=`** and mean one thing throughout --
 `True` IPv6, `False` IPv4, `None` (the default) whichever the resolver
-answers with: `get_ip`, `get_source_ip`, `get_route`, `hop_count`, `get_pmtu`,
+answers with: `get_ip`, `get_source_ip`, `get_route`, `count_hops`, `get_pmtu`,
 `ping`, and `discover_mtu` via `**ping_kwargs`. A literal `dst` decides for
 itself.
 
@@ -82,8 +82,8 @@ The union aliases are **not callable** — `IPAddress("10.0.0.5")` is a
 | `IPAddressLike` | `str \| int \| bytes \| IPv4Address \| IPv6Address` -- accepted *as input* for an address |
 | `IPInterfaceLike` | anything accepted *as input* for an address + prefix |
 | `IPNetworkLike` | anything accepted *as input* for a network |
-| `AddressLike` | `str \| IPv4Address \| IPv6Address \| IPv4Interface \| IPv6Interface` -- any `dst`-typed parameter |
-| `MACLike` | `str \| int \| bytes \| bytearray \| MACAddress` |
+| `HostLike` | `str \| IPv4Address \| IPv6Address \| IPv4Interface \| IPv6Interface` -- any `dst`-typed parameter |
+| `MACAddressLike` | `str \| int \| bytes \| bytearray \| MACAddress` |
 
 Plus the stdlib concretes re-exported so callers need not import `ipaddress`:
 `IPv4Address`, `IPv4Interface`, `IPv4Network`, `IPv6Address`, `IPv6Interface`,
@@ -249,7 +249,7 @@ is deliberately not used.
   link-local address *first*, since `fe80::` is configured before SLAAC or
   DHCPv6 completes on Linux and macOS NICs, so "the first entry that is not
   loopback" returned an address useless as a bind target and unreachable
-  off-link. APIPA `169.254/16` is the IPv4 twin and ranks below a DHCP lease.
+  off-link. LINK_LOCAL_V4 `169.254/16` is the IPv4 twin and ranks below a DHCP lease.
 
   **Loopback outranks link-local deliberately**: the only interface carrying
   both is the loopback adapter, where `::1` is what every caller means, and a
@@ -289,7 +289,7 @@ so nothing is lost. Pass an existing enumeration in a loop; it is a syscall.
   `ipaddress` omits (it ships `collapse_addresses` but nothing to punch holes).
   Result is collapsed.
 - **`join_host(host, port=None) -> str`** — the **inverse** of
-  `normalize_host`, and the direction everyone writes by hand and gets wrong on
+  `split_host`, and the direction everyone writes by hand and gets wrong on
   IPv6:
 
   ```python
@@ -300,16 +300,16 @@ so nothing is lost. Pass an existing enumeration in a loop; it is a syscall.
   ```
 
   Accepts a `str`, an address, an `IPv4Interface`/`IPv6Interface` (its `.ip` is
-  used) or an `Fqdn`; an already-bracketed string is not double-bracketed.
+  used) or an `FQDN`; an already-bracketed string is not double-bracketed.
   **Only an IPv6 *literal* is bracketed** — a hostname never is, however many
   colons it has, because brackets in a URI authority assert "the inside is an
   address". A port-less v6 comes back bare, which is what makes
-  `normalize_host(join_host(h, p)) == (h, p)` hold in every case. Raises
+  `split_host(join_host(h, p)) == (h, p)` hold in every case. Raises
   `ValueError` for an empty host, a port outside 0–65535, or a mismatched
   bracket (`"[::1"` would otherwise emerge as `"[::1:80"`).
   Both of these take the package's usual loose union, not only a `str`: an address
   object, an `IPv4Interface`/`IPv6Interface` (its `.ip` is used), a `Host` or an
-  `Fqdn`. A *network* raises `TypeError` — it names no single host. `normalize_host`
+  `FQDN`. A *network* raises `TypeError` — it names no single host. `split_host`
   uses an allowlist rather than a `str()` fallback, because a fallback turned
   `None` into the hostname `"None"`.
 - **`unmap(value) -> IPAddress`** — collapse an IPv4-mapped IPv6 address
@@ -328,7 +328,7 @@ so nothing is lost. Pass an existing enumeration in a loop; it is a syscall.
   address form is unspecified. A `%zone` is stripped first. **Never raises** —
   anything unparseable is simply not a wildcard, so it stays usable in a branch
   without a guard. Agrees with what `bind("")` treats as the wildcard.
-- **`normalize_host(text, default_port=None) -> (host, port)`** — split
+- **`split_host(text, default_port=None) -> (host, port)`** — split
   `host:port`, handling IPv6 brackets. **`"::1"` stays an address**, never host
   `"::"` port `1` — the mistake hand-rolled splitters make. Only a bracketed v6
   address may carry a port; brackets are stripped from the returned host and a
@@ -392,8 +392,8 @@ caller would already catch, so an existing `except ValueError` /
 A caller's own mistake (a bad option, a wrong argument type) is plain
 `ValueError` / `TypeError`, never a `NetimpsError`. `NetimpsValueError` is what
 a function whose job is to turn text into a value raises for text it cannot
-read: `parse`, `MACAddress(...)`, `Fqdn(...)`, `split`-style host and port
-splitting (`normalize_host`, `join_host`) and `resolve_nslookup`'s query
+read: `parse`, `MACAddress(...)`, `FQDN(...)`, `split`-style host and port
+splitting (`split_host`, `join_host`) and `resolve_nslookup`'s query
 check. A bad option elsewhere (`ping`'s `ttl`, `tcp_check`'s port, a
 `timeout`) stays a plain `ValueError`.
 
@@ -409,13 +409,13 @@ subclass **`ResolutionTimeoutError`**, so `except ResolutionError` and
 
 **`DNSDecodeError`** reaches a caller directly from `resolve_doh` (a `query`
 with an empty or over-long label, raised before anything is sent) and from
-`Fqdn.wire` (a name whose labels cannot be encoded). Inside `resolve_wire`
+`FQDN.wire` (a name whose labels cannot be encoded). Inside `resolve_wire`
 and `resolve_doh` an unreadable *reply* is not raised as such: it becomes a
 `ResolutionError` whose `__cause__` is the `DNSDecodeError`.
 
 **`resolve(query, rdtype=None, ns=None, timeout=5.0, port=53, tcp=False, search=True, backends=None, strict=False, source=None)`**
 
-`query` accepts `AddressLike` (a hostname string, an address string, an
+`query` accepts `HostLike` (a hostname string, an address string, an
 `IPv4Address`/`IPv6Address`, or an `IPv4Interface`/`IPv6Interface` -- its
 `.ip` is used), not just a plain string.
 
@@ -484,7 +484,7 @@ calls instead of one, the last of which may spawn `nslookup`. Narrow
 **`resolve_dnspython(query, rdtype=None, ns=None, timeout=5.0, port=53, tcp=False, search=True, source=None)`**
 
 The original backend: `dnspython`, structured records, every `rdtype`. Same
-`AddressLike` `query` and auto-`rdtype` behavior as `resolve()`. A `"ptr"`
+`HostLike` `query` and auto-`rdtype` behavior as `resolve()`. A `"ptr"`
 lookup (explicit or auto-selected) uses dnspython's `resolve_address()`,
 which builds the reverse (`in-addr.arpa`/`ip6.arpa`) name from the literal
 address itself -- the caller never constructs that name by hand.
@@ -513,7 +513,7 @@ address itself -- the caller never constructs that name by hand.
 The OS resolver, via `socket.getaddrinfo()`/`socket.gethostbyaddr()` — **hosts
 file, NSS (`nsswitch.conf`) and DNS, in the order the OS applies them**,
 including any OS-level resolver cache. This is what `resolve_dnspython`
-cannot see (its own DNS query bypasses all of that). Same `AddressLike`
+cannot see (its own DNS query bypasses all of that). Same `HostLike`
 `query` and auto-`rdtype` behavior as `resolve()`.
 
 - **Address and reverse records only**: `rdtype` must be `"a"`, `"aaaa"` or
@@ -547,7 +547,7 @@ cannot see (its own DNS query bypasses all of that). Same `AddressLike`
 
 Shells out to the `nslookup` binary — a fallback for when neither Python-level
 path is usable. Address records only: `rdtype` must be `"a"`, `"aaaa"` or
-`"ptr"`. Same `AddressLike` `query` and auto-`rdtype` behavior as `resolve()`.
+`"ptr"`. Same `HostLike` `query` and auto-`rdtype` behavior as `resolve()`.
 
 - Parses **both BIND-style** (`Address: 1.2.3.4`, one line per address) **and
   Windows-style** (`Addresses:` with continuation lines, and NODATA as a bare
@@ -582,7 +582,7 @@ path is usable. Address records only: `rdtype` must be `"a"`, `"aaaa"` or
 
 The DNS protocol itself, standard library only: one question over UDP to each
 nameserver in turn, asked again over TCP when the reply is truncated (TCP
-throughout with `tcp=True`). Same `AddressLike` `query`, auto-`rdtype` and
+throughout with `tcp=True`). Same `HostLike` `query`, auto-`rdtype` and
 native-value contract as the other backends.
 
 - **`ns`**: `host`, `host:port`, a bare IPv6 address, `[v6]` or `[v6]:port`
@@ -623,7 +623,7 @@ names a DoH endpoint wants that answer alone.
 
 | Argument | Notes |
 | --- | --- |
-| `dst` | `AddressLike` (hostname, address string, address object, or `IPv4Interface`/`IPv6Interface` -- its `.ip` is pinged). `ping(get_interfaces()[0].ipv4[0])` works directly. |
+| `dst` | `HostLike` (hostname, address string, address object, or `IPv4Interface`/`IPv6Interface` -- its `.ip` is pinged). `ping(get_interfaces()[0].ipv4[0])` works directly. |
 | `src` | `Interface`, address, **MAC**, adapter name or string. A MAC is resolved to the adapter holding it. Applies to `tcp`/`udp` as well as ICMP. |
 | `size` | ICMP payload bytes. The wire packet is larger by the IP header plus 8: **28 bytes for IPv4**, 48 for IPv6. |
 | `ttl` | initial hop limit. The flag letter differs per platform (below); applies to `tcp`/`udp` too. |
@@ -793,7 +793,7 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
   > which is meant from the address alone: BSD refuses the bare form with
   > "Can't assign requested address", while Windows and Linux happen to accept
   > it — which is why this only ever failed on macOS. The interface's index goes
-  > in as the scope id, the same rule `UdpEndpoint.reply_socket` applies to a
+  > in as the scope id, the same rule `UDPEndpoint.reply_socket` applies to a
   > link-local destination.
 
 - **`bind_error_hint(exc, port=None) -> str | None`** — an actionable sentence
@@ -801,15 +801,15 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
   Returns `None` for anything unrecognised, so the caller keeps the original
   error. **Does not raise** — what to do with a failure is the caller's call.
 - **The adapter enumeration is cacheable, and it is opt-in**:
-  `get_interfaces(cache=...)`, and the same argument on `interface_for`,
-  `interfaces_for` and `is_local_address`. `cache=False` (the default) never
+  `get_interfaces(cache=...)`, and the same argument on `get_interface`,
+  `iter_interfaces` and `is_local_address`. `cache=False` (the default) never
   caches and never reads a cached value, so nothing changes unless asked;
   `cache=True` uses `INTERFACE_CACHE_TTL` (**1 second**); a number is that TTL in
   seconds. `cache=0` is a TTL of zero, so it enumerates and reseeds — which
   is the whole of "force a refresh", and why there is no second argument for it.
   `clear_interface_cache()` invalidates without a lookup.
 
-  Measured with 7 adapters: `interface_for` goes **0.98 ms → 0.010 ms**, and
+  Measured with 7 adapters: `get_interface` goes **0.98 ms → 0.010 ms**, and
   `is_local_address` likewise. On a host with many adapters the uncached call
   reaches 35–42 ms, which is slow enough that a packet flood can deny service
   on its own — so this is an availability question, not only a speed one.
@@ -839,7 +839,7 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
   `iface.ips.append(...)` corrupt every later caller's view. The copy costs
   0.004 ms against 0.969 ms to enumerate, and nothing deeper is copied because
   nothing deeper is mutable.
-- **`interface_for(query, strict=True) -> Interface | None`** — first matching
+- **`get_interface(query, strict=True) -> Interface | None`** — first matching
   adapter in OS enumeration order. `query` accepts an `Interface`, exact
   `IPAddress`, exact `.ip` from an `IPInterface`, an `IPNetwork` containing at
   least one assigned address, or an exact `MACAddress`. Address-like strings,
@@ -850,7 +850,7 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
   `strict=False`, only an address or `IPInterface` miss synthesizes a host-route
   interface named `"<unknown>"`; networks and MACs have no honest synthetic
   result.
-- **`interfaces_for(query) -> Iterator[Interface]`** — every match for the same
+- **`iter_interfaces(query) -> Iterator[Interface]`** — every match for the same
   query forms, in OS order and with each adapter yielded once even if several
   assigned addresses match. An `Interface` yields itself without enumeration.
   Addresses need not be unique across adapters (unscoped IPv6 link-local is a
@@ -869,14 +869,14 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
   `getsockname()` and `getaddrinfo` hand back, so it can be passed straight in.
 - **`get_source_ip(dst="8.8.8.8", port=80, ipv6=None) -> IPAddress | None`** —
   which local address the kernel would use to reach `dst`. `dst` accepts
-  `AddressLike`. **Sends no packets** — `connect()` on a UDP socket only
+  `HostLike`. **Sends no packets** — `connect()` on a UDP socket only
   consults the routing table. The answer depends on `dst`: with a VPN up, a
   public probe returns the tunnel address and a LAN probe the physical one.
   Correct where hostname resolution picks a VM adapter. `ipv6=` selects the
   family; it used to be guessed with `":" in dst`, and **a hostname never
   contains a colon**, so every name was probed as IPv4 and a v6-only one
   answered `None`. The returned address carries **no `%zone`** — the zone
-  identifies the adapter, and `interface_for` is the way back to it.
+  identifies the adapter, and `get_interface` is the way back to it.
 - **`get_free_port(src="127.0.0.1", family=AF_INET) -> int`** — bind port 0 and
   read it back. **Inherently racy** — the port frees the instant it returns; if
   you can, bind port 0 in the server itself instead. `SO_REUSEADDR` is
@@ -937,7 +937,7 @@ failure. `tcp` and `udp` also report `rtt_ms`; only ICMP reports `ttl`.
   > write any more, and that spelling was exactly the confusion. `Route` is
   > **hashable**, and `__eq__` compares `dst`, `src`, `gateway`,
   > `interface_index` and `on_link`.
-- **`hop_count(dst, max_hops=30, timeout=1.0, allow_traceroute=True, ipv6=None)`**
+- **`count_hops(dst, max_hops=30, timeout=1.0, allow_traceroute=True, ipv6=None)`**
   — uses raw-socket probes when permitted, otherwise drives the system
   `traceroute`/`tracert`, so it **works unprivileged**. Only the hop number and
   destination address are parsed, never localised prose.
@@ -1099,22 +1099,22 @@ receives nothing, and looks fine:
   raises for an IPv6 group, because index `0` means "kernel's choice" — the
   default `interface=` was passed to override.
 
-## `Fqdn` — domain names as a value type
+## `FQDN` — domain names as a value type
 
-**`Fqdn(*parts)`** — a domain name with label algebra. Immutable, hashable,
+**`FQDN(*parts)`** — a domain name with label algebra. Immutable, hashable,
 ordered. Built from a dotted string or from separate labels, **leftmost first**:
-`Fqdn("www.example.com")`, `Fqdn("www", "example", "com")`,
-`Fqdn("www", Fqdn("example.com"))`.
+`FQDN("www.example.com")`, `FQDN("www", "example", "com")`,
+`FQDN("www", FQDN("example.com"))`.
 
 - **The algebra is inverted from `pathlib`, and that is the one thing to get
   right.** DNS puts the *most* significant label last, so every borrowed name
   points the other way:
 
-  | | `Fqdn` | `pathlib.PurePath` |
+  | | `FQDN` | `pathlib.PurePath` |
   | --- | --- | --- |
   | `.name` | **leftmost** label (`www`) | rightmost component |
   | `.parent` | strips the **leftmost** (`example.com`) | strips the rightmost |
-  | `/` | **prepends** (`Fqdn("example.com") / "www"` → `www.example.com`) | appends |
+  | `/` | **prepends** (`FQDN("example.com") / "www"` → `www.example.com`) | appends |
 
   Assume pathlib semantics and you get all three backwards.
 - **DNS vocabulary is primary; the pathlib spelling is an alias on the same
@@ -1126,17 +1126,17 @@ ordered. Built from a dotted string or from separate labels, **leftmost first**:
 - **The trailing dot is absoluteness, and it is part of identity.**
   `example.com.` is fully qualified; bare `example.com` is relative to the
   resolver's search list and can mean different things on different hosts — so
-  `Fqdn("example.com") != Fqdn("example.com.")`, exactly as
+  `FQDN("example.com") != FQDN("example.com.")`, exactly as
   `Path("a") != Path("/a")`. Compare `.labels` when qualification is not what
   you mean. `as_fully_qualified()` and `relative()` convert.
-- **An address literal is refused**: `Fqdn("10.0.0.1")` and `Fqdn("::1")` raise
+- **An address literal is refused**: `FQDN("10.0.0.1")` and `FQDN("::1")` raise
   `ValueError`. This is a *name* algebra — labels, a parent domain, a TLD are
   things an IP does not have. Use **`Host`** for a value that may be either, and
-  **`Host.fqdn`** to narrow (an `Fqdn`, or `None` when it is an address).
+  **`Host.fqdn`** to narrow (an `FQDN`, or `None` when it is an address).
   Digit-heavy real names are fine: `4.3.2.1.in-addr.arpa` and `0.pool.ntp.org`
   both parse.
-- **`.domain` is not the registrable domain.** `Fqdn("example.com").domain` is
-  `Fqdn('com')`, a public suffix. Telling `example.co.uk` (registrable) from
+- **`.domain` is not the registrable domain.** `FQDN("example.com").domain` is
+  `FQDN('com')`, a public suffix. Telling `example.co.uk` (registrable) from
   `co.uk` (not) needs the Public Suffix List, a sizeable data file with its own
   update cadence, and this package has **no hard runtime dependencies**. The gap
   is documented rather than papered over with a heuristic that handles `.com`
@@ -1150,14 +1150,14 @@ ordered. Built from a dotted string or from separate labels, **leftmost first**:
   'b.com']`.
 - **Equality is case-insensitive** (RFC 4343) and `__hash__` agrees. It does
   **not** coerce a `str`, for the same reason `MACAddress` does not; use
-  `Fqdn.try_parse(text) == name`.
+  `FQDN.try_parse(text) == name`.
 - **`name in domain` is containment, the DNS reading of `address in network`** —
   the stdlib idiom this package layers over:
 
   ```python
-  Fqdn("www.example.com") in Fqdn("example.com")   # True
-  "mail.example.com" in Fqdn("example.com")         # True — str accepted
-  Fqdn("example.com") in Fqdn("example.com")        # True — "at or under"
+  FQDN("www.example.com") in FQDN("example.com")   # True
+  "mail.example.com" in FQDN("example.com")         # True — str accepted
+  FQDN("example.com") in FQDN("example.com")        # True — "at or under"
   ```
 
   **Inclusive**, where `.is_subdomain_of()` is strict: the pair mirrors `<=`
@@ -1167,11 +1167,11 @@ ordered. Built from a dotted string or from separate labels, **leftmost first**:
   label test — that is `"com" in f.labels`.
 - **Text interop**: `str(f)` is the name (with its trailing dot if it has one),
   and `f + str` / `str + f` give a **plain `str`**, for building a URL or a log
-  line without reaching for `str()` first. `Fqdn + Fqdn` raises and points at
+  line without reaching for `str()` first. `FQDN + FQDN` raises and points at
   `/`, since concatenating two names as text yields
   `'www.example.comexample.com'`.
 - **`.unicode`** — the display form, decoding punycode back:
-  `Fqdn("münchen.de").unicode` is `'münchen.de'` while `str()` is
+  `FQDN("münchen.de").unicode` is `'münchen.de'` while `str()` is
   `'xn--mnchen-3ya.de'`. Labels are stored ASCII because that is what goes on the
   wire and what comparisons use. An undecodable label passes through unchanged.
 - **`.wire`** / **`.wire_length`** — the DNS wire encoding
@@ -1192,8 +1192,8 @@ ordered. Built from a dotted string or from separate labels, **leftmost first**:
   `a.b.example.com`, and choosing one silently would be wrong for half of
   callers. Build the rule you need from `.is_subdomain_of()` and `len()`.
 - **`.common_ancestor(other)`** — the deepest domain enclosing both names, or
-  `None` when they share no label. `Fqdn("a.example.com")
-  .common_ancestor("b.example.com")` is `Fqdn('example.com')`.
+  `None` when they share no label. `FQDN("a.example.com")
+  .common_ancestor("b.example.com")` is `FQDN('example.com')`.
 - Other members: `.tld`, `len()` (label count, not characters), iteration and
   indexing over labels (a *slice* gives a plain tuple, since an arbitrary slice
   of a name usually is not one), `.child(*labels)` as the spelled-out `/`,
@@ -1214,7 +1214,7 @@ ordered. Built from a dotted string or from separate labels, **leftmost first**:
   is IDNA-encoded via the standard library, which is **IDNA 2003**, not the
   IDNA 2008 of the third-party `idna` package.
 
-**`FqdnLike`** — `Union[Fqdn, str]`, the accepted-input union wherever a method
+**`FQDNLike`** — `Union[FQDN, str]`, the accepted-input union wherever a method
 takes "another name".
 
 ## Broadcast and payload sizing
@@ -1282,12 +1282,12 @@ them, computed from `WSACMSGHDR` and pointer alignment on Windows. Size an
 lets a *following* header start aligned, and omitting it silently truncates the
 second cmsg.
 
-**`supports_recvmsg()`** → whether the above can actually run here. Prefer it to
+**`has_recvmsg()`** → whether the above can actually run here. Prefer it to
 `hasattr(socket.socket, "recvmsg")`, which answers a different question once the
 patch below is installed.
 
 **`patch_socket_module(enable=True)`** → list of names changed.
-**`socket_patched()`** → whether anything is installed right now.
+**`is_socket_patched()`** → whether anything is installed right now.
 
 > **Installing this patch changes what *other* libraries infer.** It is additive
 > in *names* and therefore not additive in *behaviour*: code that tests
@@ -1302,14 +1302,14 @@ patch below is installed.
 > nothing** — a zero-filled `spec_dst` does not degrade a caller that resolves
 > its interface from that field, it silences it. (An earlier version of this box
 > said "degrade to `0.0.0.0` rather than crashing", which was inferred from the
-> field's value rather than measured against it.) `UdpEndpoint` is the
+> field's value rather than measured against it.) `UDPEndpoint` is the
 > supported way to get that address correctly on every platform. Set
-> `NETIMPS_NO_SOCKET_PATCH=1` to opt out entirely.
+> `NETIMPS_SOCKET_PATCH=1` to opt out entirely.
 
 - **The patch is installed by default, at `import netimps`.** It adds
   `recvmsg`/`sendmsg` to `socket.socket` and `CMSG_LEN`/`CMSG_SPACE` to the
   `socket` module, so POSIX-shaped code runs unchanged on Windows. Opt out with
-  **`NETIMPS_NO_SOCKET_PATCH=1`** before the first import, or
+  **`NETIMPS_SOCKET_PATCH=1`** before the first import, or
   `patch_socket_module(False)` after it. The env var exists because the choice
   has to be expressible *before* import.
 - **It also installs `os.sysconf` where the platform has none**, because
@@ -1336,7 +1336,7 @@ patch below is installed.
   `linux/uio.h`, with no sysctl and no `/proc` entry. 1024 matches Linux so a
   caller batching by it behaves the same on both.
 - **It is strictly additive and never replaces a native name**, so on Linux and
-  macOS it is a verified no-op (`socket_patched()` is `False` there). If CPython
+  macOS it is a verified no-op (`is_socket_patched()` is `False` there). If CPython
   ever ships `recvmsg` on Windows, it stands down by itself.
 - **It installs all four names, not just `recvmsg`.** Windows has no
   `CMSG_SPACE` either, and the usual idiom is detect → size → receive; patching
@@ -1361,7 +1361,7 @@ patch below is installed.
   wanted. Zero is visibly wrong; `255.255.255.255` is not.
 
   The patched `sendmsg` accepts **either** layout, chosen by length, so what the
-  patched `recvmsg` hands you can go straight back out. `UdpEndpoint` is
+  patched `recvmsg` hands you can go straight back out. `UDPEndpoint` is
   unaffected either way: it calls the backend directly and carries its own
   layout table.
 
@@ -1379,7 +1379,7 @@ patch below is installed.
   | Windows | 19 | 8 | `{addr; ifindex}` — **no `spec_dst`** |
 
   Faking one as the other would make correct-looking code read a *plausible
-  wrong address* rather than fail honestly. Use `UdpEndpoint` if you want the
+  wrong address* rather than fail honestly. Use `UDPEndpoint` if you want the
   difference handled for you. The v6 `in6_pktinfo` layout the three do agree on
   (`{addr; ifindex}`, 20 bytes), though the cmsg type does not — 50 on Linux, 46
   on macOS, 19 on Windows.
@@ -1387,7 +1387,7 @@ patch below is installed.
   CPython 3.9 on Windows exports no `IP_PKTINFO` at all, though Winsock supports
   it perfectly well at the documented value 19. macOS *does* export
   `IP_PKTINFO` (26), contrary to the usual "BSD needs `IP_RECVDSTADDR`" advice.
-  `UdpEndpoint` uses the literal where the value is documented and stable and
+  `UDPEndpoint` uses the literal where the value is documented and stable and
   lets `OSError` from `setsockopt` be the real "unsupported" signal.
 - Errors are CPython's: `BlockingIOError` on an empty non-blocking socket,
   `socket.timeout` when the socket's own timeout runs out (both on Windows
@@ -1398,7 +1398,7 @@ patch below is installed.
 
 ## UDP with arrival interface
 
-**`UdpEndpoint(sock, pktinfo=True)`** — wraps a bound UDP socket so each
+**`UDPEndpoint(sock, pktinfo=True)`** — wraps a bound UDP socket so each
 datagram reports which interface it arrived on. Essential for broadcast
 protocols, where a wildcard-bound server otherwise cannot tell which network a
 request came from.
@@ -1406,10 +1406,10 @@ request came from.
 `recv(bufsize=65535, resolve_interface=True) -> Datagram`, a `NamedTuple` of
 `.data`, `.sender`, `.local_address`, `.interface_index`, `.interface`,
 `.control_truncated` and `.truncated`. `send(data, address, port, src=None) -> int` pins the
-outgoing interface; `address` accepts `AddressLike` and `src` the usual loose
+outgoing interface; `address` accepts `HostLike` and `src` the usual loose
 interface spec (`Interface`, MAC, adapter name or address). `close()` closes
 the wrapped socket, and the endpoint is a **context manager**
-(`with UdpEndpoint(bind("", 67)) as endpoint:`).
+(`with UDPEndpoint(bind("", 67)) as endpoint:`).
 
 `recv` and `send` raise the builtin `TimeoutError` when a timeout set on the
 wrapped socket expires, on every supported Python (before 3.10
@@ -1424,18 +1424,18 @@ wrapped socket expires, on every supported Python (before 3.10
   `in6_pktinfo` is the 16-byte address **first**, then the index). An IPv6
   endpoint therefore reports a real `interface_index`, `interface` and
   `local_address`, where it used to report `0`/`None`/`None` while claiming
-  `supports_pktinfo`.
+  `has_pktinfo`.
 - **Two honest flags, decided once at construction from the socket's own
-  family.** `supports_pktinfo` — `recv` will report the arrival interface;
+  family.** `has_pktinfo` — `recv` will report the arrival interface;
   `False`, never an optimistic `True`, whenever the option for *this* family is
   missing or refused. `supports_src_pinning` — `send(src=)` can be honoured;
   `False` where there is no pktinfo cmsg for the family (macOS has no
   `IP_PKTINFO`).
 - **Windows is supported, as of the Winsock backend.** Both flags are `True`
   there for v4, v6 **and** dual-stack `::`, on 3.9 through 3.14, via
-  `WSARecvMsg`/`WSASendMsg` — see **Ancillary data** above. `UdpEndpoint` calls
+  `WSARecvMsg`/`WSASendMsg` — see **Ancillary data** above. `UDPEndpoint` calls
   that backend *directly* rather than the patched stdlib method, so
-  `NETIMPS_NO_SOCKET_PATCH=1` does not cost it pktinfo. The per-platform
+  `NETIMPS_SOCKET_PATCH=1` does not cost it pktinfo. The per-platform
   `in_pktinfo` layout difference is handled internally; this is the wrapper that
   exists so callers need not know it.
 - **A v4 arrival on an `AF_INET6` endpoint always reports the v4-mapped form**
@@ -1502,7 +1502,7 @@ wrapped socket expires, on every supported Python (before 3.10
 
   **`asyncio` is imported lazily**, never by `import netimps`. A caller using
   only the value types pays nothing for it.
-- **`supports_pktinfo(family=AF_INET) -> bool`** — whether a UDP socket of that
+- **`has_pktinfo(family=AF_INET) -> bool`** — whether a UDP socket of that
   family can report each datagram's arrival interface *on this host*. The
   question to ask **before** choosing how to bind: with it, one wildcard socket
   serves every address and still knows which one a datagram reached; without
@@ -1510,7 +1510,7 @@ wrapped socket expires, on every supported Python (before 3.10
   that per-address socket receives no broadcasts at all.
 
   ```python
-  socks = [bind("", 67)] if supports_pktinfo() else [bind(str(a), 67) for a in addrs]
+  socks = [bind("", 67)] if has_pktinfo() else [bind(str(a), 67) for a in addrs]
   ```
 
   **Decided by asking a socket, never by testing a constant's name.**
@@ -1728,11 +1728,11 @@ resolution fails — the case a bare `get_ip()` handles badly, since it returns
 `None` and loses the name.
 
 - `.is_address` — already a literal, no DNS needed.
-- `.fqdn` — this host as an **`Fqdn`**, or `None` when it is an address (or not
+- `.fqdn` — this host as an **`FQDN`**, or `None` when it is an address (or not
   a syntactically possible name). The bridge between the two types: `Host` is
-  the union "address *or* name", while `Fqdn` is the name algebra that refuses
+  the union "address *or* name", while `FQDN` is the name algebra that refuses
   an address outright. `Host("www.example.com").fqdn.domain` →
-  `Fqdn('example.com')`; `Host("10.0.0.5").fqdn` → `None`.
+  `FQDN('example.com')`; `Host("10.0.0.5").fqdn` → `None`.
 - `.ip(refresh=False)` — resolve to an address or `None`. **Cached, including
   failure**, since the common use is several lookups on one object; pass
   `refresh=True` to retry.
@@ -1794,10 +1794,10 @@ Aliases: `resolve|dns`, `check|tcp`, `addr|parse`, `source|src`.
 
 ## Constants
 
-- **`HOST_DN`** — `platform.node()`, captured **at import time** (a later
+- **`get_hostname()()`** — `platform.node()`, captured **at import time** (a later
   hostname change is not reflected).
 - **`PORT_RANGES`** — `{"well-known", "common", "all"}` port tuples;
   `"common"` holds 36 ports.
-- **`APIPA`** (`169.254.0.0/16`), **`LOOPBACK_V4`** (`127.0.0.0/8`),
+- **`LINK_LOCAL_V4`** (`169.254.0.0/16`), **`LOOPBACK_V4`** (`127.0.0.0/8`),
   **`LOOPBACK_V6`** (`::1/128`), **`LINK_LOCAL_V6`** (`fe80::/10`) — named
   networks, so callers stop spelling the literals out.

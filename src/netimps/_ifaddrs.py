@@ -242,9 +242,9 @@ class Interface:
         address". On a NIC listing ``fe80::`` before a global address it
         returned the link-local in preference to the global one.
 
-        Link-local covers ``fe80::/10`` and IPv4 ``169.254.0.0/16`` -- APIPA is
+        Link-local covers ``fe80::/10`` and IPv4 ``169.254.0.0/16`` -- LINK_LOCAL_V4 is
         the same problem wearing the other family's clothes, and an interface
-        holding both an APIPA address and a DHCP lease should answer with the
+        holding both an LINK_LOCAL_V4 address and a DHCP lease should answer with the
         lease.
 
         Named *primary* rather than *ip* because this is a **selection**, not
@@ -920,7 +920,7 @@ def _mac(octets: bytes) -> "Optional[MACAddress]":
 #: buy almost nothing more and would widen the window in which the answer is
 #: wrong.
 #:
-#: :class:`netimps.UdpEndpoint` uses this same constant for its own
+#: :class:`netimps.UDPEndpoint` uses this same constant for its own
 #: arrival-interface cache, so there is one number rather than two that can
 #: disagree. Pass a number to choose your own, and prefer ``cache=math.inf``
 #: plus :func:`clear_interface_cache` when you know the moment it changes.
@@ -956,7 +956,7 @@ def interface_enumerations() -> int:
 
         before = interface_enumerations()
         for _ in range(20):
-            interface_for(address, cache=True)
+            get_interface(address, cache=True)
         assert interface_enumerations() - before == 1
 
     It is also worth exporting as a metric: how often a long-running server
@@ -1049,7 +1049,7 @@ def get_interfaces(
         :func:`clear_interface_cache` covers invalidating without a lookup.
 
         The cache is process-wide and shared with
-        :func:`netimps.interface_for`, :func:`netimps.interfaces_for` and
+        :func:`netimps.get_interface`, :func:`netimps.iter_interfaces` and
         :func:`netimps.is_local_address`, which all take the same argument.
 
     **Opt-in on purpose.** Enumeration is a syscall, and on a host with many

@@ -38,7 +38,7 @@ outcome. Socket constants are not portable on any other platform pair either.
 :mod:`netimps._udp` owns the per-platform layout table; consult it rather than
 assuming.
 
-**Opting out.** Set ``NETIMPS_NO_SOCKET_PATCH=1`` in the environment before the
+**Opting out.** Set ``NETIMPS_SOCKET_PATCH=1`` in the environment before the
 first ``import netimps``, or call ``patch_socket_module(False)`` afterwards to
 undo it. The environment variable exists because the decision has to be
 expressible *before* import, which a function call cannot be. The patch only
@@ -62,8 +62,8 @@ __all__ = [
     "CMSG_LEN",
     "CMSG_SPACE",
     "patch_socket_module",
-    "socket_patched",
-    "supports_recvmsg",
+    "is_socket_patched",
+    "has_recvmsg",
 ]
 
 _IS_WINDOWS = _sys.platform == "win32"
@@ -108,7 +108,7 @@ def _unsupported(name: str) -> "Any":
     )
 
 
-def supports_recvmsg() -> bool:
+def has_recvmsg() -> bool:
     """Whether :func:`recvmsg` and :func:`sendmsg` can actually run here.
 
     ``True`` on POSIX, and on Windows when the Winsock bindings loaded. Prefer
@@ -376,7 +376,7 @@ def _shim_sysconf(name: "Any") -> int:
 _installed: "Dict[str, Any]" = {}
 
 
-def socket_patched() -> bool:
+def is_socket_patched() -> bool:
     """Whether netimps has added anything to :mod:`socket` right now.
 
     A function rather than a constant because the answer changes when
@@ -436,7 +436,7 @@ def patch_socket_module(
             changed.append(name)
         return changed
 
-    if not supports_recvmsg():
+    if not has_recvmsg():
         # Nothing to offer: leave `socket` exactly as it was rather than
         # installing a function whose only behaviour is to raise.
         return changed
@@ -529,11 +529,11 @@ def _patched_sendmsg(
 def _patch_requested() -> bool:
     """Whether the import-time patch is wanted.
 
-    Read once, at import. ``NETIMPS_NO_SOCKET_PATCH`` set to anything other
+    Read once, at import. ``NETIMPS_SOCKET_PATCH`` set to anything other
     than an explicit falsey spelling disables it, so ``=1``, ``=true`` and
     ``=yes`` all work and ``=0`` does not accidentally disable it.
     """
-    value = _os.environ.get("NETIMPS_NO_SOCKET_PATCH")
+    value = _os.environ.get("NETIMPS_SOCKET_PATCH")
     if value is None:
         return True
     return value.strip().lower() in ("", "0", "false", "no", "off")

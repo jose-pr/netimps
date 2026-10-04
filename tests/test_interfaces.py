@@ -127,7 +127,7 @@ def test_is_loopback_tolerates_a_link_local_address():
     """macOS lo0 carries fe80::1 alongside the loopback addresses.
 
     Regression: an "every address is loopback" test reports lo0 as
-    non-loopback there, which broke interface_for() and bind(interface=) on
+    non-loopback there, which broke get_interface() and bind(interface=) on
     macOS CI. Link-local addresses are not routable, so they do not make an
     interface non-loopback.
     """
@@ -808,11 +808,11 @@ def test_a_cached_raw_dict_is_also_copied():
 @pytest.mark.parametrize(
     "call",
     [
-        lambda c: netimps.interface_for("127.0.0.1", cache=c),
-        lambda c: list(netimps.interfaces_for("127.0.0.1", cache=c)),
+        lambda c: netimps.get_interface("127.0.0.1", cache=c),
+        lambda c: list(netimps.iter_interfaces("127.0.0.1", cache=c)),
         lambda c: netimps.is_local_address("10.0.0.1", cache=c),
     ],
-    ids=["interface_for", "interfaces_for", "is_local_address"],
+    ids=["get_interface", "iter_interfaces", "is_local_address"],
 )
 def test_the_query_helpers_share_the_cache(monkeypatch, call):
     """All three funnel through the same enumeration, so one argument reaches
@@ -831,16 +831,16 @@ def test_the_query_helpers_share_the_cache(monkeypatch, call):
 def test_interface_for_still_answers_the_same_with_and_without_the_cache():
     """A cache that changed the answer would be worse than no cache."""
     netimps.clear_interface_cache()
-    uncached = netimps.interface_for("127.0.0.1")
-    cached = netimps.interface_for("127.0.0.1", cache=math.inf)
+    uncached = netimps.get_interface("127.0.0.1")
+    cached = netimps.get_interface("127.0.0.1", cache=math.inf)
     assert uncached == cached
 
 
 def test_the_endpoint_cache_uses_the_one_shared_ttl():
     """Two caches of the same fact must not disagree about how stale is stale."""
-    from netimps._udp import UdpEndpoint
+    from netimps._udp import UDPEndpoint
 
-    assert UdpEndpoint._IFACE_CACHE_TTL == netimps.INTERFACE_CACHE_TTL
+    assert UDPEndpoint._IFACE_CACHE_TTL == netimps.INTERFACE_CACHE_TTL
 
 
 def test_the_default_ttl_is_sized_for_a_burst():
@@ -871,7 +871,7 @@ def test_the_uncached_path_passes_no_keyword_to_get_interfaces(monkeypatch):
         return []
 
     monkeypatch.setattr(_ifaddrs, "get_interfaces", no_kwargs_stub)
-    assert netimps.interface_for("10.9.9.9") is None
+    assert netimps.get_interface("10.9.9.9") is None
     assert seen == ["called"]
 
 
@@ -908,7 +908,7 @@ def test_is_broadcast_gives_the_same_answer_cached_or_not():
 def test_is_broadcast_with_an_interface_never_enumerates(monkeypatch):
     """Passing the interface stays the fastest path, and must not consult the
     cache or the syscall at all."""
-    iface = netimps.interface_for("127.0.0.1")
+    iface = netimps.get_interface("127.0.0.1")
     if iface is None:
         pytest.skip("no loopback interface resolved")
     calls = _counting_enumerator(monkeypatch)
@@ -930,12 +930,12 @@ def test_reply_socket_does_not_enumerate_per_datagram(monkeypatch):
     It uses the shared cache now, as the endpoint's own arrival-interface
     lookup already did.
     """
-    from netimps import UdpEndpoint, bind
+    from netimps import UDPEndpoint, bind
     from netimps._udp import Datagram
 
     calls = _counting_enumerator(monkeypatch)
     netimps.clear_interface_cache()
-    with UdpEndpoint(bind("127.0.0.1", 0)) as endpoint:
+    with UDPEndpoint(bind("127.0.0.1", 0)) as endpoint:
         datagram = Datagram(
             data=b"",
             sender=("127.0.0.1", 1),
@@ -957,7 +957,7 @@ def test_interface_enumerations_counts_syscalls_not_lookups():
     netimps.clear_interface_cache()
     before = netimps.interface_enumerations()
     for _ in range(20):
-        netimps.interface_for("127.0.0.1", cache=math.inf)
+        netimps.get_interface("127.0.0.1", cache=math.inf)
     assert netimps.interface_enumerations() - before == 1
 
 
@@ -1078,7 +1078,7 @@ def test_primary_ip_keeps_os_order_within_a_rank():
 
 def test_primary_ip_treats_apipa_as_link_local_for_v4():
     """169.254/16 is the same problem wearing the other family's clothes: an
-    interface holding both an APIPA address and a lease must answer with the
+    interface holding both an LINK_LOCAL_V4 address and a lease must answer with the
     lease."""
     nic = _iface("eth0", 2, "169.254.9.9/16", "10.0.0.5/24")
     assert str(nic.primary_ip().ip) == "10.0.0.5"

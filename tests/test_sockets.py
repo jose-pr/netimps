@@ -162,7 +162,7 @@ def test_wait_for_port_respects_deadline_with_slow_connects(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# AddressLike: dst accepts address objects and interfaces, rejects networks   #
+# HostLike: dst accepts address objects and interfaces, rejects networks   #
 # --------------------------------------------------------------------------- #
 
 
@@ -262,7 +262,7 @@ def test_route_is_hashable():
 
 
 # --------------------------------------------------------------------------- #
-# hop_count                                                                    #
+# count_hops                                                                    #
 # --------------------------------------------------------------------------- #
 
 
@@ -276,7 +276,7 @@ def test_hop_count_raises_without_privileges_when_fallback_disabled(monkeypatch)
 
     monkeypatch.setattr(_sockets._socket, "socket", no_raw)
     with pytest.raises(PermissionError, match="raw socket"):
-        netimps.hop_count("127.0.0.1", allow_traceroute=False)
+        netimps.count_hops("127.0.0.1", allow_traceroute=False)
 
 
 def _no_raw(family, kind, proto=0, *a, **k):
@@ -291,7 +291,7 @@ def test_hop_count_falls_back_to_traceroute(monkeypatch):
     monkeypatch.setattr(
         _sockets, "_hop_count_traceroute", lambda target, hops, timeout, ipv6=False: 7
     )
-    assert netimps.hop_count("127.0.0.1") == 7
+    assert netimps.count_hops("127.0.0.1") == 7
 
 
 def test_hop_count_unresolvable_is_none(monkeypatch):
@@ -299,7 +299,7 @@ def test_hop_count_unresolvable_is_none(monkeypatch):
         raise OSError("no such host")
 
     monkeypatch.setattr(netimps._ping._socket, "getaddrinfo", fail)
-    assert netimps.hop_count("nope.invalid") is None
+    assert netimps.count_hops("nope.invalid") is None
 
 
 def test_hop_count_accepts_interface_object(monkeypatch):
@@ -316,7 +316,7 @@ def test_hop_count_accepts_interface_object(monkeypatch):
     monkeypatch.setattr(
         _sockets, "_hop_count_traceroute", lambda target, hops, timeout, ipv6=False: 1
     )
-    netimps.hop_count(IPv4Interface("127.0.0.1/8"), allow_traceroute=True)
+    netimps.count_hops(IPv4Interface("127.0.0.1/8"), allow_traceroute=True)
     assert seen == ["127.0.0.1"]
 
 
@@ -324,7 +324,7 @@ def test_hop_count_resolves_with_getaddrinfo_not_gethostbyname(monkeypatch):
     """The v4-only lookup is gone: an AAAA-only name must still be probed.
 
     `gethostbyname` cannot return a v6 address at all, so a v6 destination
-    used to leave hop_count returning None -- indistinguishable from "the
+    used to leave count_hops returning None -- indistinguishable from "the
     host never answered". The repo's own AGENTS.md records this lesson; it
     had been applied in _ping.py and nowhere else.
     """
@@ -342,7 +342,7 @@ def test_hop_count_resolves_with_getaddrinfo_not_gethostbyname(monkeypatch):
         return 3
 
     monkeypatch.setattr(_sockets, "_hop_count_traceroute", fake_traceroute)
-    assert netimps.hop_count("::1") == 3
+    assert netimps.count_hops("::1") == 3
     assert seen == {"target": "::1", "ipv6": True}
 
 
@@ -386,7 +386,7 @@ def test_hop_count_v6_probe_uses_the_v6_options(monkeypatch):
         "_hop_count_traceroute",
         lambda target, hops, timeout, ipv6=False: None,
     )
-    assert netimps.hop_count("::1", max_hops=1) is None
+    assert netimps.count_hops("::1", max_hops=1) is None
     assert families[0] == (socket.AF_INET6, socket.SOCK_RAW, socket.IPPROTO_ICMPV6)
     assert (socket.IPPROTO_IPV6, socket.IPV6_UNICAST_HOPS, 1) in options
 
@@ -1186,15 +1186,15 @@ def test_zone_qualified_address_is_still_local():
 
     bare = str(address)
     assert netimps.is_local_address(bare) is True
-    assert netimps.interface_for(bare) is not None
+    assert netimps.get_interface(bare) is not None
 
     forms = ["%s%%%s" % (bare, iface.name)]
     if iface.index:
         forms.append("%s%%%d" % (bare, iface.index))
     for form in forms:
         assert netimps.is_local_address(form) is True, form
-        assert netimps.interface_for(form) is not None, form
-        assert list(netimps.interfaces_for(form)), form
+        assert netimps.get_interface(form) is not None, form
+        assert list(netimps.iter_interfaces(form)), form
 
 
 def test_zone_that_names_another_adapter_does_not_match():
@@ -1204,12 +1204,12 @@ def test_zone_that_names_another_adapter_does_not_match():
         pytest.skip("no link-local IPv6 address on this host")
     impossible = "%s%%%d" % (address, 999999)
     assert netimps.is_local_address(impossible) is False
-    assert netimps.interface_for(impossible) is None
+    assert netimps.get_interface(impossible) is None
 
 
 def test_zone_is_stripped_for_the_synthetic_interface():
     """strict=False builds a host route, which must not carry the zone."""
-    built = netimps.interface_for("fe80::dead:beef%1", strict=False)
+    built = netimps.get_interface("fe80::dead:beef%1", strict=False)
     assert built is not None and built.name == "<unknown>"
     assert [str(entry) for entry in built.ips] == ["fe80::dead:beef/128"]
 

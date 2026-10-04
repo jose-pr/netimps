@@ -112,7 +112,7 @@ def test_types_are_types_and_factories_are_callable():
         "IPAddressLike",
         "IPInterfaceLike",
         "IPNetworkLike",
-        "MACLike",
+        "MACAddressLike",
     ):
         alias = getattr(netimps, name)
         # A Union alias, not a callable factory.
@@ -143,8 +143,8 @@ def test_public_lookup_annotations_resolve_at_runtime():
     import typing
 
     for function in (
-        netimps.interface_for,
-        netimps.interfaces_for,
+        netimps.get_interface,
+        netimps.iter_interfaces,
         netimps.is_local_address,
         netimps.Interface.__init__,
     ):
@@ -327,7 +327,7 @@ def test_input_aliases_are_not_parsers():
         netimps.IPAddressLike,
         netimps.IPInterfaceLike,
         netimps.IPNetworkLike,
-        netimps.MACLike,
+        netimps.MACAddressLike,
     ):
         assert alias not in _ip._BUILDERS
         with pytest.raises(TypeError, match="typing construct"):
@@ -418,7 +418,7 @@ def test_is_valid_distinguishes_none_result_from_rejection():
 
 
 # --------------------------------------------------------------------------- #
-# _dst_argument / AddressLike                                                #
+# _dst_argument / HostLike                                                #
 # --------------------------------------------------------------------------- #
 
 
@@ -453,7 +453,7 @@ def test_dst_argument_stringifies_host_object():
 
 
 # --------------------------------------------------------------------------- #
-# get_ip accepts AddressLike                                                 #
+# get_ip accepts HostLike                                                 #
 # --------------------------------------------------------------------------- #
 
 
@@ -536,7 +536,7 @@ def test_get_ip_literal_never_resolves(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# normalize_host                                                              #
+# split_host                                                              #
 # --------------------------------------------------------------------------- #
 
 
@@ -557,12 +557,12 @@ def test_get_ip_literal_never_resolves(monkeypatch):
     ],
 )
 def test_normalize_host_splits(text, expected):
-    assert netimps.normalize_host(text) == expected
+    assert netimps.split_host(text) == expected
 
 
 def test_normalize_host_uses_the_default_port():
-    assert netimps.normalize_host("example.com", 443) == ("example.com", 443)
-    assert netimps.normalize_host("example.com:80", 443) == ("example.com", 80)
+    assert netimps.split_host("example.com", 443) == ("example.com", 443)
+    assert netimps.split_host("example.com:80", 443) == ("example.com", 80)
 
 
 @pytest.mark.parametrize(
@@ -584,7 +584,7 @@ def test_normalize_host_rejects_multi_colon_non_addresses(text):
     review was about.
     """
     with pytest.raises(ValueError, match="not an IPv6 address"):
-        netimps.normalize_host(text)
+        netimps.split_host(text)
 
 
 @pytest.mark.parametrize(
@@ -600,7 +600,7 @@ def test_normalize_host_rejects_multi_colon_non_addresses(text):
 )
 def test_normalize_host_rejects_malformed_input(text, message):
     with pytest.raises(ValueError, match=message):
-        netimps.normalize_host(text)
+        netimps.split_host(text)
 
 
 def test_version_is_read_not_restated():

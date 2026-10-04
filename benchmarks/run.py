@@ -96,7 +96,7 @@ BENCHMARKS = {
         "render back out, as a CLI or log line would",
     ),
     "normalize_host_v6_bracketed": (
-        lambda: netimps.normalize_host("[2001:db8::1]:443"),
+        lambda: netimps.split_host("[2001:db8::1]:443"),
         "host:port splitting, the case that trips naive rsplit",
     ),
     "collapse_256_subnets": (

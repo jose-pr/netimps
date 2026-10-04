@@ -4,7 +4,7 @@ import typing
 
 import pytest
 
-from netimps import MACAddress, MACLike
+from netimps import MACAddress, MACAddressLike
 
 
 @pytest.mark.parametrize(
@@ -176,7 +176,7 @@ def test_maclike_lists_what_the_constructor_accepts():
     """
     args = {
         arg.__forward_arg__ if isinstance(arg, typing.ForwardRef) else arg
-        for arg in typing.get_args(MACLike)
+        for arg in typing.get_args(MACAddressLike)
     }
     assert args == {str, int, bytes, bytearray, "MACAddress"}
 

@@ -9,7 +9,7 @@ Re-exported from :mod:`netimps`; do not import this module path directly.
 
 Privilege boundary
 ------------------
-Everything here works unprivileged **except** :func:`hop_count`, which needs to
+Everything here works unprivileged **except** :func:`count_hops`, which needs to
 read ICMP TTL-exceeded replies and therefore a raw socket (root/Administrator).
 It raises :class:`PermissionError` rather than silently returning nonsense.
 :func:`get_route` deliberately stops at the first hop, which *is* available
@@ -27,7 +27,7 @@ from subprocess import run as _subprocess_run
 import sys as _sys
 import time as _time
 
-from ._iface_spec import InterfaceSpec, interface_address as _interface_address
+from ._iface_spec import InterfaceLike, interface_address as _interface_address
 from ._iface_spec import _without_zone
 from ._iface_spec import interface_index as _interface_index
 from ._exceptions import AddressInUseError
@@ -35,7 +35,7 @@ from ._ifaddrs import Interface
 from ._ip import (
     LOOPBACK_V4,
     LOOPBACK_V6,
-    AddressLike,
+    HostLike,
     IPAddress,
     IPAddressLike,
     IPInterface,
@@ -64,8 +64,8 @@ __all__ = [
     "disable_connreset",
     "set_buffer_size",
     "bind_error_hint",
-    "interface_for",
-    "interfaces_for",
+    "get_interface",
+    "iter_interfaces",
     "is_local_address",
     "get_source_ip",
     "get_free_port",
@@ -73,7 +73,7 @@ __all__ = [
     "wait_for_port",
     "get_route",
     "Route",
-    "hop_count",
+    "count_hops",
     "get_pmtu",
     "discover_mtu",
     "get_tcp_mss",
@@ -144,7 +144,7 @@ class SocketOption(NamedTuple):
 
 
 def bind(
-    address: "AddressLike" = "",
+    address: "HostLike" = "",
     port: int = 0,
     *,
     family: int = _socket.AF_INET,
@@ -154,7 +154,7 @@ def bind(
     reuse_port: bool = False,
     broadcast: bool = False,
     connreset: bool = True,
-    interface: "InterfaceSpec" = None,
+    interface: "InterfaceLike" = None,
     options: "Iterable[Tuple[int, int, Any]]" = (),
     listen: "Optional[int]" = None,
 ) -> "_socket.socket":
@@ -174,7 +174,7 @@ def bind(
         ``str``: an :class:`IPv4Address`/:class:`IPv6Address`, an
         :class:`IPv4Interface`/:class:`IPv6Interface` (its ``.ip`` is used, since
         the ``/prefix`` means nothing to ``bind``), a :class:`netimps.Host` or a
-        :class:`netimps.Fqdn`. It used to insist on a ``str`` and leak a raw
+        :class:`netimps.FQDN`. It used to insist on a ``str`` and leak a raw
         ``TypeError`` from the socket layer -- "str, bytes or bytearray expected,
         not IPv4Address" -- for a value every other entry point in the package
         takes. A *network* raises :class:`TypeError`, because it has no single
@@ -228,7 +228,7 @@ def bind(
     for turning that into something a user can act on. The socket is closed
     before the exception propagates, so a failed call leaks nothing.
     """
-    # Coerced through the same helper `ping`, `resolve` and `UdpEndpoint.send`
+    # Coerced through the same helper `ping`, `resolve` and `UDPEndpoint.send`
     # use, so one union is accepted everywhere rather than this one entry point
     # being stricter than its neighbours.
     address = _dst_argument(address) if address != "" else ""
@@ -574,7 +574,7 @@ def _interfaces_for_query(
             yield iface
 
 
-def interfaces_for(
+def iter_interfaces(
     query: _InterfaceQuery,
     *,
     cache: "Union[bool, float]" = False,
@@ -605,7 +605,7 @@ def interfaces_for(
     yield from _interfaces_for_query(kind, wanted, cache)
 
 
-def interface_for(
+def get_interface(
     query: _InterfaceQuery,
     strict: bool = True,
     *,
@@ -616,9 +616,9 @@ def interface_for(
     The reverse of interface enumeration -- "a socket is bound here, which
     adapter is that?"::
 
-        interface_for(sock.getsockname()[0])
+        get_interface(sock.getsockname()[0])
 
-    Accepts the same query forms as :func:`interfaces_for`; singular lookup is
+    Accepts the same query forms as :func:`iter_interfaces`; singular lookup is
     exactly the first plural result. Since addresses can appear on more than
     one adapter (especially unscoped IPv6 link-local addresses), use the plural
     form when every match matters.
@@ -663,10 +663,10 @@ def is_local_address(
     machine. Malformed input raises exactly as :func:`parse` does.
 
     A ``%zone`` suffix is honoured rather than rejected (see
-    :func:`interfaces_for`), so the address ``getsockname()`` hands back can be
+    :func:`iter_interfaces`), so the address ``getsockname()`` hands back can be
     passed straight in.
 
-    :param cache: reuse a recent enumeration -- see :func:`interface_for`. A
+    :param cache: reuse a recent enumeration -- see :func:`get_interface`. A
         loopback address short-circuits before any enumeration, so the cache
         only matters for the addresses that actually reach the adapter scan.
     """
@@ -674,7 +674,7 @@ def is_local_address(
     wanted = parse(address, IPAddress)
     if wanted.is_loopback:
         return True
-    return next(interfaces_for(wanted, cache=cache), None) is not None
+    return next(iter_interfaces(wanted, cache=cache), None) is not None
 
 
 def _resolve_targets(
@@ -707,7 +707,7 @@ def _make_host_route(address: "IPAddress") -> "Optional[IPInterface]":
 
 
 def get_source_ip(
-    dst: "AddressLike" = _DEFAULT_PROBE,
+    dst: "HostLike" = _DEFAULT_PROBE,
     port: int = 80,
     ipv6: "Optional[bool]" = None,
 ) -> "Optional[IPAddress]":
@@ -737,7 +737,7 @@ def get_source_ip(
 
     Returns ``None`` if no route exists (e.g. IPv6 probe on an IPv4-only host).
     The returned address carries no ``%zone``: the zone identifies the adapter
-    rather than the address, and :func:`interface_for` is the way back to it.
+    rather than the address, and :func:`get_interface` is the way back to it.
     """
 
     dst = _dst_argument(dst)
@@ -843,7 +843,7 @@ def _connect_timeout(timeout: "Optional[float]") -> "Optional[float]":
     return max(float(timeout), _MIN_TIMEOUT)
 
 
-def tcp_check(dst: "AddressLike", port: int, timeout: "Optional[float]" = 3.0) -> bool:
+def tcp_check(dst: "HostLike", port: int, timeout: "Optional[float]" = 3.0) -> bool:
     """Return True if a TCP connection to ``dst``:``port`` is accepted.
 
     The honest reachability test, and what you almost always want instead of
@@ -917,7 +917,7 @@ def tcp_check(dst: "AddressLike", port: int, timeout: "Optional[float]" = 3.0) -
 
 
 def wait_for_port(
-    dst: "AddressLike",
+    dst: "HostLike",
     port: int,
     timeout: float = 30.0,
     interval: float = 0.1,
@@ -1357,9 +1357,7 @@ def _if_index(name: str) -> int:
         return 0
 
 
-def get_route(
-    dst: "AddressLike" = _DEFAULT_PROBE, ipv6: "Optional[bool]" = None
-) -> Route:
+def get_route(dst: "HostLike" = _DEFAULT_PROBE, ipv6: "Optional[bool]" = None) -> Route:
     """Return how traffic to ``dst`` leaves this host.
 
     Reports the src address and the **first hop** -- the gateway a packet is
@@ -1380,7 +1378,7 @@ def get_route(
 
     First hop only, deliberately: it is available **unprivileged** on every
     supported platform, whereas the full path requires raw sockets. See
-    :func:`hop_count` for distance, which does not.
+    :func:`count_hops` for distance, which does not.
 
     Both address families are looked up, through ``GetBestRoute2`` on Windows,
     ``/proc/net/route`` and ``/proc/net/ipv6_route`` on Linux, and
@@ -1528,8 +1526,8 @@ def _hop_count_traceroute(
     return None
 
 
-def hop_count(
-    dst: "AddressLike",
+def count_hops(
+    dst: "HostLike",
     max_hops: int = 30,
     timeout: float = 1.0,
     allow_traceroute: bool = True,
@@ -1540,7 +1538,7 @@ def hop_count(
     Sends TTL-limited probes and counts the routers that reply, the same
     technique ``traceroute`` uses::
 
-        hop_count("8.8.8.8")     # 12
+        count_hops("8.8.8.8")     # 12
 
     ``dst`` also accepts an address object or an :class:`IPv4Interface`/
     :class:`IPv6Interface` (its ``.ip`` is used).
@@ -1583,7 +1581,7 @@ def hop_count(
         if allow_traceroute:
             return _hop_count_traceroute(target, max_hops, timeout, wants_six)
         raise PermissionError(
-            "hop_count needs a raw socket (root/Administrator); "
+            "count_hops needs a raw socket (root/Administrator); "
             "pass allow_traceroute=True, or use get_route() for the first hop"
         ) from exc
 
@@ -1765,7 +1763,7 @@ def _pmtu_for(family: int, sockaddr: Any) -> "Optional[int]":
 
 
 def get_pmtu(
-    dst: "AddressLike", port: int = 80, ipv6: "Optional[bool]" = None
+    dst: "HostLike", port: int = 80, ipv6: "Optional[bool]" = None
 ) -> "Optional[int]":
     """Return the path MTU the kernel has **already learned**, or ``None``.
 
@@ -1816,11 +1814,11 @@ def get_pmtu(
 
 
 def discover_mtu(
-    dst: "AddressLike",
+    dst: "HostLike",
     low: int = 576,
     high: int = 9000,
     timeout: float = 1.0,
-    src: "InterfaceSpec" = None,
+    src: "InterfaceLike" = None,
     port: int = 80,
     probe: bool = True,
     method: str = "icmp",
@@ -2035,7 +2033,7 @@ def _discover_mtu_udp(
     return low
 
 
-def get_tcp_mss(dst: "AddressLike", port: int, timeout: float = 3.0) -> "Optional[int]":
+def get_tcp_mss(dst: "HostLike", port: int, timeout: float = 3.0) -> "Optional[int]":
     """Return the TCP maximum segment size negotiated with ``dst``, or ``None``.
 
     The TCP counterpart to an MTU: the largest payload a single segment may
@@ -2129,7 +2127,7 @@ def disable_connreset(sock: "_socket.socket") -> bool:
 
     This is the inverse face of a rule this package documents from the other
     side: an unconnected POSIX probe never *sees* a port-unreachable, which is
-    why :class:`netimps.UdpEndpoint`'s MTU probing connects. The knowledge was
+    why :class:`netimps.UDPEndpoint`'s MTU probing connects. The knowledge was
     here; the switch was not.
 
     **Not on by default**, in :func:`bind` or anywhere else. The report is

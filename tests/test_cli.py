@@ -399,7 +399,7 @@ def test_route_renders_the_on_link_tri_state(
 def test_route_hops_line_is_added_not_sliced_in(capsys, monkeypatch):
     """``--hops`` appends a line; without it nothing extra is printed."""
     monkeypatch.setattr(cli, "get_route", lambda dst: _FakeRoute(None, True))
-    monkeypatch.setattr(cli, "hop_count", lambda dst: 3)
+    monkeypatch.setattr(cli, "count_hops", lambda dst: 3)
 
     _, plain, _ = _run(capsys, "route", "192.0.2.1")
     assert "hops" not in plain

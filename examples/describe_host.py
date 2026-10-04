@@ -23,7 +23,7 @@ PROBE = "1.1.1.1"
 
 
 def main() -> int:
-    print("host: %s\n" % netimps.HOST_DN)
+    print("host: %s\n" % netimps.get_hostname()())
 
     print("interfaces")
     for iface in netimps.get_interfaces():

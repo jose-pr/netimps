@@ -351,7 +351,7 @@ if netimps is not None:
     call("get_pmtu('1.1.1.1')", lambda: netimps.get_pmtu("1.1.1.1"))
     call("get_tcp_mss('127.0.0.1', 22)", lambda: netimps.get_tcp_mss("127.0.0.1", 22))
     call("is_local_address('127.0.0.1')", lambda: netimps.is_local_address("127.0.0.1"))
-    call("interface_for('127.0.0.1')", lambda: netimps.interface_for("127.0.0.1"))
+    call("get_interface('127.0.0.1')", lambda: netimps.get_interface("127.0.0.1"))
 
     print("\n-- DNS: the .local / mDNS chain question")
     own = socket.gethostname()
@@ -419,10 +419,10 @@ for _helper in ("CMSG_LEN", "CMSG_SPACE", "recvmsg", "sendmsg"):
 
 if netimps is not None:
     print("\n--- netimps messaging layer")
-    call("netimps.supports_recvmsg()", lambda: netimps.supports_recvmsg())
+    call("netimps.has_recvmsg()", lambda: netimps.has_recvmsg())
     # False on POSIX is the correct answer: the patch is strictly additive, so a
     # platform that already has these must come back untouched.
-    call("netimps.socket_patched()", lambda: netimps.socket_patched())
+    call("netimps.is_socket_patched()", lambda: netimps.is_socket_patched())
     call("netimps.CMSG_SPACE(8)", lambda: netimps.CMSG_SPACE(8))
     call("netimps.CMSG_LEN(8)", lambda: netimps.CMSG_LEN(8))
 
@@ -494,7 +494,7 @@ def pktinfo_capture(label, family, bind_host, send_to, setopts, v6only=None):
     return info
 
 
-if netimps is not None and netimps.supports_recvmsg():
+if netimps is not None and netimps.has_recvmsg():
     _ip_pktinfo = getattr(socket, "IP_PKTINFO", None)
     _ip_recvdstaddr = getattr(socket, "IP_RECVDSTADDR", None)
     _ip_recvif = getattr(socket, "IP_RECVIF", None)
@@ -570,7 +570,7 @@ if netimps is not None and netimps.supports_recvmsg():
 
 
 def pin_capture(label, family, host, src):
-    """Pin a source with UdpEndpoint.send(src=) and report what the peer saw.
+    """Pin a source with UDPEndpoint.send(src=) and report what the peer saw.
 
     The endpoint binds the **wildcard**, deliberately. Binding it to *host*
     first was the original mistake here: the bind already fixes the source, so
@@ -585,10 +585,10 @@ def pin_capture(label, family, host, src):
         peer = socket.socket(family, socket.SOCK_DGRAM)
         peer.bind((host, 0))
         peer.settimeout(5.0)
-        endpoint = netimps.UdpEndpoint(netimps.bind(wildcard, 0, family=family))
+        endpoint = netimps.UDPEndpoint(netimps.bind(wildcard, 0, family=family))
         info["bound"] = wildcard
         info["supports_src_pinning"] = endpoint.supports_src_pinning
-        info["supports_pktinfo"] = endpoint.supports_pktinfo
+        info["has_pktinfo"] = endpoint.has_pktinfo
         sent = endpoint.send(b"pinned", host, peer.getsockname()[1], src=src)
         info["sent"] = sent
         _data, observed = peer.recvfrom(100)

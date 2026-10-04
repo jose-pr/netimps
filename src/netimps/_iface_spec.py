@@ -40,7 +40,7 @@ __all__ = ["interface_address", "interface_index"]
 #: MAC string), an adapter name, an address, or ``None`` for "no preference".
 #: Kept private -- this documents an established, repeated parameter shape
 #: rather than something a caller constructs or imports directly.
-InterfaceSpec = Optional[Union[Interface, MACAddress, IPAddress, str]]
+InterfaceLike = Optional[Union[Interface, MACAddress, IPAddress, str]]
 
 
 def _without_zone(address: "IPAddress") -> "IPAddress":
@@ -77,7 +77,7 @@ def _enumeration_is_degraded() -> bool:
 
 
 def interface_address(
-    interface: "InterfaceSpec",
+    interface: "InterfaceLike",
     want_ipv6: "Optional[bool]" = False,
     strict: bool = True,
 ) -> "Optional[IPAddress]":
@@ -123,7 +123,7 @@ def interface_address(
       IPv6 socket into a v4-mapped one, and rejects the reverse with its own
       message.
     """
-    from ._sockets import interface_for
+    from ._sockets import get_interface
     from ._ifaddrs import Interface, get_interfaces
 
     if interface is None:
@@ -140,7 +140,7 @@ def interface_address(
         isinstance(interface, str) and is_valid(interface, MACAddress)
     ):
         wanted = MACAddress(interface)
-        match = interface_for(wanted)
+        match = get_interface(wanted)
         if match is None:
             return _fail("no interface with MAC %s" % (wanted,))
         interface = match
@@ -190,12 +190,12 @@ def interface_address(
     # IPv4 (which wants an address) and rejected for IPv6 (which wants an
     # index), which is interface_index's behaviour below.
     bare = _without_zone(parsed)
-    if strict and interface_for(bare) is None and not _enumeration_is_degraded():
+    if strict and get_interface(bare) is None and not _enumeration_is_degraded():
         return _fail("no local interface holds address %s" % (bare,))
     return parsed
 
 
-def interface_index(interface: "InterfaceSpec", strict: bool = True) -> "Optional[int]":
+def interface_index(interface: "InterfaceLike", strict: bool = True) -> "Optional[int]":
     """Reduce an interface spec to its OS interface index.
 
     The index-shaped sibling of :func:`interface_address`, for the OS
@@ -227,7 +227,7 @@ def interface_index(interface: "InterfaceSpec", strict: bool = True) -> "Optiona
     scoped literal failed the lookup outright -- ``ipaddress`` keeps the zone
     as part of the address, so ``fe80::1%12`` matches no enumerated address.
     """
-    from ._sockets import interface_for
+    from ._sockets import get_interface
     from ._ifaddrs import Interface, get_interfaces
 
     if interface is None:
@@ -245,7 +245,7 @@ def interface_index(interface: "InterfaceSpec", strict: bool = True) -> "Optiona
         isinstance(interface, str) and is_valid(interface, MACAddress)
     ):
         wanted = MACAddress(interface)
-        match = interface_for(wanted)
+        match = get_interface(wanted)
         if match is None:
             return _fail("no interface with MAC %s" % (wanted,))
     elif isinstance(interface, str) and not is_valid(interface, IPAddress):
@@ -275,7 +275,7 @@ def interface_index(interface: "InterfaceSpec", strict: bool = True) -> "Optiona
                 if named is not None and named.index:
                     return named.index
             address = _without_zone(address)
-        match = interface_for(address)
+        match = get_interface(address)
         if match is None:
             return _fail("no local interface holds address %s" % (address,))
 

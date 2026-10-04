@@ -35,16 +35,16 @@ import sys as _sys
 import struct as _struct
 from typing import List, Optional, Union
 
-from ._iface_spec import InterfaceSpec, interface_address as _interface_address
+from ._iface_spec import InterfaceLike, interface_address as _interface_address
 from ._iface_spec import interface_index as _interface_index
 from ._ifaddrs import get_interfaces
-from ._ip import AddressLike, IPAddress
+from ._ip import HostLike, IPAddress
 from ._parse import try_parse
 
 __all__ = ["multicast_socket", "join_group", "leave_group", "is_multicast"]
 
 
-def is_multicast(address: "AddressLike") -> bool:
+def is_multicast(address: "HostLike") -> bool:
     """True if ``address`` is a multicast group (``224.0.0.0/4`` or ``ff00::/8``).
 
     ::
@@ -53,7 +53,7 @@ def is_multicast(address: "AddressLike") -> bool:
         is_multicast("ff02::fb")      # True
         is_multicast("10.0.0.1")      # False
 
-    Accepts everything :data:`AddressLike` does, including an
+    Accepts everything :data:`HostLike` does, including an
     :class:`IPv4Interface`/:class:`IPv6Interface` -- its ``.ip`` is tested::
 
         is_multicast(IPv4Interface("239.1.2.3/32"))   # True
@@ -148,7 +148,7 @@ def _default_v6_scope(group: str) -> int:
     return 0
 
 
-def _membership_request(group: str, interface: "InterfaceSpec", ipv6: bool):
+def _membership_request(group: str, interface: "InterfaceLike", ipv6: bool):
     """Build the mreq structure for IP_ADD_MEMBERSHIP / IPV6_JOIN_GROUP.
 
     Resolving the interface spec lives here rather than in the callers
@@ -167,7 +167,7 @@ def _membership_request(group: str, interface: "InterfaceSpec", ipv6: bool):
 
 
 def join_group(
-    sock: "_socket.socket", group: str, interface: "InterfaceSpec" = None
+    sock: "_socket.socket", group: str, interface: "InterfaceLike" = None
 ) -> None:
     """Join ``group`` on ``sock``, optionally via a specific ``interface``.
 
@@ -196,7 +196,7 @@ def join_group(
 
 
 def leave_group(
-    sock: "_socket.socket", group: str, interface: "InterfaceSpec" = None
+    sock: "_socket.socket", group: str, interface: "InterfaceLike" = None
 ) -> None:
     """Leave ``group`` on ``sock``. The inverse of :func:`join_group`.
 
@@ -217,7 +217,7 @@ def leave_group(
 def multicast_socket(
     group: "Union[str, List[str], None]" = None,
     port: int = 0,
-    interface: "InterfaceSpec" = None,
+    interface: "InterfaceLike" = None,
     ttl: int = 1,
     loop: bool = True,
     bind: bool = True,

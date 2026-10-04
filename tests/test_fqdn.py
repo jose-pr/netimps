@@ -1,4 +1,4 @@
-"""The ``Fqdn`` domain-name value type.
+"""The ``FQDN`` domain-name value type.
 
 Pure value-type tests, so they are cheap and pinned hard. The network helpers
 are asserted to be *pass-throughs* against a faked backend -- nothing here
@@ -10,7 +10,7 @@ import pickle
 import pytest
 
 import netimps
-from netimps import Fqdn, Host
+from netimps import FQDN, Host
 
 # --------------------------------------------------------------------------- #
 # Construction                                                                 #
@@ -18,28 +18,28 @@ from netimps import Fqdn, Host
 
 
 def test_construction_from_a_dotted_string_and_from_labels_agree():
-    assert Fqdn("www.example.com") == Fqdn("www", "example", "com")
-    assert Fqdn("www.example.com") == Fqdn(["www", "example", "com"])
-    assert Fqdn("www", "example.com") == Fqdn("www.example.com")
+    assert FQDN("www.example.com") == FQDN("www", "example", "com")
+    assert FQDN("www.example.com") == FQDN(["www", "example", "com"])
+    assert FQDN("www", "example.com") == FQDN("www.example.com")
 
 
 def test_composition_from_another_fqdn():
-    assert Fqdn("www", Fqdn("example.com")) == Fqdn("www.example.com")
+    assert FQDN("www", FQDN("example.com")) == FQDN("www.example.com")
     # Absoluteness comes from the last part, which is the one holding the root.
-    composed = Fqdn("www", Fqdn("example.com."))
+    composed = FQDN("www", FQDN("example.com."))
     assert composed.is_fully_qualified()
     assert str(composed) == "www.example.com."
 
 
 def test_str_round_trips_including_the_trailing_dot():
     for text in ("example.com", "example.com.", "localhost", "a.b.c.d"):
-        assert str(Fqdn(text)) == text
+        assert str(FQDN(text)) == text
 
 
 def test_repr_is_reconstructible():
-    f = Fqdn("www.example.com.")
-    assert repr(f) == "Fqdn('www.example.com.')"
-    assert eval(repr(f), {"Fqdn": Fqdn}) == f  # noqa: S307
+    f = FQDN("www.example.com.")
+    assert repr(f) == "FQDN('www.example.com.')"
+    assert eval(repr(f), {"FQDN": FQDN}) == f  # noqa: S307
 
 
 # --------------------------------------------------------------------------- #
@@ -54,7 +54,7 @@ def test_the_algebra_is_inverted_from_pathlib_on_purpose():
     with pathlib" fails here rather than silently inverting the public API. If
     this test ever needs changing, that is an API break and not a cleanup.
     """
-    f = Fqdn("www.example.com")
+    f = FQDN("www.example.com")
 
     # pathlib's `.name` is the RIGHTmost component; ours is the LEFTmost.
     assert f.hostname == "www"
@@ -62,11 +62,11 @@ def test_the_algebra_is_inverted_from_pathlib_on_purpose():
     assert f.hostname != f.tld
 
     # pathlib's `.parent` drops the rightmost; ours drops the leftmost.
-    assert f.domain == Fqdn("example.com")
+    assert f.domain == FQDN("example.com")
 
     # pathlib's `/` appends; ours prepends.
-    assert Fqdn("example.com") / "www" == Fqdn("www.example.com")
-    assert str(Fqdn("example.com") / "www") == "www.example.com"
+    assert FQDN("example.com") / "www" == FQDN("www.example.com")
+    assert str(FQDN("example.com") / "www") == "www.example.com"
 
     # And `.labels` is in text order, which is the reverse of significance.
     assert f.labels == ("www", "example", "com")
@@ -87,14 +87,14 @@ def test_pathlib_aliases_are_the_same_value(primary, alias):
     Kept as a parametrised law rather than four asserts so adding an alias
     without adding it here is the thing that fails.
     """
-    f = Fqdn("a.b.example.com")
+    f = FQDN("a.b.example.com")
     assert getattr(f, primary) == getattr(f, alias)
 
 
 def test_method_aliases_are_the_same_value():
-    f = Fqdn("example.com.")
+    f = FQDN("example.com.")
     assert f.is_fully_qualified() == f.is_absolute() is True
-    assert Fqdn("example.com").is_absolute() is False
+    assert FQDN("example.com").is_absolute() is False
     assert f.with_hostname("mail") == f.with_name("mail")
 
 
@@ -105,8 +105,8 @@ def test_tld_has_no_suffix_alias():
     analogy misleads, so the alias is deliberately absent -- pinned so nobody
     adds it as an obvious omission.
     """
-    assert Fqdn("www.example.com").tld == "com"
-    assert not hasattr(Fqdn("www.example.com"), "suffix")
+    assert FQDN("www.example.com").tld == "com"
+    assert not hasattr(FQDN("www.example.com"), "suffix")
 
 
 # --------------------------------------------------------------------------- #
@@ -120,13 +120,13 @@ def test_domain_chain_terminates_rather_than_self_referencing():
     A self-reference would make `while f.domain:` loop forever, which is the
     natural way to walk up a name.
     """
-    f = Fqdn("a.b.example.com")
+    f = FQDN("a.b.example.com")
     assert f.domains == (
-        Fqdn("b.example.com"),
-        Fqdn("example.com"),
-        Fqdn("com"),
+        FQDN("b.example.com"),
+        FQDN("example.com"),
+        FQDN("com"),
     )
-    assert Fqdn("com").domain is None
+    assert FQDN("com").domain is None
 
     seen = []
     current = f
@@ -142,12 +142,12 @@ def test_domain_is_not_the_registrable_domain():
     Telling `example.co.uk` from `co.uk` needs the Public Suffix List, which is
     a dependency this package does not take.
     """
-    assert Fqdn("example.com").domain == Fqdn("com")
-    assert Fqdn("example.co.uk").domain == Fqdn("co.uk")
+    assert FQDN("example.com").domain == FQDN("com")
+    assert FQDN("example.co.uk").domain == FQDN("co.uk")
 
 
 def test_single_label_names_work():
-    f = Fqdn("localhost")
+    f = FQDN("localhost")
     assert f.hostname == "localhost"
     assert f.tld == "localhost"
     assert f.domain is None
@@ -156,12 +156,12 @@ def test_single_label_names_work():
 
 
 def test_len_counts_labels_not_characters():
-    assert len(Fqdn("www.example.com")) == 3
-    assert len(str(Fqdn("www.example.com"))) == 15
+    assert len(FQDN("www.example.com")) == 3
+    assert len(str(FQDN("www.example.com"))) == 15
 
 
 def test_iteration_indexing_and_membership():
-    f = Fqdn("a.b.c.d")
+    f = FQDN("a.b.c.d")
     assert list(f) == ["a", "b", "c", "d"]
     assert f[0] == "a"
     assert f[-1] == "d"
@@ -179,80 +179,80 @@ def test_iteration_indexing_and_membership():
 
 
 def test_truediv_prepends_and_accepts_both_types():
-    base = Fqdn("example.com")
-    assert base / "www" == Fqdn("www.example.com")
-    assert base / Fqdn("www") == Fqdn("www.example.com")
-    assert base / "a.b" == Fqdn("a.b.example.com")
-    assert base / "www" / "deep" == Fqdn("deep.www.example.com")
+    base = FQDN("example.com")
+    assert base / "www" == FQDN("www.example.com")
+    assert base / FQDN("www") == FQDN("www.example.com")
+    assert base / "a.b" == FQDN("a.b.example.com")
+    assert base / "www" / "deep" == FQDN("deep.www.example.com")
 
 
 def test_there_is_no_reflected_truediv():
     """Deliberate: the right operand is the label, so a reflected form would
     swap the operands' roles while producing the same string."""
     with pytest.raises(TypeError):
-        "www" / Fqdn("example.com")
+        "www" / FQDN("example.com")
 
 
 def test_truediv_rejects_nonsense_rather_than_guessing():
     with pytest.raises(TypeError):
-        Fqdn("example.com") / 42
+        FQDN("example.com") / 42
     with pytest.raises(TypeError):
-        Fqdn("example.com") / "a..b"
+        FQDN("example.com") / "a..b"
 
 
 def test_child_is_the_spelled_out_truediv():
-    assert Fqdn("com").child("example", "www") == Fqdn("www.example.com")
-    assert Fqdn("com").child("example") == Fqdn("com") / "example"
+    assert FQDN("com").child("example", "www") == FQDN("www.example.com")
+    assert FQDN("com").child("example") == FQDN("com") / "example"
 
 
 def test_with_hostname_replaces_only_the_leftmost_label():
-    assert Fqdn("www.example.com").with_hostname("mail") == Fqdn("mail.example.com")
-    assert Fqdn("localhost").with_hostname("other") == Fqdn("other")
+    assert FQDN("www.example.com").with_hostname("mail") == FQDN("mail.example.com")
+    assert FQDN("localhost").with_hostname("other") == FQDN("other")
     with pytest.raises(ValueError, match="one label"):
-        Fqdn("www.example.com").with_hostname("a.b")
+        FQDN("www.example.com").with_hostname("a.b")
 
 
 def test_is_subdomain_of_excludes_self():
-    f = Fqdn("www.example.com")
+    f = FQDN("www.example.com")
     assert f.is_subdomain_of("example.com")
     assert f.is_subdomain_of("com")
     assert not f.is_subdomain_of(f)
     assert not f.is_subdomain_of("www.example.com")
-    assert not Fqdn("example.com").is_subdomain_of("www.example.com")
+    assert not FQDN("example.com").is_subdomain_of("www.example.com")
     # Not fooled by a shared text suffix that is not a label boundary.
-    assert not Fqdn("notexample.com").is_subdomain_of("example.com")
+    assert not FQDN("notexample.com").is_subdomain_of("example.com")
 
 
 def test_is_subdomain_of_ignores_qualification():
     """`example.com` and `example.com.` are the same place in the tree."""
-    assert Fqdn("www.example.com.").is_subdomain_of("example.com")
-    assert Fqdn("www.example.com").is_subdomain_of("example.com.")
+    assert FQDN("www.example.com.").is_subdomain_of("example.com")
+    assert FQDN("www.example.com").is_subdomain_of("example.com.")
 
 
 def test_relative_to_strips_the_suffix_and_is_never_qualified():
-    assert Fqdn("www.example.com").relative_to("example.com") == Fqdn("www")
-    assert Fqdn("a.b.example.com").relative_to("example.com") == Fqdn("a.b")
+    assert FQDN("www.example.com").relative_to("example.com") == FQDN("www")
+    assert FQDN("a.b.example.com").relative_to("example.com") == FQDN("a.b")
     # A fragment of a name has no root, whatever the original had.
-    assert not Fqdn("www.example.com.").relative_to("example.com").is_fully_qualified()
+    assert not FQDN("www.example.com.").relative_to("example.com").is_fully_qualified()
     with pytest.raises(ValueError, match="not under"):
-        Fqdn("www.example.com").relative_to("example.org")
+        FQDN("www.example.com").relative_to("example.org")
     with pytest.raises(ValueError, match="not under"):
-        Fqdn("example.com").relative_to("example.com")
+        FQDN("example.com").relative_to("example.com")
 
 
 def test_reverse_flips_label_order():
-    assert Fqdn("www.example.com").reverse().labels == ("com", "example", "www")
-    assert Fqdn("www.example.com").reverse().reverse() == Fqdn("www.example.com")
+    assert FQDN("www.example.com").reverse().labels == ("com", "example", "www")
+    assert FQDN("www.example.com").reverse().reverse() == FQDN("www.example.com")
 
 
 def test_reverse_is_not_a_reverse_dns_pointer():
     """Different operation, similar name. `.reverse_pointer` is absent because
     it is built from an address and this type has none."""
-    assert not hasattr(Fqdn("example.com"), "reverse_pointer")
+    assert not hasattr(FQDN("example.com"), "reverse_pointer")
 
 
 def test_qualification_conversions():
-    rel, absolute = Fqdn("example.com"), Fqdn("example.com.")
+    rel, absolute = FQDN("example.com"), FQDN("example.com.")
     assert rel.as_fully_qualified() == absolute
     assert absolute.relative() == rel
     assert absolute.as_fully_qualified() is absolute
@@ -260,7 +260,7 @@ def test_qualification_conversions():
 
 
 def test_absoluteness_survives_the_algebra():
-    a = Fqdn("example.com.")
+    a = FQDN("example.com.")
     assert (a / "www").is_fully_qualified()
     assert a.domain.is_fully_qualified()
     assert a.with_hostname("other").is_fully_qualified()
@@ -282,8 +282,8 @@ def test_equal_and_hash_alike_across_case(spelling):
     while `__hash__` does not makes a dict silently keep duplicates, which is
     the failure mode that never raises.
     """
-    reference = Fqdn("example.com")
-    parsed = Fqdn(spelling)
+    reference = FQDN("example.com")
+    parsed = FQDN(spelling)
     assert parsed == reference
     assert hash(parsed) == hash(reference)
     assert len({parsed, reference}) == 1
@@ -292,38 +292,38 @@ def test_equal_and_hash_alike_across_case(spelling):
 def test_qualification_is_part_of_identity():
     """`example.com` and `example.com.` are different queries, like Path("a")
     and Path("/a"). Surprising, documented, and deliberate."""
-    assert Fqdn("example.com") != Fqdn("example.com.")
-    assert hash(Fqdn("example.com")) != hash(Fqdn("example.com."))
-    assert len({Fqdn("example.com"), Fqdn("example.com.")}) == 2
+    assert FQDN("example.com") != FQDN("example.com.")
+    assert hash(FQDN("example.com")) != hash(FQDN("example.com."))
+    assert len({FQDN("example.com"), FQDN("example.com.")}) == 2
     # Compare labels when qualification is not what you mean.
-    assert Fqdn("example.com").labels == Fqdn("example.com.").labels
+    assert FQDN("example.com").labels == FQDN("example.com.").labels
 
 
 def test_eq_does_not_coerce_a_string():
     """Same policy as MACAddress: coercing would make == disagree with hash."""
-    assert Fqdn("example.com") != "example.com"
-    assert Fqdn.try_parse("example.com") == Fqdn("example.com")
+    assert FQDN("example.com") != "example.com"
+    assert FQDN.try_parse("example.com") == FQDN("example.com")
 
 
 def test_ordering_groups_by_tld_not_by_text():
     """Sorted on reversed labels, which is what a list of names wants."""
-    names = [Fqdn("b.com"), Fqdn("a.org"), Fqdn("a.com")]
+    names = [FQDN("b.com"), FQDN("a.org"), FQDN("a.com")]
     assert [str(f) for f in sorted(names)] == ["a.com", "b.com", "a.org"]
     # Explicitly NOT the same as sorting the text.
     assert sorted(str(f) for f in names) == ["a.com", "a.org", "b.com"]
 
 
 def test_full_ordering_operators():
-    a, b = Fqdn("a.com"), Fqdn("b.com")
+    a, b = FQDN("a.com"), FQDN("b.com")
     assert a < b and a <= b and b > a and b >= a
-    assert a <= Fqdn("a.com") and a >= Fqdn("a.com")
+    assert a <= FQDN("a.com") and a >= FQDN("a.com")
     assert not a > b and not b < a
     with pytest.raises(TypeError):
         a < "a.com"
 
 
 def test_immutable():
-    f = Fqdn("example.com")
+    f = FQDN("example.com")
     with pytest.raises(AttributeError):
         f.labels = ()
     with pytest.raises(AttributeError):
@@ -333,13 +333,13 @@ def test_immutable():
 
 
 def test_hashable_in_a_set_and_dict_key():
-    mapping = {Fqdn("a.com"): 1, Fqdn("A.COM"): 2}
-    assert len(mapping) == 1 and mapping[Fqdn("a.com")] == 2
+    mapping = {FQDN("a.com"): 1, FQDN("A.COM"): 2}
+    assert len(mapping) == 1 and mapping[FQDN("a.com")] == 2
 
 
 def test_pickle_round_trip():
     for text in ("www.example.com", "example.com."):
-        f = Fqdn(text)
+        f = FQDN(text)
         assert pickle.loads(pickle.dumps(f)) == f
 
 
@@ -358,9 +358,9 @@ def test_an_address_literal_is_refused(literal):
     make every method on it meaningless. netimps.Host is the union type.
     """
     with pytest.raises(ValueError, match="is an IP address"):
-        Fqdn(literal)
-    assert Fqdn.is_valid(literal) is False
-    assert Fqdn.try_parse(literal) is None
+        FQDN(literal)
+    assert FQDN.is_valid(literal) is False
+    assert FQDN.try_parse(literal) is None
 
 
 def test_digit_labels_in_a_real_name_are_fine():
@@ -369,9 +369,9 @@ def test_digit_labels_in_a_real_name_are_fine():
     `4.3.2.1.in-addr.arpa` is the canonical case, and `0.pool.ntp.org` is one
     people actually type.
     """
-    assert Fqdn("4.3.2.1.in-addr.arpa").tld == "arpa"
-    assert Fqdn("0.pool.ntp.org").hostname == "0"
-    assert Fqdn("1.2.3.4.example.com").domain == Fqdn("2.3.4.example.com")
+    assert FQDN("4.3.2.1.in-addr.arpa").tld == "arpa"
+    assert FQDN("0.pool.ntp.org").hostname == "0"
+    assert FQDN("1.2.3.4.example.com").domain == FQDN("2.3.4.example.com")
 
 
 def test_deriving_a_name_never_re_runs_the_address_check():
@@ -381,8 +381,8 @@ def test_deriving_a_name_never_re_runs_the_address_check():
     rejected as constructor input once enough labels are stripped; the derived
     path bypasses validation precisely so this works.
     """
-    f = Fqdn("1.2.3.4.sub")
-    assert f.reverse() == Fqdn("sub.4.3.2.1")
+    f = FQDN("1.2.3.4.sub")
+    assert f.reverse() == FQDN("sub.4.3.2.1")
     walked = []
     current = f
     while current is not None:
@@ -403,7 +403,7 @@ def test_deriving_a_name_never_re_runs_the_address_check():
 )
 def test_malformed_names_are_refused(bad, match):
     with pytest.raises(ValueError, match=match):
-        Fqdn(bad)
+        FQDN(bad)
 
 
 def test_the_length_limits_are_exact():
@@ -423,47 +423,47 @@ def test_the_length_limits_are_exact():
         return ".".join(parts)
 
     assert len(name_of(253)) == 253
-    assert Fqdn.is_valid(name_of(253)) is True
-    assert Fqdn.is_valid(name_of(254)) is False
+    assert FQDN.is_valid(name_of(253)) is True
+    assert FQDN.is_valid(name_of(254)) is False
     # And the label boundary, likewise both ways.
-    assert Fqdn.is_valid("x" * 63 + ".com") is True
-    assert Fqdn.is_valid("x" * 64 + ".com") is False
+    assert FQDN.is_valid("x" * 63 + ".com") is True
+    assert FQDN.is_valid("x" * 64 + ".com") is False
 
 
 def test_only_the_last_part_may_carry_the_root_dot():
-    """Otherwise `Fqdn("a.", "b")` silently produces a name with a hole."""
+    """Otherwise `FQDN("a.", "b")` silently produces a name with a hole."""
     with pytest.raises(ValueError, match="only the last part"):
-        Fqdn("a.", "b")
-    assert Fqdn("a", "b.") == Fqdn("a.b.")
+        FQDN("a.", "b")
+    assert FQDN("a", "b.") == FQDN("a.b.")
 
 
 def test_non_string_parts_are_a_type_error():
     with pytest.raises(TypeError):
-        Fqdn(42)
+        FQDN(42)
     with pytest.raises(TypeError):
-        Fqdn(None)
+        FQDN(None)
     with pytest.raises(ValueError):
-        Fqdn()
+        FQDN()
 
 
 def test_idna_encodes_a_non_ascii_name():
     """Via the stdlib, which is IDNA 2003 -- documented, not hidden."""
-    assert str(Fqdn("münchen.de")) == "xn--mnchen-3ya.de"
-    assert Fqdn("münchen.de") == Fqdn("xn--mnchen-3ya.de")
-    assert Fqdn("MÜNCHEN.de") == Fqdn("xn--mnchen-3ya.de")
+    assert str(FQDN("münchen.de")) == "xn--mnchen-3ya.de"
+    assert FQDN("münchen.de") == FQDN("xn--mnchen-3ya.de")
+    assert FQDN("MÜNCHEN.de") == FQDN("xn--mnchen-3ya.de")
 
 
 def test_is_valid_and_try_parse_never_raise():
     for value in ("example.com", "10.0.0.1", "", None, 42, "a..b", object()):
-        assert isinstance(Fqdn.is_valid(value), bool)
-        result = Fqdn.try_parse(value)
-        assert result is None or isinstance(result, Fqdn)
+        assert isinstance(FQDN.is_valid(value), bool)
+        result = FQDN.try_parse(value)
+        assert result is None or isinstance(result, FQDN)
 
 
 def test_exported_from_the_package():
-    assert netimps.Fqdn is Fqdn
-    assert "Fqdn" in netimps.__all__
-    assert "FqdnLike" in netimps.__all__
+    assert netimps.FQDN is FQDN
+    assert "FQDN" in netimps.__all__
+    assert "FQDNLike" in netimps.__all__
 
 
 # --------------------------------------------------------------------------- #
@@ -472,7 +472,7 @@ def test_exported_from_the_package():
 
 
 def test_host_fqdn_narrows_a_name_and_refuses_an_address(no_such_host):
-    assert Host("www.example.com").fqdn == Fqdn("www.example.com")
+    assert Host("www.example.com").fqdn == FQDN("www.example.com")
     assert Host("10.0.0.5").fqdn is None
     assert Host("::1").fqdn is None
     # A syntactically impossible name answers None rather than raising from a
@@ -484,7 +484,7 @@ def test_host_keeps_its_own_contract(no_such_host):
     """The bridge is additive: Host still reports the original text."""
     host = Host("WWW.Example.COM")
     assert str(host) == "WWW.Example.COM"
-    assert host.fqdn == Fqdn("www.example.com")
+    assert host.fqdn == FQDN("www.example.com")
 
 
 # --------------------------------------------------------------------------- #
@@ -502,7 +502,7 @@ def test_resolve_is_a_pass_through(monkeypatch):
         return ["sentinel"]
 
     monkeypatch.setattr(netimps._fqdn, "resolve", fake_resolve)
-    result = Fqdn("www.example.com").resolve(rdtype="aaaa", strict=True)
+    result = FQDN("www.example.com").resolve(rdtype="aaaa", strict=True)
     assert result == ["sentinel"]
     assert seen["query"] == "www.example.com"
     assert seen["kwargs"] == {"rdtype": "aaaa", "strict": True}
@@ -517,7 +517,7 @@ def test_resolve_passes_the_fully_qualified_form_through(monkeypatch):
         "resolve",
         lambda query, **kw: seen.setdefault("query", query) and [],
     )
-    Fqdn("example.com.").resolve()
+    FQDN("example.com.").resolve()
     assert seen["query"] == "example.com."
 
 
@@ -530,7 +530,7 @@ def test_ping_is_a_pass_through(monkeypatch):
         return "pong"
 
     monkeypatch.setattr(netimps._fqdn, "ping", fake_ping)
-    assert Fqdn("example.com").ping(count=2) == "pong"
+    assert FQDN("example.com").ping(count=2) == "pong"
     assert seen == {"dst": "example.com", "kwargs": {"count": 2}}
 
 
@@ -538,9 +538,9 @@ def test_ip_returns_the_first_answer_or_none(monkeypatch):
     monkeypatch.setattr(
         netimps._fqdn, "resolve", lambda query, **kw: ["first", "second"]
     )
-    assert Fqdn("example.com").ip() == "first"
+    assert FQDN("example.com").ip() == "first"
     monkeypatch.setattr(netimps._fqdn, "resolve", lambda query, **kw: [])
-    assert Fqdn("example.com").ip() is None
+    assert FQDN("example.com").ip() is None
 
 
 def test_ip_does_not_cache_unlike_host(monkeypatch):
@@ -550,7 +550,7 @@ def test_ip_does_not_cache_unlike_host(monkeypatch):
     monkeypatch.setattr(
         netimps._fqdn, "resolve", lambda query, **kw: calls.append(query) or ["a"]
     )
-    f = Fqdn("example.com")
+    f = FQDN("example.com")
     f.ip()
     f.ip()
     assert len(calls) == 2
@@ -566,7 +566,7 @@ def test_in_means_containment_like_ip_in_subnet():
 
     This package is a thin layer over ``ipaddress``, so the stdlib idiom wins.
     An earlier version made ``in`` a *label* test, which reads plausibly and
-    conflicts head-on: ``"com" in Fqdn("www.example.com")`` is True as a label
+    conflicts head-on: ``"com" in FQDN("www.example.com")`` is True as a label
     test and False as containment, and one expression cannot answer both.
     """
     import ipaddress
@@ -574,12 +574,12 @@ def test_in_means_containment_like_ip_in_subnet():
     # The precedent this follows.
     assert ipaddress.ip_address("10.0.0.5") in ipaddress.ip_network("10.0.0.0/24")
 
-    assert Fqdn("www.example.com") in Fqdn("example.com")
-    assert Fqdn("a.b.example.com") in Fqdn("example.com")
-    assert Fqdn("example.com") not in Fqdn("www.example.com")
-    assert Fqdn("example.org") not in Fqdn("example.com")
+    assert FQDN("www.example.com") in FQDN("example.com")
+    assert FQDN("a.b.example.com") in FQDN("example.com")
+    assert FQDN("example.com") not in FQDN("www.example.com")
+    assert FQDN("example.org") not in FQDN("example.com")
     # Not fooled by a shared text suffix across a label boundary.
-    assert Fqdn("notexample.com") not in Fqdn("example.com")
+    assert FQDN("notexample.com") not in FQDN("example.com")
 
 
 def test_in_is_inclusive_where_is_subdomain_of_is_strict():
@@ -588,26 +588,26 @@ def test_in_is_inclusive_where_is_subdomain_of_is_strict():
     A zone contains its own apex, exactly as a /24 contains its network
     address -- so ``in`` is the inclusive one, matching ipaddress.
     """
-    f = Fqdn("example.com")
+    f = FQDN("example.com")
     assert f in f
     assert not f.is_subdomain_of(f)
 
 
 def test_in_accepts_a_string_and_ignores_qualification():
-    assert "mail.example.com" in Fqdn("example.com")
-    assert Fqdn("www.example.com.") in Fqdn("example.com")
-    assert Fqdn("www.example.com") in Fqdn("example.com.")
+    assert "mail.example.com" in FQDN("example.com")
+    assert FQDN("www.example.com.") in FQDN("example.com")
+    assert FQDN("www.example.com") in FQDN("example.com.")
 
 
 def test_in_is_a_total_predicate():
     """False, never an exception, so it stays safe inside a filter."""
     for junk in ("a..b", "", "10.0.0.1", 42, None, object()):
-        assert junk not in Fqdn("example.com")
+        assert junk not in FQDN("example.com")
 
 
 def test_in_is_usable_as_a_filter():
-    names = [Fqdn("a.example.com"), Fqdn("b.example.org"), Fqdn("c.example.com")]
-    zone = Fqdn("example.com")
+    names = [FQDN("a.example.com"), FQDN("b.example.org"), FQDN("c.example.com")]
+    zone = FQDN("example.com")
     assert [str(n) for n in names if n in zone] == ["a.example.com", "c.example.com"]
 
 
@@ -617,33 +617,33 @@ def test_in_is_usable_as_a_filter():
 
 
 def test_str_gives_the_name():
-    assert str(Fqdn("www.example.com")) == "www.example.com"
-    assert str(Fqdn("www.example.com.")) == "www.example.com."
-    assert "{}".format(Fqdn("example.com")) == "example.com"
-    assert "%s:443" % (Fqdn("example.com"),) == "example.com:443"
+    assert str(FQDN("www.example.com")) == "www.example.com"
+    assert str(FQDN("www.example.com.")) == "www.example.com."
+    assert "{}".format(FQDN("example.com")) == "example.com"
+    assert "%s:443" % (FQDN("example.com"),) == "example.com:443"
 
 
 def test_addition_with_a_string_gives_a_string():
-    f = Fqdn("example.com")
+    f = FQDN("example.com")
     assert f + "/health" == "example.com/health"
     assert isinstance(f + "/health", str)
     assert "https://" + f == "https://example.com"
     assert isinstance("https://" + f, str)
     # A fully qualified name contributes its dot, because + is text.
-    assert Fqdn("example.com.") + "/x" == "example.com./x"
+    assert FQDN("example.com.") + "/x" == "example.com./x"
 
 
 def test_adding_two_names_raises_and_names_the_operator_that_works():
     """Text-concatenating two names gives garbage, so it is refused."""
     with pytest.raises(TypeError, match="to compose"):
-        Fqdn("www") + Fqdn("example.com")
+        FQDN("www") + FQDN("example.com")
 
 
 def test_adding_a_non_string_is_a_type_error():
     with pytest.raises(TypeError):
-        Fqdn("example.com") + 42
+        FQDN("example.com") + 42
     with pytest.raises(TypeError):
-        42 + Fqdn("example.com")
+        42 + FQDN("example.com")
 
 
 # --------------------------------------------------------------------------- #
@@ -653,17 +653,17 @@ def test_adding_a_non_string_is_a_type_error():
 
 def test_unicode_decodes_punycode_for_display():
     """Labels are stored ASCII; this is the other direction, for humans."""
-    assert Fqdn("münchen.de").unicode == "münchen.de"
-    assert str(Fqdn("münchen.de")) == "xn--mnchen-3ya.de"
+    assert FQDN("münchen.de").unicode == "münchen.de"
+    assert str(FQDN("münchen.de")) == "xn--mnchen-3ya.de"
     # Either spelling in gives the same pair out.
-    assert Fqdn("xn--mnchen-3ya.de").unicode == "münchen.de"
-    assert Fqdn("example.com").unicode == "example.com"
-    assert Fqdn("münchen.de.").unicode == "münchen.de."
+    assert FQDN("xn--mnchen-3ya.de").unicode == "münchen.de"
+    assert FQDN("example.com").unicode == "example.com"
+    assert FQDN("münchen.de.").unicode == "münchen.de."
 
 
 def test_unicode_passes_through_undecodable_punycode():
     """A display helper that raises is worse than one showing the stored form."""
-    name = Fqdn._from_labels(("xn--", "com"), False)
+    name = FQDN._from_labels(("xn--", "com"), False)
     assert name.unicode == "xn--.com"
 
 
@@ -687,18 +687,18 @@ def test_is_hostname_is_narrower_than_what_the_type_accepts(name, expected):
     them at construction would make the type useless for that work. The
     constructor takes the broad DNS rule; this reports the narrow host rule.
     """
-    assert Fqdn(name).is_hostname() is expected
+    assert FQDN(name).is_hostname() is expected
     # All of them are still valid names.
-    assert Fqdn.is_valid(name)
+    assert FQDN.is_valid(name)
 
 
 def test_is_wildcard_is_a_predicate_only():
     """No ``matches()``: DNS (RFC 4592) and TLS (RFC 6125) disagree on whether
     ``*.example.com`` covers ``a.b.example.com``, so choosing one silently would
     be wrong for half of callers."""
-    assert Fqdn("*.example.com").is_wildcard
-    assert not Fqdn("www.example.com").is_wildcard
-    assert not hasattr(Fqdn("*.example.com"), "matches")
+    assert FQDN("*.example.com").is_wildcard
+    assert not FQDN("www.example.com").is_wildcard
+    assert not hasattr(FQDN("*.example.com"), "matches")
 
 
 @pytest.mark.parametrize(
@@ -712,12 +712,12 @@ def test_is_wildcard_is_a_predicate_only():
     ],
 )
 def test_common_ancestor(a, b, expected):
-    result = Fqdn(a).common_ancestor(b)
-    assert result == (Fqdn(expected) if expected else None)
+    result = FQDN(a).common_ancestor(b)
+    assert result == (FQDN(expected) if expected else None)
 
 
 def test_common_ancestor_is_symmetric_in_labels():
-    a, b = Fqdn("x.example.com"), Fqdn("y.example.com")
+    a, b = FQDN("x.example.com"), FQDN("y.example.com")
     assert a.common_ancestor(b).labels == b.common_ancestor(a).labels
 
 
@@ -730,14 +730,14 @@ def test_wire_encoding_delegates_to_the_packages_own_encoder():
     """So it cannot drift from what ``resolve_wire`` actually sends."""
     from netimps import _dnswire
 
-    assert Fqdn("www.example.com").wire == b"\x03www\x07example\x03com\x00"
-    assert Fqdn("www.example.com").wire == _dnswire.encode_name("www.example.com")
+    assert FQDN("www.example.com").wire == b"\x03www\x07example\x03com\x00"
+    assert FQDN("www.example.com").wire == _dnswire.encode_name("www.example.com")
 
 
 def test_wire_is_always_absolute():
     """There is no relative wire form, so the root terminator is unconditional."""
-    assert Fqdn("example.com").wire == Fqdn("example.com.").wire
-    assert Fqdn("example.com").wire.endswith(b"\x00")
+    assert FQDN("example.com").wire == FQDN("example.com.").wire
+    assert FQDN("example.com").wire.endswith(b"\x00")
 
 
 def test_wire_length_explains_the_253_vs_255_gap():
@@ -746,8 +746,8 @@ def test_wire_length_explains_the_253_vs_255_gap():
     The difference is one length prefix per label plus the root terminator,
     which is exactly what this exposes.
     """
-    f = Fqdn("www.example.com")
+    f = FQDN("www.example.com")
     assert len(str(f)) == 15
     assert f.wire_length == 17
     assert f.wire_length == len(str(f)) + 2
-    assert Fqdn("a").wire_length == 3
+    assert FQDN("a").wire_length == 3

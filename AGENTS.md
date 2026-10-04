@@ -33,10 +33,10 @@ netimps.ping("8.8.8.8").rtt_ms             # 9.0
   `.as_str(sep, upper=)` and `is_valid`/`try_parse` classmethods.
 - **Socket helpers** — `get_source_ip`, `get_free_port`, `tcp_check`,
   `wait_for_port`: the four every network tool rewrites.
-- **Routing and MTU** — `get_route` (first hop, unprivileged), `hop_count`
+- **Routing and MTU** — `get_route` (first hop, unprivileged), `count_hops`
   (raw sockets or traceroute fallback), `discover_mtu` / `get_pmtu`, `Interface.mtu`.
 - **CIDR maths and host parsing** — `collapse`, `subtract` (absent from
-  `ipaddress`), and `normalize_host` with correct IPv6 bracket handling.
+  `ipaddress`), and `split_host` with correct IPv6 bracket handling.
 - **Scanning** — concurrent `scan_ports` / `scan_hosts`, ports addressable by
   scheme name.
 - **Multicast** — `multicast_socket`, `join_group`, `leave_group`, wrapping the
@@ -76,11 +76,11 @@ src/netimps/
 ├── _ping.py       # private: ping() over the platform binary
 ├── _retry.py      # private: bounded retry with exponential backoff
 ├── _udp.py        # private: UDP receive with arrival interface (pktinfo)
-├── _fqdn.py       # private: Fqdn domain-name value type (label algebra)
+├── _fqdn.py       # private: FQDN domain-name value type (label algebra)
 ├── _msg.py        # private: cross-platform recvmsg/sendmsg + the socket patch
 ├── _aio.py        # private: add_reader polyfill, so arecv works on a Proactor loop
 ├── _winsock.py    # private: ctypes WSARecvMsg/WSASendMsg (Windows only, never imported elsewhere)
-├── _iface_spec.py # private: shared InterfaceSpec coercion (MAC/name/Interface -> address)
+├── _iface_spec.py # private: shared InterfaceLike coercion (MAC/name/Interface -> address)
 └── py.typed       # PEP 561 marker — the package ships inline type hints
 ```
 
@@ -106,8 +106,8 @@ map:
 | Name | Purpose |
 | --- | --- |
 | `IPAddress`, `IPInterface`, `IPNetwork` | v4/v6 **union aliases** for annotations |
-| `IPAddressLike`, `IPInterfaceLike`, `IPNetworkLike`, `MACLike` | accepted-input unions |
-| `AddressLike` | accepted-input union for a single destination (hostname, address, or interface object) |
+| `IPAddressLike`, `IPInterfaceLike`, `IPNetworkLike`, `MACAddressLike` | accepted-input unions |
+| `HostLike` | accepted-input union for a single destination (hostname, address, or interface object) |
 | `IPv4Address`, `IPv4Interface`, `IPv4Network`, `IPv6Address`, `IPv6Interface`, `IPv6Network` | stdlib concrete-type re-exports |
 | `parse`, `try_parse`, `is_valid` | build a type from a value (raising / `None` / `bool`) |
 | `MACAddress` | parse / classify / render MAC addresses |
@@ -116,35 +116,35 @@ map:
 | `is_broadcast` | is this an IPv4 broadcast, limited or subnet (needs interface prefixes) |
 | `get_ip`, `is_link_scoped` | address resolution and scope classification |
 | `collapse`, `subtract` | CIDR set maths |
-| `normalize_host` | `host:port` splitting, IPv6-aware |
+| `split_host` | `host:port` splitting, IPv6-aware |
 | `join_host`, `unmap`, `is_wildcard` | build `host:port` (IPv6-bracketed), collapse a v4-mapped address, test for the bind-anything form |
 | `get_default_port`, `get_default_scheme`, `register_port` | scheme ↔ port registry |
 | `resolve`, `resolve_dnspython`, `resolve_system`, `resolve_nslookup` | DNS lookup → native records; `resolve` chains the three backends, each independently callable, and returns `[]` only when every applicable backend answered empty |
 | `resolve_wire`, `resolve_doh` | DNS by **explicit transport** — UDP/TCP to a named server, or DNS-over-HTTPS — bypassing the backend chain when the caller needs to choose the resolver rather than inherit the host's |
 | `ResolutionError` | raised by the three resolvers when a backend could not even ask (missing binary, unreachable server, deadline) — as opposed to an empty answer |
 | `ping`, `PingResult` | reachability with RTT and TTL |
-| `bind`, `bind_error_hint`, `interface_for`, `interfaces_for`, `is_local_address` | socket creation and local membership |
+| `bind`, `bind_error_hint`, `get_interface`, `iter_interfaces`, `is_local_address` | socket creation and local membership |
 | `get_source_ip`, `get_free_port`, `tcp_check`, `wait_for_port` | socket helpers |
 | `SocketOption`, `disable_connreset`, `set_buffer_size` | named option triple; the Windows `SIO_UDP_CONNRESET` switch (no stdlib route); buffer growth reporting what was *granted* |
 | `AddressInUseError` | one stable `OSError` subclass for "the address is taken", never a `PermissionError` |
-| `UdpEndpoint`, `Datagram` | UDP receive with arrival interface (`IP_PKTINFO` / `IPV6_RECVPKTINFO`, per family) |
-| `UdpEndpoint.reply_socket` | a socket bound to answer *from* the address the client addressed |
-| `supports_pktinfo` | can this host report a datagram's arrival interface — ask before choosing a wildcard or per-address bind |
+| `UDPEndpoint`, `Datagram` | UDP receive with arrival interface (`IP_PKTINFO` / `IPV6_RECVPKTINFO`, per family) |
+| `UDPEndpoint.reply_socket` | a socket bound to answer *from* the address the client addressed |
+| `has_pktinfo` | can this host report a datagram's arrival interface — ask before choosing a wildcard or per-address bind |
 | `Datagram.reply_address` | the sender in the family `reply_socket` chose — what to pass to `sendto`, since a dual-stack listener's v4 peer arrives as a v6 4-tuple |
-| `UdpEndpoint.arecv`, `.datagrams` | `recv` awaited / `async for`; pktinfo survives even on the Windows Proactor loop |
-| `recvmsg`, `sendmsg`, `CMSG_LEN`, `CMSG_SPACE`, `supports_recvmsg` | ancillary-data messaging on **every** platform, Windows included (via `WSARecvMsg`/`WSASendMsg`) |
-| `patch_socket_module`, `socket_patched` | install/remove the default-on `socket` patch that gives Windows the stdlib method names |
-| `Host` | hostname-or-address value type; `.fqdn` narrows a name to `Fqdn` |
-| `Fqdn`, `FqdnLike` | domain name as a value type: labels, `.domain`, `.tld`, `/` prepends (**inverted from `pathlib`**), `.resolve()`/`.ping()` |
+| `UDPEndpoint.arecv`, `.datagrams` | `recv` awaited / `async for`; pktinfo survives even on the Windows Proactor loop |
+| `recvmsg`, `sendmsg`, `CMSG_LEN`, `CMSG_SPACE`, `has_recvmsg` | ancillary-data messaging on **every** platform, Windows included (via `WSARecvMsg`/`WSASendMsg`) |
+| `patch_socket_module`, `is_socket_patched` | install/remove the default-on `socket` patch that gives Windows the stdlib method names |
+| `Host` | hostname-or-address value type; `.fqdn` narrows a name to `FQDN` |
+| `FQDN`, `FQDNLike` | domain name as a value type: labels, `.domain`, `.tld`, `/` prepends (**inverted from `pathlib`**), `.resolve()`/`.ping()` |
 | `retry`, `backoff_delays` | bounded retry with exponential backoff; `jitter_seconds=`/`symmetric=` give the symmetric jitter RFC 2131 and RFC 8415 specify |
 | `Backoff` | a retransmission **timer** — grows on loss, resets on progress; the stateful shape a one-shot schedule cannot express |
-| `APIPA`, `LOOPBACK_V4`, `LOOPBACK_V6`, `LINK_LOCAL_V6` | named networks |
-| `get_route`, `Route`, `hop_count` | routing and distance |
+| `LINK_LOCAL_V4`, `LOOPBACK_V4`, `LOOPBACK_V6`, `LINK_LOCAL_V6` | named networks |
+| `get_route`, `Route`, `count_hops` | routing and distance |
 | `discover_mtu`, `get_pmtu`, `get_tcp_mss` | path MTU by ICMP/UDP/TCP, the kernel's cached guess, or the negotiated MSS |
 | `max_udp_payload` | the largest UDP payload that fits an MTU unfragmented |
 | `scan_ports`, `scan_hosts`, `PORT_RANGES` | concurrent scanning |
 | `multicast_socket`, `join_group`, `leave_group`, `is_multicast` | multicast |
-| `HOST_DN` | `platform.node()` of the running host, captured at import time |
+| `get_hostname()()` | `platform.node()` of the running host, captured at import time |
 
 ## Working here
 
@@ -348,8 +348,8 @@ Tests live in `tests/` and run via `pytest -q` from a checkout;
 | `test_interfaces.py` | `get_interfaces` invariants, the pure helpers, the degraded fallback |
 | `test_sockets.py` | bind / `tcp_check` / route / MTU; loopback, or assertions about shape |
 | `test_scan.py` | `scan_ports` / `scan_hosts` and the multicast helpers, loopback only |
-| `test_centralized.py` | the helpers centralised from sibling repos: `bind`, `interface_for`, `UdpEndpoint`, `Host`, `retry` |
-| `test_fqdn.py` | `Fqdn` — the label algebra, the pathlib inversion, limits, the hash/eq law |
+| `test_centralized.py` | the helpers centralised from sibling repos: `bind`, `get_interface`, `UDPEndpoint`, `Host`, `retry` |
+| `test_fqdn.py` | `FQDN` — the label algebra, the pathlib inversion, limits, the hash/eq law |
 | `test_sweep_gaps.py` | the gaps the 2026-10-03 consumer sweep found; each test pins the *difference* from the hand-rolled version |
 | `test_async_udp.py` | `arecv`/`datagrams` on a **real loop**, both Windows loop types, and no leaked threads |
 | `test_server_helpers.py` | `reply_socket`, `is_broadcast`, `max_udp_payload` |

@@ -19,8 +19,8 @@ from subprocess import TimeoutExpired as _SubprocessTimeout
 from subprocess import run as _run
 from typing import List, Optional, Tuple
 
-from ._iface_spec import InterfaceSpec, interface_address as _interface_address
-from ._ip import AddressLike, IPAddress, _dst_argument
+from ._iface_spec import InterfaceLike, interface_address as _interface_address
+from ._ip import HostLike, IPAddress, _dst_argument
 from ._parse import try_parse as _try_parse
 
 __all__ = ["ping", "PingResult"]
@@ -50,7 +50,7 @@ class PingResult:
     def __init__(
         self,
         ok: bool,
-        host: "AddressLike",
+        host: "HostLike",
         rtt_ms: Optional[float] = None,
         ttl: Optional[int] = None,
         src: "Optional[IPAddress]" = None,
@@ -385,7 +385,7 @@ def _wants_ipv6(
 
 
 def supports_dont_fragment(
-    dst: "AddressLike" = "",
+    dst: "HostLike" = "",
     ipv6: "Optional[bool]" = None,
     resolved: "Optional[List[IPAddress]]" = None,
 ) -> bool:
@@ -487,11 +487,11 @@ def _ping_command(
 
 
 def ping(
-    dst: "AddressLike",
+    dst: "HostLike",
     tries: int = 1,
     timeout: float = 1.0,
     ipv6: Optional[bool] = None,
-    src: "InterfaceSpec" = None,
+    src: "InterfaceLike" = None,
     size: Optional[int] = None,
     ttl: Optional[int] = None,
     dont_fragment: bool = False,

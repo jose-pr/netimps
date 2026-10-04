@@ -80,9 +80,9 @@ from . import (
     get_route,
     get_source_ip,
     get_tcp_mss,
-    hop_count,
+    count_hops,
     is_link_scoped,
-    normalize_host,
+    split_host,
     parse,
     ping,
     resolve,
@@ -384,7 +384,7 @@ class Route(_Base):
             "on_link": found.on_link,
         }
         if self.hops:
-            payload["hops"] = hop_count(self.dst)
+            payload["hops"] = count_hops(self.dst)
 
         # ``on_link`` is a tri-state: True (no router needed), False (via the
         # gateway), or None when this platform could not be asked. Rendering
@@ -711,7 +711,7 @@ class Split(_Base):
 
     def __call__(self) -> "int | None":
         try:
-            host, port = normalize_host(self.value, self.default_port)
+            host, port = split_host(self.value, self.default_port)
         except ValueError as exc:
             _error("error: %s" % exc)
             return 2

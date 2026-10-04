@@ -24,7 +24,7 @@ import socket as _socket
 from concurrent.futures import ThreadPoolExecutor as _ThreadPool
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
-from ._ip import AddressLike, IPAddress, IPNetwork, IPNetworkLike, _dst_argument
+from ._ip import HostLike, IPAddress, IPNetwork, IPNetworkLike, _dst_argument
 from ._parse import parse, try_parse
 from ._scheme import coerce_port, get_default_port
 from ._sockets import tcp_check
@@ -114,7 +114,7 @@ def _floor_timeout(timeout: float) -> float:
     return max(value, _MIN_TIMEOUT)
 
 
-def _probe_addresses(host: "AddressLike") -> "List[str]":
+def _probe_addresses(host: "HostLike") -> "List[str]":
     """Resolve ``host`` to address literals **once**, for a whole scan.
 
     :func:`netimps.tcp_check` resolves its destination on every call, and a
@@ -227,7 +227,7 @@ def _port_number(value, get_default_port) -> "Optional[int]":
 
 
 def scan_ports(
-    host: "AddressLike",
+    host: "HostLike",
     ports: "PortsLike" = "common",
     timeout: float = 1.0,
     workers: int = _DEFAULT_WORKERS,

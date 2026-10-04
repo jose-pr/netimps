@@ -1,12 +1,12 @@
 """Readability notification for a socket, on any asyncio loop (internal).
 
-An ``add_reader`` polyfill, and nothing more. :class:`netimps.UdpEndpoint`'s async
+An ``add_reader`` polyfill, and nothing more. :class:`netimps.UDPEndpoint`'s async
 methods use it so that one ``recv`` path serves both loop types.
 
 **Why this exists.** The Windows default :class:`asyncio.ProactorEventLoop` has no
 ``add_reader`` -- it raises :class:`NotImplementedError` -- and its
 ``IocpProactor.recvfrom`` discards ancillary data, which is the whole point of
-``UdpEndpoint``. There is no IOCP route either: measured on 3.14, CPython's
+``UDPEndpoint``. There is no IOCP route either: measured on 3.14, CPython's
 ``_overlapped`` module exposes no ``WSARecvMsg``, so posting one through the loop's
 own completion port would mean reimplementing the overlapped plumbing *and*
 calling the private ``IocpProactor._register``.

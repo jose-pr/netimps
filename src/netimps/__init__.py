@@ -58,12 +58,12 @@ from ._exceptions import (
     ResolutionTimeoutError,
 )
 from ._ip import (
-    APIPA,
+    LINK_LOCAL_V4,
     LINK_LOCAL_V6,
     LOOPBACK_V4,
     LOOPBACK_V6,
     Host,
-    AddressLike,
+    HostLike,
     IPAddress,
     IPAddressLike,
     IPInterface,
@@ -73,7 +73,7 @@ from ._ip import (
     collapse,
     get_ip,
     is_link_scoped,
-    normalize_host,
+    split_host,
     join_host,
     unmap,
     is_wildcard,
@@ -83,7 +83,7 @@ from ._parse import is_valid, parse, try_parse
 
 # The public spellings of everything below; the _-prefixed modules are
 # implementation detail and must not be imported from outside the package.
-from ._mac import MACAddress, MACLike
+from ._mac import MACAddress, MACAddressLike
 from ._scheme import (
     get_default_port,
     get_default_scheme,
@@ -114,7 +114,7 @@ from ._multicast import (
     leave_group,
     multicast_socket,
 )
-from ._fqdn import Fqdn, FqdnLike
+from ._fqdn import FQDN, FQDNLike
 from ._retry import Backoff, backoff_delays, retry
 from ._msg import (
     CMSG_LEN,
@@ -122,12 +122,12 @@ from ._msg import (
     patch_socket_module,
     recvmsg,
     sendmsg,
-    socket_patched,
-    supports_recvmsg,
+    is_socket_patched,
+    has_recvmsg,
 )
 from ._msg import _patch_requested as _msg_patch_requested
 
-from ._udp import Datagram, UdpEndpoint, supports_pktinfo
+from ._udp import Datagram, UDPEndpoint, has_pktinfo, SocketAddress
 from ._sockets import (
     bind,
     max_udp_payload,
@@ -138,17 +138,20 @@ from ._sockets import (
     get_pmtu,
     get_tcp_mss,
     bind_error_hint,
-    interface_for,
-    interfaces_for,
+    get_interface,
+    iter_interfaces,
     is_local_address,
     Route,
     get_free_port,
     get_source_ip,
-    hop_count,
+    count_hops,
     get_route,
     tcp_check,
     wait_for_port,
 )
+from ._sockets import _InterfaceQuery as InterfaceQuery
+from ._scan import PortsLike
+from ._iface_spec import InterfaceLike
 
 __all__ = [
     # Types: the v4/v6 unions you annotate with, plus the stdlib concretes.
@@ -165,8 +168,8 @@ __all__ = [
     "IPAddressLike",
     "IPInterfaceLike",
     "IPNetworkLike",
-    "AddressLike",
-    "MACLike",
+    "HostLike",
+    "MACAddressLike",
     # Parsing.
     "parse",
     "try_parse",
@@ -174,13 +177,13 @@ __all__ = [
     "get_ip",
     "Host",
     "is_link_scoped",
-    "APIPA",
+    "LINK_LOCAL_V4",
     "LOOPBACK_V4",
     "LOOPBACK_V6",
     "LINK_LOCAL_V6",
     "collapse",
     "subtract",
-    "normalize_host",
+    "split_host",
     "join_host",
     "unmap",
     "is_wildcard",
@@ -219,23 +222,23 @@ __all__ = [
     "disable_connreset",
     "set_buffer_size",
     "bind_error_hint",
-    "interface_for",
-    "interfaces_for",
+    "get_interface",
+    "iter_interfaces",
     "is_local_address",
-    "UdpEndpoint",
-    "supports_pktinfo",
+    "UDPEndpoint",
+    "has_pktinfo",
     "Datagram",
-    # Domain names as a value type. Note the pathlib inversion -- see Fqdn.
-    "Fqdn",
-    "FqdnLike",
+    # Domain names as a value type. Note the pathlib inversion -- see FQDN.
+    "FQDN",
+    "FQDNLike",
     # Ancillary-data messaging, available on every platform (Windows included).
     "recvmsg",
     "sendmsg",
     "CMSG_LEN",
     "CMSG_SPACE",
-    "supports_recvmsg",
+    "has_recvmsg",
     "patch_socket_module",
-    "socket_patched",
+    "is_socket_patched",
     "retry",
     "Backoff",
     "backoff_delays",
@@ -249,12 +252,17 @@ __all__ = [
     "leave_group",
     "is_multicast",
     "Route",
-    "hop_count",
+    "count_hops",
     "get_pmtu",
     "discover_mtu",
     "max_udp_payload",
     "get_tcp_mss",
     "HOST_DN",
+    # Phase 2: New exported aliases
+    "InterfaceLike",
+    "InterfaceQuery",
+    "PortsLike",
+    "SocketAddress",
 ]
 
 
@@ -286,14 +294,14 @@ HOST_DN = _platform.node()
 
 # The patch is for *other people's* code: `_udp` calls `_msg` directly, so
 # netimps' own behaviour is identical whether or not this runs. That is
-# deliberate -- opting out below must not quietly cost `UdpEndpoint` its
+# deliberate -- opting out below must not quietly cost `UDPEndpoint` its
 # pktinfo support.
 #
 # Third-party code is the reason it runs at import time: a module that reads
 # `socket.CMSG_SPACE` into a constant at *its* import time (which is the normal
 # way to probe it) sees None if it is imported before `import netimps` has run.
 #
-# Opt out with NETIMPS_NO_SOCKET_PATCH=1 before the first import, or call
+# Opt out with NETIMPS_SOCKET_PATCH=1 before the first import, or call
 # `patch_socket_module(False)` afterwards. See `_msg` for why this is default-on
 # and why it installs four names rather than one.
 if _msg_patch_requested():

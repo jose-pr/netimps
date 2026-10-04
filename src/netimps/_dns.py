@@ -20,7 +20,7 @@ tries them in order and returns the first **non-empty** answer:
 :func:`resolve_doh` asks one DNS-over-HTTPS endpoint (RFC 8484) and is not
 part of the chain: a caller that names a DoH URL wants that answer alone.
 
-``query`` accepts :data:`AddressLike` everywhere (a hostname string, an
+``query`` accepts :data:`HostLike` everywhere (a hostname string, an
 address string, an address object, or an interface object -- its ``.ip`` is
 used). ``rdtype=None`` (the default on all four) auto-selects ``"ptr"`` for
 an address-literal ``query`` and ``"a"`` otherwise.
@@ -47,7 +47,7 @@ from ._exceptions import (
     ResolutionError,
     ResolutionTimeoutError,
 )
-from ._ip import AddressLike, _dst_argument
+from ._ip import HostLike, _dst_argument
 from ._parse import try_parse
 
 __all__ = [
@@ -102,7 +102,7 @@ def _auto_rdtype(query: str) -> str:
 
 
 def resolve_dnspython(
-    query: "AddressLike",
+    query: "HostLike",
     rdtype: Optional[str] = None,
     ns: Optional[Union[str, List[str]]] = None,
     timeout: Optional[float] = 5.0,
@@ -322,7 +322,7 @@ def _resolve_system_once(
 
 
 def resolve_system(
-    query: "AddressLike",
+    query: "HostLike",
     rdtype: Optional[str] = None,
     timeout: Optional[float] = 5.0,
     search: Union[bool, List[str]] = True,
@@ -646,7 +646,7 @@ def _resolve_nslookup_once(
 
 
 def resolve_nslookup(
-    query: "AddressLike",
+    query: "HostLike",
     rdtype: Optional[str] = None,
     ns: Optional[str] = None,
     timeout: Optional[float] = 5.0,
@@ -755,7 +755,7 @@ def resolve_nslookup(
 
 
 def resolve(
-    query: "AddressLike",
+    query: "HostLike",
     rdtype: Optional[str] = None,
     ns: Optional[Union[str, List[str]]] = None,
     timeout: Optional[float] = 5.0,
@@ -1086,7 +1086,7 @@ def _question(query: str, rdtype: "Optional[str]") -> "Tuple[str, str]":
 
 
 def resolve_wire(
-    query: "AddressLike",
+    query: "HostLike",
     rdtype: Optional[str] = None,
     ns: Optional[Union[str, List[str]]] = None,
     timeout: Optional[float] = 5.0,
@@ -1217,7 +1217,7 @@ def _urllib_fetch(
 
 
 def resolve_doh(
-    query: "AddressLike",
+    query: "HostLike",
     url: str,
     rdtype: Optional[str] = None,
     timeout: Optional[float] = 5.0,

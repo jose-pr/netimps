@@ -920,7 +920,7 @@ def test_is_multicast_unmaps_a_v4_mapped_group():
 
     Measured: `IPv6Address("::ffff:224.0.0.1").is_multicast` is False on 3.9 and
     True on 3.14. A v4-mapped group is a real group -- it is how a dual-stack
-    listener sees one -- and `UdpEndpoint._is_repliable` inherits this answer,
+    listener sees one -- and `UDPEndpoint._is_repliable` inherits this answer,
     so on 3.9-3.12 the gap let a reply socket bind a mapped multicast
     destination. `is_broadcast` already unmapped; now both agree.
     """

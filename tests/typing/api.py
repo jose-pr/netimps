@@ -37,10 +37,10 @@ from typing_extensions import assert_type
 from netimps import (
     Backoff,
     Datagram,
-    Fqdn,
+    FQDN,
     Host,
     SocketOption,
-    UdpEndpoint,
+    UDPEndpoint,
     IPAddress,
     IPAddressLike,
     IPInterface,
@@ -61,8 +61,8 @@ from netimps import (
     ResolutionTimeoutError,
     DNSDecodeError,
     AddressInUseError,
-    interface_for,
-    interfaces_for,
+    get_interface,
+    iter_interfaces,
     is_broadcast,
     is_local_address,
     is_valid,
@@ -194,68 +194,68 @@ if MACAddress.is_valid(raw_mac):
 # ---------------------------------------------------------------------------
 
 iface = Interface("loopback")
-assert_type(interface_for(iface), Optional[Interface])
-assert_type(interface_for(IPv4Address("127.0.0.1")), Optional[Interface])
-assert_type(interface_for(IPv4Interface("127.0.0.1/8")), Optional[Interface])
-assert_type(interface_for(IPv4Network("127.0.0.0/8")), Optional[Interface])
-assert_type(interface_for(MACAddress("02:00:00:00:00:01")), Optional[Interface])
-assert_type(interfaces_for(IPv4Network("127.0.0.0/8")), Iterator[Interface])
-for matched in interfaces_for(IPv4Network("127.0.0.0/8")):
+assert_type(get_interface(iface), Optional[Interface])
+assert_type(get_interface(IPv4Address("127.0.0.1")), Optional[Interface])
+assert_type(get_interface(IPv4Interface("127.0.0.1/8")), Optional[Interface])
+assert_type(get_interface(IPv4Network("127.0.0.0/8")), Optional[Interface])
+assert_type(get_interface(MACAddress("02:00:00:00:00:01")), Optional[Interface])
+assert_type(iter_interfaces(IPv4Network("127.0.0.0/8")), Iterator[Interface])
+for matched in iter_interfaces(IPv4Network("127.0.0.0/8")):
     assert_type(matched, Interface)
 
 assert_type(is_local_address("127.0.0.1"), bool)
 
 # ---------------------------------------------------------------------------
-# Fqdn -- the name algebra. The properties that return Optional are the point:
+# FQDN -- the name algebra. The properties that return Optional are the point:
 # a checker must force the `is None` branch at the top of a name, because the
 # natural `while f.domain:` walk depends on it terminating.
 # ---------------------------------------------------------------------------
 
-fqdn = Fqdn("www.example.com")
+fqdn = FQDN("www.example.com")
 assert_type(fqdn.labels, Tuple[str, ...])
 assert_type(fqdn.parts, Tuple[str, ...])
 assert_type(fqdn.hostname, str)
 assert_type(fqdn.name, str)
 assert_type(fqdn.tld, str)
-assert_type(fqdn.domain, Optional[Fqdn])
-assert_type(fqdn.parent, Optional[Fqdn])
-assert_type(fqdn.domains, Tuple[Fqdn, ...])
-assert_type(fqdn.parents, Tuple[Fqdn, ...])
+assert_type(fqdn.domain, Optional[FQDN])
+assert_type(fqdn.parent, Optional[FQDN])
+assert_type(fqdn.domains, Tuple[FQDN, ...])
+assert_type(fqdn.parents, Tuple[FQDN, ...])
 assert_type(fqdn.is_fully_qualified(), bool)
 assert_type(fqdn.is_absolute(), bool)
 
-# The algebra returns Fqdn, never Optional -- only `.domain` can run out.
-assert_type(fqdn / "deep", Fqdn)
-assert_type(fqdn / Fqdn("deep"), Fqdn)
-assert_type(fqdn.child("a", "b"), Fqdn)
-assert_type(fqdn.with_hostname("mail"), Fqdn)
-assert_type(fqdn.with_name("mail"), Fqdn)
-assert_type(fqdn.relative_to("example.com"), Fqdn)
-assert_type(fqdn.reverse(), Fqdn)
-assert_type(fqdn.as_fully_qualified(), Fqdn)
-assert_type(fqdn.relative(), Fqdn)
+# The algebra returns FQDN, never Optional -- only `.domain` can run out.
+assert_type(fqdn / "deep", FQDN)
+assert_type(fqdn / FQDN("deep"), FQDN)
+assert_type(fqdn.child("a", "b"), FQDN)
+assert_type(fqdn.with_hostname("mail"), FQDN)
+assert_type(fqdn.with_name("mail"), FQDN)
+assert_type(fqdn.relative_to("example.com"), FQDN)
+assert_type(fqdn.reverse(), FQDN)
+assert_type(fqdn.as_fully_qualified(), FQDN)
+assert_type(fqdn.relative(), FQDN)
 assert_type(fqdn.is_subdomain_of("example.com"), bool)
-assert_type(fqdn.is_subdomain_of(Fqdn("example.com")), bool)
+assert_type(fqdn.is_subdomain_of(FQDN("example.com")), bool)
 
-assert_type(Fqdn.try_parse("example.com"), Optional[Fqdn])
-assert_type(Fqdn.is_valid("example.com"), bool)
+assert_type(FQDN.try_parse("example.com"), Optional[FQDN])
+assert_type(FQDN.is_valid("example.com"), bool)
 
 # Walking up terminates, and the checker knows it can.
-current: Optional[Fqdn] = fqdn
+current: Optional[FQDN] = fqdn
 while current is not None:
     assert_type(current.hostname, str)
     current = current.domain
 
 # Host narrows to a name, or None for an address.
-assert_type(Host("www.example.com").fqdn, Optional[Fqdn])
+assert_type(Host("www.example.com").fqdn, Optional[FQDN])
 
-# Fqdn's text interop and the containment predicate.
+# FQDN's text interop and the containment predicate.
 assert_type(fqdn + "/path", str)
 assert_type("https://" + fqdn, str)
 assert_type(fqdn.unicode, str)
 assert_type(fqdn.is_wildcard, bool)
 assert_type(fqdn.is_hostname(), bool)
-assert_type(fqdn.common_ancestor("example.com"), Optional[Fqdn])
+assert_type(fqdn.common_ancestor("example.com"), Optional[FQDN])
 assert_type(fqdn.wire, bytes)
 assert_type(fqdn.wire_length, int)
 
@@ -284,7 +284,7 @@ assert_type(max_udp_payload(1500), int)
 # `reply_socket`'s `port` takes an int *or* any iterable of ints, and still
 # returns a concrete socket. Checked from a consumer's config, because the
 # widening is only useful if a caller's own `range`/`list`/generator type-checks.
-def _reply_socket_port_forms(endpoint: UdpEndpoint, packet: Datagram) -> None:
+def _reply_socket_port_forms(endpoint: UDPEndpoint, packet: Datagram) -> None:
     assert_type(endpoint.reply_socket(packet), socket.socket)
     assert_type(endpoint.reply_socket(packet, 69), socket.socket)
     assert_type(endpoint.reply_socket(packet, range(50000, 50100)), socket.socket)

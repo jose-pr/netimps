@@ -1,4 +1,4 @@
-"""`UdpEndpoint.arecv` / `.datagrams` on every asyncio loop type.
+"""`UDPEndpoint.arecv` / `.datagrams` on every asyncio loop type.
 
 A **real loop** throughout, never a mock: the whole risk here is loop
 integration, and the Windows default `ProactorEventLoop` has no `add_reader` at
@@ -19,7 +19,7 @@ import threading
 import pytest
 
 import netimps
-from netimps import UdpEndpoint, bind
+from netimps import UDPEndpoint, bind
 
 IS_WINDOWS = os.name == "nt"
 
@@ -63,7 +63,7 @@ def test_arecv_delivers_a_datagram_with_pktinfo_on_every_loop(factory):
     """
 
     async def body():
-        endpoint = UdpEndpoint(bind("127.0.0.1", 0))
+        endpoint = UDPEndpoint(bind("127.0.0.1", 0))
         try:
             port = endpoint.socket.getsockname()[1]
             sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -74,7 +74,7 @@ def test_arecv_delivers_a_datagram_with_pktinfo_on_every_loop(factory):
                 packet = await asyncio.wait_for(task, 10)
             finally:
                 sender.close()
-            return packet, endpoint.supports_pktinfo
+            return packet, endpoint.has_pktinfo
         finally:
             endpoint.close()
 
@@ -106,7 +106,7 @@ def test_the_notifier_rearms_many_times(factory):
     rounds = 25
 
     async def body():
-        endpoint = UdpEndpoint(bind("127.0.0.1", 0))
+        endpoint = UDPEndpoint(bind("127.0.0.1", 0))
         received = []
         try:
             port = endpoint.socket.getsockname()[1]
@@ -131,7 +131,7 @@ def test_the_notifier_rearms_many_times(factory):
 @pytest.mark.parametrize("factory", LOOP_FACTORIES, ids=LOOP_IDS)
 def test_datagrams_is_an_async_iterator(factory):
     async def body():
-        endpoint = UdpEndpoint(bind("127.0.0.1", 0))
+        endpoint = UDPEndpoint(bind("127.0.0.1", 0))
         seen = []
         try:
             port = endpoint.socket.getsockname()[1]
@@ -172,7 +172,7 @@ def test_no_notifier_thread_survives_the_endpoint(factory):
     """
 
     async def body():
-        endpoint = UdpEndpoint(bind("127.0.0.1", 0))
+        endpoint = UDPEndpoint(bind("127.0.0.1", 0))
         port = endpoint.socket.getsockname()[1]
         sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
@@ -193,7 +193,7 @@ def test_no_notifier_thread_survives_the_endpoint(factory):
 @pytest.mark.parametrize("factory", LOOP_FACTORIES, ids=LOOP_IDS)
 def test_a_closed_endpoint_refuses_to_start_a_notifier(factory):
     async def body():
-        endpoint = UdpEndpoint(bind("127.0.0.1", 0))
+        endpoint = UDPEndpoint(bind("127.0.0.1", 0))
         endpoint.close()
         with pytest.raises((RuntimeError, OSError, ValueError)):
             await endpoint.arecv(1500)
@@ -210,7 +210,7 @@ def test_arecv_does_not_disturb_the_synchronous_path():
     """
 
     async def body():
-        endpoint = UdpEndpoint(bind("127.0.0.1", 0))
+        endpoint = UDPEndpoint(bind("127.0.0.1", 0))
         port = endpoint.socket.getsockname()[1]
         sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
@@ -303,7 +303,7 @@ def test_a_cancelled_arecv_unregisters_its_reader():
     """
 
     async def body():
-        endpoint = UdpEndpoint(bind("127.0.0.1", 0))
+        endpoint = UDPEndpoint(bind("127.0.0.1", 0))
         fileno = endpoint.socket.fileno()
         try:
             task = asyncio.ensure_future(endpoint.arecv())
@@ -335,7 +335,7 @@ def test_closing_the_socket_after_a_cancelled_arecv_is_quiet():
     """
 
     async def body():
-        endpoint = UdpEndpoint(bind("127.0.0.1", 0))
+        endpoint = UDPEndpoint(bind("127.0.0.1", 0))
         task = asyncio.ensure_future(endpoint.arecv())
         await asyncio.sleep(0.05)
         task.cancel()
@@ -371,7 +371,7 @@ def test_one_endpoint_can_be_served_by_two_successive_loops(factory):
     working too; only the thread path had the bug, and only Windows defaults to
     the one with it.
     """
-    endpoint = UdpEndpoint(bind("127.0.0.1", 0))
+    endpoint = UDPEndpoint(bind("127.0.0.1", 0))
     port = endpoint.socket.getsockname()[1]
 
     async def one_exchange():
@@ -401,7 +401,7 @@ def test_rebinding_leaves_no_thread_behind(factory):
     shape that motivated the fix -- a server restarted repeatedly.
     """
     before = {t for t in threading.enumerate()}
-    endpoint = UdpEndpoint(bind("127.0.0.1", 0))
+    endpoint = UDPEndpoint(bind("127.0.0.1", 0))
     port = endpoint.socket.getsockname()[1]
 
     async def one_exchange():

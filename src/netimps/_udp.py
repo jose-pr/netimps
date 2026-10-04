@@ -76,13 +76,13 @@ Platform reality
 through :mod:`netimps._msg`, which supplies them from Winsock there and
 delegates to CPython elsewhere. It calls that module **directly** rather than
 the ``socket.socket`` methods ``_msg`` can patch in, so declining the patch
-(``NETIMPS_NO_SOCKET_PATCH=1``) does not cost this module anything.
+(``NETIMPS_SOCKET_PATCH=1``) does not cost this module anything.
 
 Where a platform still cannot serve a request, this degrades to plain
 ``recvfrom``/``sendto`` and reports ``interface=None`` rather than failing --
 the same policy :func:`netimps.get_pmtu` uses for the missing ``IP_MTU``. Check
-:attr:`UdpEndpoint.supports_pktinfo` (receiving) and
-:attr:`UdpEndpoint.supports_src_pinning` (sending) to know which mode you are
+:attr:`UDPEndpoint.has_pktinfo` (receiving) and
+:attr:`UDPEndpoint.has_src_pinning` (sending) to know which mode you are
 in -- both are decided once, at construction, from the socket's own family.
 
 One asymmetry has no degrade available: **Windows sends a zero source address
@@ -111,17 +111,17 @@ from typing import (
     cast,
 )
 
-from ._iface_spec import InterfaceSpec
+from ._iface_spec import InterfaceLike
 from ._ifaddrs import INTERFACE_CACHE_TTL, Interface
-from ._ip import AddressLike, IPAddress, IPv4Address, IPv6Address, _dst_argument
+from ._ip import HostLike, IPAddress, IPv4Address, IPv6Address, _dst_argument
 from ._msg import CMSG_SPACE as _cmsg_space
 from ._msg import recvmsg as _recvmsg
 from ._msg import sendmsg as _sendmsg
-from ._msg import supports_recvmsg as _supports_recvmsg
+from ._msg import has_recvmsg as _supports_recvmsg
 from ._multicast import is_multicast
 from ._parse import parse, try_parse
 
-__all__ = ["UdpEndpoint", "Datagram"]
+__all__ = ["UDPEndpoint", "Datagram"]
 
 #: Distinguishes "not cached" from "cached as None", since a negative result is a
 #: real answer worth keeping.
@@ -249,7 +249,7 @@ _CMSG_SLOT_BYTES = 64
 
 #: What ``recvfrom``/``recvmsg`` report as the peer: ``(address, port)`` for
 #: IPv4, ``(address, port, flowinfo, scope_id)`` for IPv6. Kept out of the
-#: public surface -- like ``InterfaceSpec`` it documents an established shape
+#: public surface -- like ``InterfaceLike`` it documents an established shape
 #: rather than something a caller constructs.
 SocketAddress = Union[Tuple[str, int], Tuple[str, int, int, int]]
 
@@ -266,9 +266,9 @@ def _pktinfo_options(family: int) -> "Tuple[int, Optional[int], Optional[int], s
     is both the request and the carrier, and setting it is what enables receipt.
     Asking only for ``IPV6_RECVPKTINFO`` therefore found ``None`` and silently
     turned IPv6 pktinfo off on Windows -- measured on a CI runner, where
-    ``UdpEndpoint(bind("::", 0)).supports_pktinfo`` was ``False`` while a raw
+    ``UDPEndpoint(bind("::", 0)).has_pktinfo`` was ``False`` while a raw
     ``recvmsg`` on the same socket delivered the cmsg perfectly well. The
-    round-trip test passed anyway, by taking its own `not supports_pktinfo`
+    round-trip test passed anyway, by taking its own `not has_pktinfo`
     early-exit branch, which is why the fallback below is explicit rather than
     left to a reader to infer.
 
@@ -356,7 +356,7 @@ class Datagram(NamedTuple):
 
     @property
     def reply_address(self) -> "SocketAddress":
-        """``sender``, in the family a :meth:`UdpEndpoint.reply_socket` will use.
+        """``sender``, in the family a :meth:`UDPEndpoint.reply_socket` will use.
 
         **Use this, not ``sender``, to answer a datagram.** On a dual-stack
         ``AF_INET6`` listener a v4 client's ``sender`` is the v6 4-tuple
@@ -393,12 +393,12 @@ class Datagram(NamedTuple):
         return (str(plain), sender[1])
 
 
-class UdpEndpoint:
+class UDPEndpoint:
     """A UDP socket that can report which interface each datagram arrived on.
 
     ::
 
-        endpoint = UdpEndpoint(netimps.bind("", 67, broadcast=True))
+        endpoint = UDPEndpoint(netimps.bind("", 67, broadcast=True))
         while True:
             packet = endpoint.recv(2048)
             if packet.interface is not None:
@@ -418,7 +418,7 @@ class UdpEndpoint:
     Two flags report what this socket can actually do, so a caller never has
     to infer it from an empty result:
 
-    :ivar supports_pktinfo: ``recv`` will report the arrival interface. This
+    :ivar has_pktinfo: ``recv`` will report the arrival interface. This
         is ``False`` -- not an optimistic ``True`` -- whenever the option for
         *this socket's family* is missing or refused.
     :ivar supports_src_pinning: :meth:`send` can honour ``src``. ``False``
@@ -428,7 +428,7 @@ class UdpEndpoint:
 
     __slots__ = (
         "socket",
-        "supports_pktinfo",
+        "has_pktinfo",
         "supports_src_pinning",
         "_cmsg_size",
         "_iface_cache",
@@ -438,7 +438,7 @@ class UdpEndpoint:
 
     def __init__(self, sock: "_socket.socket", pktinfo: bool = True) -> None:
         self.socket = sock
-        self.supports_pktinfo = False
+        self.has_pktinfo = False
         self.supports_src_pinning = False
         self._cmsg_size = 0
         self._iface_cache: "Dict[int, Optional[Interface]]" = {}
@@ -480,7 +480,7 @@ class UdpEndpoint:
             except OSError:
                 pass
 
-        self.supports_pktinfo = True
+        self.has_pktinfo = True
         self._cmsg_size = _cmsg_space(_CMSG_SLOT_BYTES) * _CMSG_SLOTS
 
     #: How long a cached index -> Interface mapping is trusted. Short, because
@@ -540,7 +540,7 @@ class UdpEndpoint:
             enumeration is not free.
 
         When pktinfo is unavailable this still works; the interface fields are
-        simply empty. When it *is* available -- :attr:`supports_pktinfo` --
+        simply empty. When it *is* available -- :attr:`has_pktinfo` --
         the interface fields are filled for both address families, and
         ``.control_truncated`` says whether anything was dropped for want of
         buffer space.
@@ -548,7 +548,7 @@ class UdpEndpoint:
         A timeout set on the socket raises the builtin :class:`TimeoutError`
         on every supported Python.
         """
-        if not self.supports_pktinfo:
+        if not self.has_pktinfo:
             # No interface information here, but `recvmsg` still reports
             # `MSG_TRUNC`, and `recvfrom` cannot -- so the degraded path goes
             # through it anyway, with a zero-length control buffer. Losing
@@ -567,7 +567,7 @@ class UdpEndpoint:
 
         # Routed through `_msg`, not `self.socket.recvmsg`, so this works on
         # Windows whether or not the stdlib patch is installed -- a caller who
-        # sets NETIMPS_NO_SOCKET_PATCH must not thereby lose pktinfo here.
+        # sets NETIMPS_SOCKET_PATCH must not thereby lose pktinfo here.
         data, ancdata, flags, raw_sender = _recvmsg(
             self.socket, bufsize, self._cmsg_size
         )
@@ -612,7 +612,7 @@ class UdpEndpoint:
         )
 
     def _pktinfo_control(
-        self, src: "InterfaceSpec"
+        self, src: "InterfaceLike"
     ) -> "Optional[Tuple[int, int, bytes]]":
         """Build the ``(level, type, data)`` cmsg that pins *src*, or ``None``.
 
@@ -689,9 +689,9 @@ class UdpEndpoint:
     def send(
         self,
         data: bytes,
-        address: "AddressLike",
+        address: "HostLike",
         port: int,
-        src: "InterfaceSpec" = None,
+        src: "InterfaceLike" = None,
     ) -> int:
         """Send a datagram, optionally forcing the *src* interface.
 
@@ -1069,7 +1069,7 @@ class UdpEndpoint:
             notifier.close()
         self.socket.close()
 
-    def __enter__(self) -> "UdpEndpoint":
+    def __enter__(self) -> "UDPEndpoint":
         return self
 
     def __exit__(self, *exc) -> None:
@@ -1080,9 +1080,9 @@ class UdpEndpoint:
             bound = self.socket.getsockname()
         except OSError:  # unbound, or closed
             bound = None
-        return "UdpEndpoint(bound=%r, pktinfo=%r, src_pinning=%r)" % (
+        return "UDPEndpoint(bound=%r, pktinfo=%r, src_pinning=%r)" % (
             bound,
-            self.supports_pktinfo,
+            self.has_pktinfo,
             self.supports_src_pinning,
         )
 
@@ -1090,7 +1090,7 @@ class UdpEndpoint:
 _PKTINFO_SUPPORT: "Dict[int, bool]" = {}
 
 
-def supports_pktinfo(family: int = _socket.AF_INET) -> bool:
+def has_pktinfo(family: int = _socket.AF_INET) -> bool:
     """Whether a UDP socket of *family* can report each datagram's arrival
     interface on this host.
 
@@ -1101,7 +1101,7 @@ def supports_pktinfo(family: int = _socket.AF_INET) -> bool:
 
     ::
 
-        if supports_pktinfo():
+        if has_pktinfo():
             socks = [bind("", 67)]
         else:
             socks = [bind(str(a), 67) for a in addresses]
@@ -1111,7 +1111,7 @@ def supports_pktinfo(family: int = _socket.AF_INET) -> bool:
     3.9-3.11 on *every* platform -- the constant arrived in 3.12 -- while the
     kernel supported it throughout. A name test therefore reports "no" on a
     platform that works, which silently pushes a server onto the per-address
-    path it did not need. :class:`UdpEndpoint` already used the documented
+    path it did not need. :class:`UDPEndpoint` already used the documented
     per-platform values rather than the constants for exactly this reason, and
     this asks it the same way the endpoint does, on a throwaway socket.
 
@@ -1133,7 +1133,7 @@ def supports_pktinfo(family: int = _socket.AF_INET) -> bool:
         _PKTINFO_SUPPORT[family] = False
         return False
     try:
-        answer = bool(UdpEndpoint(probe).supports_pktinfo)
+        answer = bool(UDPEndpoint(probe).has_pktinfo)
     finally:
         probe.close()
     _PKTINFO_SUPPORT[family] = answer

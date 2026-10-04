@@ -58,7 +58,7 @@ committed, and a benchmark result is not a reason to publish where it ran.
 
 Two groups behave very differently, and conflating them is the usual mistake:
 
-- **Pure computation** — `parse_*`, `normalize_host`, `collapse`, `subtract`,
+- **Pure computation** — `parse_*`, `split_host`, `collapse`, `subtract`,
   `get_default_port`. Microseconds, stable, and the only ones where a small
   median change is likely to be real.
 - **Syscall-bound** — `get_interfaces`, `is_local_address`, `get_source_ip`,

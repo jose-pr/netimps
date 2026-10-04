@@ -30,7 +30,7 @@ def test_the_functions_work_whether_or_not_the_patch_is_installed():
     Asserted explicitly because the dependency must not run the other way: a
     caller who declines the patch keeps every one of these.
     """
-    assert netimps.supports_recvmsg() is True
+    assert netimps.has_recvmsg() is True
     assert callable(netimps.recvmsg)
     assert callable(netimps.sendmsg)
     assert netimps.CMSG_SPACE(8) >= netimps.CMSG_LEN(8) > 8
@@ -305,7 +305,7 @@ def test_patch_is_a_no_op_where_cpython_already_provides_these():
     """
     if IS_WINDOWS:
         pytest.skip("Windows is the platform that does need the patch")
-    assert netimps.socket_patched() is False
+    assert netimps.is_socket_patched() is False
     assert netimps.patch_socket_module() == []
     assert socket.socket.recvmsg.__qualname__.startswith("socket")
 
@@ -320,7 +320,7 @@ def test_patch_installs_all_four_names_on_windows():
     succeed and then fail on the next line, turning "this platform cannot" into
     "this library is broken".
     """
-    assert netimps.socket_patched() is True
+    assert netimps.is_socket_patched() is True
     assert hasattr(socket.socket, "recvmsg")
     assert hasattr(socket.socket, "sendmsg")
     assert hasattr(socket, "CMSG_LEN")
@@ -351,7 +351,7 @@ def test_patch_is_idempotent_and_reversible():
             "os.sysconf",
             "os.sysconf_names",
         }
-        assert netimps.socket_patched() is False
+        assert netimps.is_socket_patched() is False
         assert not hasattr(socket.socket, "recvmsg")
         assert not hasattr(socket, "CMSG_SPACE")
         # Nothing native was displaced, so removal leaves the name truly absent.
@@ -359,12 +359,12 @@ def test_patch_is_idempotent_and_reversible():
 
         assert not hasattr(_os_check, "sysconf")
         # The real surface is unaffected.
-        assert netimps.supports_recvmsg() is True
+        assert netimps.has_recvmsg() is True
         assert netimps.CMSG_SPACE(8) > 0
         assert netimps.patch_socket_module(False) == [], "double-remove is a no-op"
     finally:
         netimps.patch_socket_module()
-    assert netimps.socket_patched() is True
+    assert netimps.is_socket_patched() is True
 
 
 @pytest.mark.skipif(not IS_WINDOWS, reason="the patched method only exists on Windows")
@@ -419,7 +419,7 @@ def test_the_patch_never_replaces_a_native_name():
 
 
 def test_opt_out_is_readable_from_the_environment(monkeypatch):
-    """`NETIMPS_NO_SOCKET_PATCH` is read once, at import, and these spellings.
+    """`NETIMPS_SOCKET_PATCH` is read once, at import, and these spellings.
 
     Tested on the predicate rather than by re-importing netimps: the decision
     has to be makeable before the first import, so there is no way to exercise
@@ -427,13 +427,13 @@ def test_opt_out_is_readable_from_the_environment(monkeypatch):
     """
     from netimps._msg import _patch_requested
 
-    monkeypatch.delenv("NETIMPS_NO_SOCKET_PATCH", raising=False)
+    monkeypatch.delenv("NETIMPS_SOCKET_PATCH", raising=False)
     assert _patch_requested() is True
     for value in ("1", "true", "TRUE", "yes", "on", "anything"):
-        monkeypatch.setenv("NETIMPS_NO_SOCKET_PATCH", value)
+        monkeypatch.setenv("NETIMPS_SOCKET_PATCH", value)
         assert _patch_requested() is False, "%r should disable the patch" % (value,)
     for value in ("0", "false", "no", "off", ""):
-        monkeypatch.setenv("NETIMPS_NO_SOCKET_PATCH", value)
+        monkeypatch.setenv("NETIMPS_SOCKET_PATCH", value)
         assert _patch_requested() is True, "%r should not disable the patch" % (value,)
 
 
@@ -591,12 +591,12 @@ def test_sendmsg_still_routes_ancdata_through_wsasendmsg():
     Exercised through the public wrapper that depends on it, since src pinning
     is the only thing in the package that sends ancillary data.
     """
-    from netimps import UdpEndpoint, bind
+    from netimps import UDPEndpoint, bind
 
     peer = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     peer.bind(("127.0.0.1", 0))
     peer.settimeout(5.0)
-    endpoint = UdpEndpoint(bind("0.0.0.0", 0))
+    endpoint = UDPEndpoint(bind("0.0.0.0", 0))
     try:
         if not endpoint.supports_src_pinning:
             pytest.skip("no src pinning on this platform")
@@ -638,7 +638,7 @@ def _fresh(code, env=None):
     import subprocess
 
     full_env = dict(os.environ)
-    full_env.pop("NETIMPS_NO_SOCKET_PATCH", None)
+    full_env.pop("NETIMPS_SOCKET_PATCH", None)
     # The child does not inherit sys.path, and netimps may be reachable only
     # through it (a bare checkout with PYTHONPATH=src rather than an install).
     # Without this the subprocess fails with ModuleNotFoundError and the test
@@ -701,7 +701,7 @@ def test_unknown_sysconf_names_raise_valueerror():
         pytest.skip("the shim only installs where os.sysconf is absent")
     import os as _os
 
-    assert netimps.socket_patched()
+    assert netimps.is_socket_patched()
     assert _os.sysconf("SC_IOV_MAX") > 0
     with pytest.raises(ValueError):
         _os.sysconf("SC_OPEN_MAX")
@@ -756,7 +756,7 @@ def test_sysconf_is_installed_and_removed_with_the_socket_names():
 def test_opting_out_leaves_both_modules_untouched():
     code = (
         "import netimps, os, socket\n"
-        "assert not netimps.socket_patched()\n"
+        "assert not netimps.is_socket_patched()\n"
         "assert not hasattr(socket.socket, 'recvmsg')\n"
         "assert not hasattr(os, 'sysconf')\n"
         "import asyncio\n"
@@ -764,7 +764,7 @@ def test_opting_out_leaves_both_modules_untouched():
     )
     if not IS_WINDOWS:
         pytest.skip("on POSIX both names are native, so there is nothing to opt out of")
-    rc, out, err = _fresh(code, env={"NETIMPS_NO_SOCKET_PATCH": "1"})
+    rc, out, err = _fresh(code, env={"NETIMPS_SOCKET_PATCH": "1"})
     assert rc == 0, err
     assert out == "ok"
 
@@ -887,7 +887,7 @@ def test_netimps_recvmsg_always_reports_the_platforms_own_bytes():
     """The split that makes the reshaping defensible.
 
     `netimps.recvmsg` is this package's own API and reports what the kernel
-    said; only the impersonation reshapes. `UdpEndpoint` depends on this, since
+    said; only the impersonation reshapes. `UDPEndpoint` depends on this, since
     it calls `_msg` directly and carries its own per-platform layout table.
     """
     from netimps import _udp

@@ -7,11 +7,11 @@ order is the reverse of a filesystem path -- in ``www.example.com`` the *most*
 significant label is last, not first. Every borrowed name therefore points the
 other way::
 
-    f = Fqdn("www.example.com")
+    f = FQDN("www.example.com")
     f.hostname          # 'www'               -- the LEFTmost label
-    f.domain            # Fqdn('example.com') -- strips the LEFTmost label
+    f.domain            # FQDN('example.com') -- strips the LEFTmost label
     f.tld               # 'com'
-    Fqdn("example.com") / "www"   # Fqdn('www.example.com')  -- PREPENDS
+    FQDN("example.com") / "www"   # FQDN('www.example.com')  -- PREPENDS
 
 ``PurePath`` would give you the rightmost component for ``.name`` and append on
 ``/``. If you assume pathlib semantics here you will get all of it backwards,
@@ -27,7 +27,7 @@ the resolver's search list and can resolve differently on different hosts.
 dot precisely to stop OS-level search expansion. So, exactly as
 ``Path("a") != Path("/a")``::
 
-    Fqdn("example.com") != Fqdn("example.com.")
+    FQDN("example.com") != FQDN("example.com.")
 
 They are different queries. Compare ``.labels`` if you mean "the same labels
 regardless of qualification".
@@ -36,8 +36,8 @@ Names, not addresses
 --------------------
 An address literal is **rejected**::
 
-    Fqdn("10.0.0.1")   # ValueError
-    Fqdn("::1")        # ValueError
+    FQDN("10.0.0.1")   # ValueError
+    FQDN("::1")        # ValueError
 
 :class:`netimps.Host` is the type for "an address *or* a name"; this one is a
 name algebra, and labels, a parent domain and a TLD are things an IP does not
@@ -45,15 +45,15 @@ have. ``Host.fqdn`` bridges the two.
 
 What this deliberately does not do
 ----------------------------------
-There is **no ``registrable_domain``**. ``Fqdn("example.com").domain`` is
-``Fqdn('com')`` -- a public suffix, not a registrant. Telling
+There is **no ``registrable_domain``**. ``FQDN("example.com").domain`` is
+``FQDN('com')`` -- a public suffix, not a registrant. Telling
 ``example.co.uk`` (registrable) from ``co.uk`` (not) requires the Public Suffix
 List, a sizeable data file with its own update cadence, and this package has no
 hard runtime dependencies. A heuristic that handles ``.com`` and mishandles
 ``.co.uk`` is worse than an honest gap, so the gap is documented instead.
 
 There is also no ``reverse_pointer``: that is built from an address, and this
-type has none. :meth:`Fqdn.reverse` flips *label order*, which is a different
+type has none. :meth:`FQDN.reverse` flips *label order*, which is a different
 operation with a similar name.
 """
 
@@ -66,11 +66,11 @@ from ._exceptions import NetimpsValueError
 from ._parse import is_valid
 from ._ping import ping
 
-__all__ = ["Fqdn", "FqdnLike"]
+__all__ = ["FQDN", "FQDNLike"]
 
-#: What :class:`Fqdn` accepts wherever it accepts "another name": the parsed
+#: What :class:`FQDN` accepts wherever it accepts "another name": the parsed
 #: type, a string, or an iterable of labels.
-FqdnLike = Union["Fqdn", str]
+FQDNLike = Union["FQDN", str]
 
 #: RFC 1035 2.3.4. 253 rather than 255: the wire form spends one octet on each
 #: label's length prefix and one on the root, so the printable form caps lower
@@ -103,15 +103,15 @@ def _idna_encode(label: str) -> str:
         raise NetimpsValueError("label %r is not encodable as IDNA: %s" % (label, exc))
 
 
-class Fqdn:
+class FQDN:
     """A domain name, with label algebra. Immutable, hashable and ordered.
 
     Built from a dotted string or from separate labels, **leftmost first** --
     the order they appear in the text::
 
-        Fqdn("www.example.com")
-        Fqdn("www", "example", "com")        # the same name
-        Fqdn("www", Fqdn("example.com"))     # composition works too
+        FQDN("www.example.com")
+        FQDN("www", "example", "com")        # the same name
+        FQDN("www", FQDN("example.com"))     # composition works too
 
     A trailing dot marks the name fully qualified and is preserved by
     ``str()``. See the module docstring for the pathlib inversion, the
@@ -126,28 +126,28 @@ class Fqdn:
     _labels: "Tuple[str, ...]"
     _absolute: bool
 
-    def __init__(self, *parts: "Union[FqdnLike, Iterable[str]]") -> None:
+    def __init__(self, *parts: "Union[FQDNLike, Iterable[str]]") -> None:
         labels: "List[str]" = []
         absolute = False
 
         flat: "List[Any]" = []
         for part in parts:
-            if isinstance(part, (str, Fqdn)):
+            if isinstance(part, (str, FQDN)):
                 flat.append(part)
             elif isinstance(part, Iterable):
                 flat.extend(part)
             else:
                 raise TypeError(
-                    "Fqdn parts must be str, Fqdn or an iterable of labels, not %r"
+                    "FQDN parts must be str, FQDN or an iterable of labels, not %r"
                     % (type(part).__name__,)
                 )
 
         if not flat:
-            raise NetimpsValueError("Fqdn requires at least one label")
+            raise NetimpsValueError("FQDN requires at least one label")
 
         for index, part in enumerate(flat):
             last = index == len(flat) - 1
-            if isinstance(part, Fqdn):
+            if isinstance(part, FQDN):
                 labels.extend(part._labels)
                 if last and part._absolute:
                     absolute = True
@@ -158,7 +158,7 @@ class Fqdn:
                 # check, which would report "consecutive dots" for a string
                 # that has no dots at all.
                 raise NetimpsValueError("a name cannot be empty")
-            # Only the final part may carry the root dot; `Fqdn("a.", "b")`
+            # Only the final part may carry the root dot; `FQDN("a.", "b")`
             # would otherwise silently produce a name with a hole in it.
             if text.endswith(".") and text != ".":
                 if not last:
@@ -176,7 +176,7 @@ class Fqdn:
             labels.extend(text.split(".") if "." in text else [text])
 
         if not labels:
-            raise NetimpsValueError("Fqdn requires at least one label")
+            raise NetimpsValueError("FQDN requires at least one label")
 
         # Reject an address *before* the label rules, so the error names the
         # real problem: "10.0.0.1" would otherwise pass every label check and
@@ -233,8 +233,8 @@ class Fqdn:
             return False
 
     @classmethod
-    def try_parse(cls, value: object) -> "Optional[Fqdn]":
-        """Return an :class:`Fqdn`, or ``None`` if ``value`` is not one.
+    def try_parse(cls, value: object) -> "Optional[FQDN]":
+        """Return an :class:`FQDN`, or ``None`` if ``value`` is not one.
 
         Prefer it to :meth:`is_valid` followed by construction -- one call, and
         no window in which the two disagree.
@@ -250,7 +250,7 @@ class Fqdn:
     def labels(self) -> "Tuple[str, ...]":
         """The labels, **leftmost first**, without the root.
 
-        ``Fqdn("www.example.com").labels == ("www", "example", "com")``. The
+        ``FQDN("www.example.com").labels == ("www", "example", "com")``. The
         root is carried by :meth:`is_fully_qualified` rather than as an empty
         final label, because an empty string in this tuple would be a trap for
         every caller that iterates it.
@@ -288,10 +288,10 @@ class Fqdn:
         return self._labels[-1]
 
     @property
-    def domain(self) -> "Optional[Fqdn]":
+    def domain(self) -> "Optional[FQDN]":
         """The name with its **leftmost** label removed, or ``None`` at the top.
 
-        ``Fqdn("www.example.com").domain == Fqdn("example.com")``. Absoluteness
+        ``FQDN("www.example.com").domain == FQDN("example.com")``. Absoluteness
         is preserved.
 
         ``None`` for a single-label name, rather than a self-reference: pathlib
@@ -306,18 +306,18 @@ class Fqdn:
         return self._from_labels(self._labels[1:], self._absolute)
 
     @property
-    def parent(self) -> "Optional[Fqdn]":
+    def parent(self) -> "Optional[FQDN]":
         """Alias of :attr:`domain`, for readers coming from ``pathlib``."""
         return self.domain
 
     @property
-    def domains(self) -> "Tuple[Fqdn, ...]":
+    def domains(self) -> "Tuple[FQDN, ...]":
         """Every enclosing domain, nearest first.
 
-        ``Fqdn("a.b.example.com").domains`` is
-        ``(Fqdn('b.example.com'), Fqdn('example.com'), Fqdn('com'))``.
+        ``FQDN("a.b.example.com").domains`` is
+        ``(FQDN('b.example.com'), FQDN('example.com'), FQDN('com'))``.
         """
-        out: "List[Fqdn]" = []
+        out: "List[FQDN]" = []
         current = self.domain
         while current is not None:
             out.append(current)
@@ -325,7 +325,7 @@ class Fqdn:
         return tuple(out)
 
     @property
-    def parents(self) -> "Tuple[Fqdn, ...]":
+    def parents(self) -> "Tuple[FQDN, ...]":
         """Alias of :attr:`domains`, for readers coming from ``pathlib``."""
         return self.domains
 
@@ -344,13 +344,13 @@ class Fqdn:
         """Alias of :meth:`is_fully_qualified`."""
         return self._absolute
 
-    def as_fully_qualified(self) -> "Fqdn":
+    def as_fully_qualified(self) -> "FQDN":
         """This name with the root dot, unchanged if it already has one."""
         if self._absolute:
             return self
         return self._from_labels(self._labels, True)
 
-    def relative(self) -> "Fqdn":
+    def relative(self) -> "FQDN":
         """This name without the root dot, unchanged if it has none."""
         if not self._absolute:
             return self
@@ -358,10 +358,10 @@ class Fqdn:
 
     # -- algebra -----------------------------------------------------------
 
-    def __truediv__(self, other: "Union[FqdnLike, Iterable[str]]") -> "Fqdn":
+    def __truediv__(self, other: "Union[FQDNLike, Iterable[str]]") -> "FQDN":
         """``domain / label`` **prepends** -- the right operand is more specific.
 
-        ``Fqdn("example.com") / "www"`` is ``Fqdn('www.example.com')``. The
+        ``FQDN("example.com") / "www"`` is ``FQDN('www.example.com')``. The
         opposite direction from ``PurePath.__truediv__``, because DNS puts the
         significant label last. Absoluteness comes from the left operand, which
         is the one holding the root.
@@ -371,35 +371,35 @@ class Fqdn:
         the same string.
         """
         try:
-            addition = other if isinstance(other, Fqdn) else Fqdn(other)
+            addition = other if isinstance(other, FQDN) else FQDN(other)
         except (ValueError, TypeError):
             return NotImplemented  # type: ignore[return-value]
         return self._from_labels(addition._labels + self._labels, self._absolute)
 
-    def child(self, *labels: "Union[FqdnLike, Iterable[str]]") -> "Fqdn":
+    def child(self, *labels: "Union[FQDNLike, Iterable[str]]") -> "FQDN":
         """Spelled-out form of :meth:`__truediv__`, for several labels at once."""
         result = self
         for label in labels:
             result = result / label
         return result
 
-    def with_hostname(self, hostname: str) -> "Fqdn":
+    def with_hostname(self, hostname: str) -> "FQDN":
         """Replace the leftmost label.
 
-        ``Fqdn("www.example.com").with_hostname("mail")`` is
-        ``Fqdn('mail.example.com')``. For a single-label name this replaces the
+        ``FQDN("www.example.com").with_hostname("mail")`` is
+        ``FQDN('mail.example.com')``. For a single-label name this replaces the
         whole name.
         """
-        replacement = Fqdn(hostname)
+        replacement = FQDN(hostname)
         if len(replacement._labels) != 1:
             raise ValueError("with_hostname takes one label, got %r" % (hostname,))
         return self._from_labels(replacement._labels + self._labels[1:], self._absolute)
 
-    def with_name(self, name: str) -> "Fqdn":
+    def with_name(self, name: str) -> "FQDN":
         """Alias of :meth:`with_hostname`, for readers coming from ``pathlib``."""
         return self.with_hostname(name)
 
-    def is_subdomain_of(self, other: "FqdnLike") -> bool:
+    def is_subdomain_of(self, other: "FQDNLike") -> bool:
         """Whether this name sits under ``other``.
 
         A name is **not** a subdomain of itself, matching the ordinary reading
@@ -408,27 +408,27 @@ class Fqdn:
         Qualification is ignored, since ``example.com`` and ``example.com.``
         describe the same place in the tree.
         """
-        suffix = other if isinstance(other, Fqdn) else Fqdn(other)
+        suffix = other if isinstance(other, FQDN) else FQDN(other)
         if len(self._labels) <= len(suffix._labels):
             return False
         return self._labels[-len(suffix._labels) :] == suffix._labels
 
-    def relative_to(self, other: "FqdnLike") -> "Fqdn":
+    def relative_to(self, other: "FQDNLike") -> "FQDN":
         """The labels of this name that are not part of ``other``.
 
-        ``Fqdn("www.example.com").relative_to("example.com")`` is
-        ``Fqdn('www')``, always relative (never fully qualified -- a fragment
+        ``FQDN("www.example.com").relative_to("example.com")`` is
+        ``FQDN('www')``, always relative (never fully qualified -- a fragment
         of a name has no root).
 
         :raises ValueError: if this name is not under ``other``, mirroring
             ``PurePath.relative_to``.
         """
-        suffix = other if isinstance(other, Fqdn) else Fqdn(other)
+        suffix = other if isinstance(other, FQDN) else FQDN(other)
         if not self.is_subdomain_of(suffix):
             raise ValueError("%s is not under %s" % (self, suffix))
         return self._from_labels(self._labels[: -len(suffix._labels)], False)
 
-    def reverse(self) -> "Fqdn":
+    def reverse(self) -> "FQDN":
         """The same labels in reverse order -- ``com.example.www``.
 
         A mechanical flip, for display and for building keys. **The result is
@@ -475,8 +475,8 @@ class Fqdn:
         and what comparisons must use. This is the other direction, for showing
         a name to a person::
 
-            Fqdn("münchen.de").unicode     # 'münchen.de'
-            str(Fqdn("münchen.de"))        # 'xn--mnchen-3ya.de'
+            FQDN("münchen.de").unicode     # 'münchen.de'
+            str(FQDN("münchen.de"))        # 'xn--mnchen-3ya.de'
 
         A label that is not valid punycode is passed through unchanged rather
         than raising -- ``xn--`` on its own is undecodable, and a display helper
@@ -520,8 +520,8 @@ class Fqdn:
         so the constructor takes the broad DNS rule and this reports the narrow
         one::
 
-            Fqdn("_dmarc.example.com").is_hostname()   # False -- but valid DNS
-            Fqdn("www.example.com").is_hostname()      # True
+            FQDN("_dmarc.example.com").is_hostname()   # False -- but valid DNS
+            FQDN("www.example.com").is_hostname()      # True
         """
         for label in self._labels:
             if not label or label[0] == "-" or label[-1] == "-":
@@ -532,18 +532,18 @@ class Fqdn:
                 return False
         return True
 
-    def common_ancestor(self, other: "FqdnLike") -> "Optional[Fqdn]":
+    def common_ancestor(self, other: "FQDNLike") -> "Optional[FQDN]":
         """The deepest domain enclosing both names, or ``None`` if unrelated.
 
-        ``Fqdn("a.example.com").common_ancestor("b.example.com")`` is
-        ``Fqdn('example.com')``. Compared from the right, since that is the end
+        ``FQDN("a.example.com").common_ancestor("b.example.com")`` is
+        ``FQDN('example.com')``. Compared from the right, since that is the end
         names share. Qualification follows this name's.
 
         ``None`` rather than an empty name when the two share no label at all:
         there is no such thing as a zero-label name, and the root is not a
         useful answer.
         """
-        suffix = other if isinstance(other, Fqdn) else Fqdn(other)
+        suffix = other if isinstance(other, FQDN) else FQDN(other)
         mine, theirs = self._key(), suffix._key()
         shared = 0
         for a, b in zip(reversed(mine), reversed(theirs)):
@@ -562,7 +562,7 @@ class Fqdn:
     def wire(self) -> bytes:
         """The DNS wire encoding: each label length-prefixed, root terminated.
 
-        ``Fqdn("www.example.com").wire`` is
+        ``FQDN("www.example.com").wire`` is
         ``b'\\x03www\\x07example\\x03com\\x00'``. Delegates to the package's own
         encoder, so it cannot drift from what :func:`netimps.resolve_wire`
         actually sends.
@@ -588,15 +588,15 @@ class Fqdn:
     # -- plumbing ----------------------------------------------------------
 
     @classmethod
-    def _from_labels(cls, labels: "Tuple[str, ...]", absolute: bool) -> "Fqdn":
+    def _from_labels(cls, labels: "Tuple[str, ...]", absolute: bool) -> "FQDN":
         """Build without re-validating: the labels came from a valid name.
 
         Bypasses ``__init__`` deliberately. Every caller is slicing or
         reordering labels that already passed the length, IDNA and
         not-an-address checks, so re-running them would be wasted work -- and
         the address check in particular would *reject* a legitimate derived
-        name: ``Fqdn("1.2.3.4.example.com").domain`` walks down to
-        ``Fqdn('4.example.com')`` and then ``Fqdn('example.com')``, but a
+        name: ``FQDN("1.2.3.4.example.com").domain`` walks down to
+        ``FQDN('4.example.com')`` and then ``FQDN('example.com')``, but a
         reversed name can pass through a form that parses as an address.
         """
         if not labels:
@@ -613,23 +613,23 @@ class Fqdn:
         restore, which assigns the state back onto a blank instance. Rebuilding
         from the labels is also *safer* than rebuilding from ``str(self)``: the
         constructor's not-an-address check would reject a legitimate derived
-        name such as ``Fqdn("1.2.3.4.sub").reverse()``, so the same
+        name such as ``FQDN("1.2.3.4.sub").reverse()``, so the same
         validation-free path the algebra uses is the right one here.
         """
         return (_rebuild_fqdn, (self._labels, self._absolute))
 
     def __setattr__(self, name: str, value: object) -> None:
-        raise AttributeError("Fqdn is immutable")
+        raise AttributeError("FQDN is immutable")
 
     def __delattr__(self, name: str) -> None:
-        raise AttributeError("Fqdn is immutable")
+        raise AttributeError("FQDN is immutable")
 
     def __str__(self) -> str:
         text = ".".join(self._labels)
         return text + "." if self._absolute else text
 
     def __repr__(self) -> str:
-        return "Fqdn(%r)" % (str(self),)
+        return "FQDN(%r)" % (str(self),)
 
     def __add__(self, other: object) -> str:
         """``fqdn + str`` is a **plain string**, concatenated as text.
@@ -637,20 +637,20 @@ class Fqdn:
         For building a URL, a log line or a config value without reaching for
         ``str()`` first::
 
-            Fqdn("example.com") + "/health"      # 'example.com/health'
-            "https://" + Fqdn("example.com")     # 'https://example.com'
+            FQDN("example.com") + "/health"      # 'example.com/health'
+            "https://" + FQDN("example.com")     # 'https://example.com'
 
         A fully qualified name contributes its trailing dot, since that is what
         ``str()`` gives and ``+`` is defined as text concatenation.
 
-        **Only a ``str`` is accepted.** ``Fqdn + Fqdn`` raises, pointing at
+        **Only a ``str`` is accepted.** ``FQDN + FQDN`` raises, pointing at
         ``/``: concatenating two names as text yields
         ``'www.example.comexample.com'``, which is never what anyone meant, and
         composing them is what ``/`` is for.
         """
-        if isinstance(other, Fqdn):
+        if isinstance(other, FQDN):
             raise TypeError(
-                "cannot add two Fqdn values as text -- use `/` to compose names "
+                "cannot add two FQDN values as text -- use `/` to compose names "
                 "(%r / %r), or str() on each if you really want concatenation"
                 % (str(self), str(other))
             )
@@ -667,7 +667,7 @@ class Fqdn:
     def __len__(self) -> int:
         """The number of labels, not the number of characters.
 
-        ``len(Fqdn("www.example.com")) == 3``. Use ``len(str(f))`` for octets.
+        ``len(FQDN("www.example.com")) == 3``. Use ``len(str(f))`` for octets.
         """
         return len(self._labels)
 
@@ -679,10 +679,10 @@ class Fqdn:
 
         The DNS reading of the stdlib's ``address in network``::
 
-            Fqdn("www.example.com") in Fqdn("example.com")   # True
-            "mail.example.com" in Fqdn("example.com")         # True
-            Fqdn("example.com") in Fqdn("example.com")        # True -- "at or under"
-            Fqdn("example.org") in Fqdn("example.com")        # False
+            FQDN("www.example.com") in FQDN("example.com")   # True
+            "mail.example.com" in FQDN("example.com")         # True
+            FQDN("example.com") in FQDN("example.com")        # True -- "at or under"
+            FQDN("example.org") in FQDN("example.com")        # False
 
         **Inclusive**, unlike :meth:`is_subdomain_of`, which excludes the name
         itself. The pair mirrors ``<=`` against ``<``: a zone contains its own
@@ -691,21 +691,21 @@ class Fqdn:
         *strictly* below.
 
         This is deliberately **not** a label test. An earlier version made
-        ``"com" in Fqdn("www.example.com")`` true, which reads plausibly and
+        ``"com" in FQDN("www.example.com")`` true, which reads plausibly and
         conflicts head-on with the containment meaning -- the same expression
         cannot answer both. Containment won because it is the stdlib idiom this
         package is a thin layer over, and because a label test is already
         spelled ``"com" in f.labels``.
 
-        Accepts an :class:`Fqdn` or a ``str``, ignores qualification (the
+        Accepts an :class:`FQDN` or a ``str``, ignores qualification (the
         trailing dot does not change where a name sits in the tree), and answers
         ``False`` rather than raising for anything unparseable -- which keeps it
         usable as a filter predicate.
         """
-        if isinstance(other, Fqdn):
-            candidate: "Optional[Fqdn]" = other
+        if isinstance(other, FQDN):
+            candidate: "Optional[FQDN]" = other
         elif isinstance(other, str):
-            candidate = Fqdn.try_parse(other)
+            candidate = FQDN.try_parse(other)
         else:
             return False
         if candidate is None:
@@ -717,7 +717,7 @@ class Fqdn:
     def __getitem__(self, index: "Any") -> "Any":
         """Index or slice the labels, leftmost first.
 
-        A slice returns a plain tuple of labels rather than an ``Fqdn``,
+        A slice returns a plain tuple of labels rather than an ``FQDN``,
         because an arbitrary slice of a name is usually not a name.
         """
         return self._labels[index]
@@ -729,8 +729,8 @@ class Fqdn:
     def __eq__(self, other: object) -> bool:
         """Case-insensitive, and **qualification-sensitive**.
 
-        ``Fqdn("EXAMPLE.com") == Fqdn("example.COM")`` is true (RFC 4343), but
-        ``Fqdn("example.com") != Fqdn("example.com.")`` -- the trailing dot is
+        ``FQDN("EXAMPLE.com") == FQDN("example.COM")`` is true (RFC 4343), but
+        ``FQDN("example.com") != FQDN("example.com.")`` -- the trailing dot is
         the absoluteness marker, and the two are genuinely different queries.
         Compare ``.labels`` if qualification is not what you mean.
 
@@ -738,7 +738,7 @@ class Fqdn:
         :class:`MACAddress` does not: it would make ``==`` disagree with
         ``hash`` across types. Use :meth:`try_parse` to compare against text.
         """
-        if isinstance(other, Fqdn):
+        if isinstance(other, FQDN):
             return self._key() == other._key() and self._absolute == other._absolute
         return NotImplemented
 
@@ -753,26 +753,26 @@ class Fqdn:
         wants. It is *not* the same as sorting ``str(f)``: that would put
         ``a.org`` before ``b.com``.
         """
-        if not isinstance(other, Fqdn):
+        if not isinstance(other, FQDN):
             return NotImplemented
         return tuple(reversed(self._key())) < tuple(reversed(other._key()))
 
     def __le__(self, other: object) -> bool:
-        if not isinstance(other, Fqdn):
+        if not isinstance(other, FQDN):
             return NotImplemented
         return self == other or self < other
 
     def __gt__(self, other: object) -> bool:
-        if not isinstance(other, Fqdn):
+        if not isinstance(other, FQDN):
             return NotImplemented
         return not self <= other
 
     def __ge__(self, other: object) -> bool:
-        if not isinstance(other, Fqdn):
+        if not isinstance(other, FQDN):
             return NotImplemented
         return not self < other
 
 
-def _rebuild_fqdn(labels: "Tuple[str, ...]", absolute: bool) -> "Fqdn":
-    """Unpickle an :class:`Fqdn`. Module-level so pickle can find it by name."""
-    return Fqdn._from_labels(labels, absolute)
+def _rebuild_fqdn(labels: "Tuple[str, ...]", absolute: bool) -> "FQDN":
+    """Unpickle an :class:`FQDN`. Module-level so pickle can find it by name."""
+    return FQDN._from_labels(labels, absolute)

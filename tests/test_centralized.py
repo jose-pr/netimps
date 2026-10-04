@@ -1,6 +1,6 @@
 """Tests for the helpers centralized from the sibling repos.
 
-bind / bind_error_hint / interface_for / UdpEndpoint / Host / retry, plus the
+bind / bind_error_hint / get_interface / UDPEndpoint / Host / retry, plus the
 shared interface-spec resolution they all lean on. Loopback only.
 """
 
@@ -17,12 +17,12 @@ from netimps import (
     Host,
     Interface,
     MACAddress,
-    UdpEndpoint,
+    UDPEndpoint,
     Backoff,
     backoff_delays,
     bind,
-    interface_for,
-    interfaces_for,
+    get_interface,
+    iter_interfaces,
     is_local_address,
     retry,
 )
@@ -229,7 +229,7 @@ def test_hint_without_a_port():
 
 
 # --------------------------------------------------------------------------- #
-# interface_for                                                                #
+# get_interface                                                                #
 # --------------------------------------------------------------------------- #
 
 
@@ -280,83 +280,85 @@ def test_interfaces_for_interface_does_not_enumerate(monkeypatch):
         raise AssertionError("Interface lookup must not enumerate")
 
     monkeypatch.setattr(netimps._ifaddrs, "get_interfaces", fail_enumeration)
-    assert list(interfaces_for(iface)) == [iface]
-    assert interface_for(iface) is iface
+    assert list(iter_interfaces(iface)) == [iface]
+    assert get_interface(iface) is iface
 
 
 def test_interfaces_for_exact_address_and_duplicate_order(monkeypatch):
     interfaces, calls = _mock_lookup_interfaces(monkeypatch)
     first, _, duplicate = interfaces
 
-    assert list(interfaces_for("10.0.0.1")) == [first, duplicate]
+    assert list(iter_interfaces("10.0.0.1")) == [first, duplicate]
     assert calls == [True]
     calls.clear()
-    assert interface_for(ipaddress.ip_address("10.0.0.1")) is first
+    assert get_interface(ipaddress.ip_address("10.0.0.1")) is first
     assert calls == [True]
 
 
 def test_interfaces_for_ip_interface_matches_exact_ip_not_subnet(monkeypatch):
     interfaces, _ = _mock_lookup_interfaces(monkeypatch)
-    assert list(interfaces_for(ipaddress.ip_interface("10.0.0.2/8"))) == [interfaces[1]]
-    assert list(interfaces_for(ipaddress.ip_interface("10.0.0.99/24"))) == []
+    assert list(iter_interfaces(ipaddress.ip_interface("10.0.0.2/8"))) == [
+        interfaces[1]
+    ]
+    assert list(iter_interfaces(ipaddress.ip_interface("10.0.0.99/24"))) == []
 
 
 def test_interfaces_for_ipv4_network_deduplicates_and_preserves_order(monkeypatch):
     interfaces, calls = _mock_lookup_interfaces(monkeypatch)
-    assert list(interfaces_for(ipaddress.ip_network("10.0.0.0/24"))) == interfaces
+    assert list(iter_interfaces(ipaddress.ip_network("10.0.0.0/24"))) == interfaces
     assert calls == [True]
 
     calls.clear()
-    assert list(interfaces_for("10.0.0.0/24")) == interfaces
+    assert list(iter_interfaces("10.0.0.0/24")) == interfaces
     assert calls == [True]
 
 
 def test_interfaces_for_ipv6_networks(monkeypatch):
     interfaces, _ = _mock_lookup_interfaces(monkeypatch)
-    assert list(interfaces_for(ipaddress.ip_network("2001:db8:1::/64"))) == [
+    assert list(iter_interfaces(ipaddress.ip_network("2001:db8:1::/64"))) == [
         interfaces[0]
     ]
-    assert list(interfaces_for("2001:db8::/32")) == interfaces[:2]
+    assert list(iter_interfaces("2001:db8::/32")) == interfaces[:2]
 
 
 def test_interfaces_for_mac_forms_and_duplicates(monkeypatch):
     interfaces, _ = _mock_lookup_interfaces(monkeypatch)
     shared = MACAddress("02:00:00:00:00:01")
-    assert list(interfaces_for(shared)) == interfaces[:2]
-    assert list(interfaces_for(str(shared))) == interfaces[:2]
-    assert list(interfaces_for(shared.packed)) == interfaces[:2]
+    assert list(iter_interfaces(shared)) == interfaces[:2]
+    assert list(iter_interfaces(str(shared))) == interfaces[:2]
+    assert list(iter_interfaces(shared.packed)) == interfaces[:2]
 
 
 def test_interfaces_for_integer_remains_an_ip_query(monkeypatch):
     _, calls = _mock_lookup_interfaces(monkeypatch)
     shared = MACAddress("02:00:00:00:00:01")
-    assert list(interfaces_for(int(shared))) == []
+    assert list(iter_interfaces(int(shared))) == []
     assert calls == [True]
 
 
 def test_interfaces_for_invalid_and_no_match(monkeypatch):
     _, calls = _mock_lookup_interfaces(monkeypatch)
-    assert list(interfaces_for("not-an-address")) == []
-    assert list(interfaces_for(None)) == []
-    assert list(interfaces_for(ipaddress.ip_network("192.0.2.0/24"))) == []
+    assert list(iter_interfaces("not-an-address")) == []
+    assert list(iter_interfaces(None)) == []
+    assert list(iter_interfaces(ipaddress.ip_network("192.0.2.0/24"))) == []
     assert calls == [True]
 
 
 def test_interface_for_unknown_is_none_when_strict(monkeypatch):
     _mock_lookup_interfaces(monkeypatch)
-    assert interface_for("192.0.2.99") is None
+    assert get_interface("192.0.2.99") is None
 
 
 def test_interface_for_unknown_synthesizes_address_and_interface(monkeypatch):
     _mock_lookup_interfaces(monkeypatch)
-    iface = interface_for("192.0.2.99", strict=False)
+    iface = get_interface("192.0.2.99", strict=False)
     assert iface is not None
     assert iface.name == "<unknown>"
     # A host route, matching how degraded enumeration reports itself.
     assert iface.ips[0].network.prefixlen == iface.ips[0].max_prefixlen
     assert iface.ips[0].ip == ipaddress.ip_address("192.0.2.99")
 
-    from_interface = interface_for(
+    from_interface = get_interface(
         ipaddress.ip_interface("192.0.2.100/24"), strict=False
     )
     assert from_interface is not None
@@ -365,14 +367,14 @@ def test_interface_for_unknown_synthesizes_address_and_interface(monkeypatch):
 
 def test_interface_for_does_not_synthesize_network_or_mac(monkeypatch):
     _mock_lookup_interfaces(monkeypatch)
-    assert interface_for(ipaddress.ip_network("192.0.2.0/24"), strict=False) is None
-    assert interface_for(MACAddress("02:00:00:00:00:99"), strict=False) is None
+    assert get_interface(ipaddress.ip_network("192.0.2.0/24"), strict=False) is None
+    assert get_interface(MACAddress("02:00:00:00:00:99"), strict=False) is None
 
 
 def test_interface_for_garbage_is_none(monkeypatch):
     _mock_lookup_interfaces(monkeypatch)
-    assert interface_for("not-an-address") is None
-    assert interface_for(None) is None
+    assert get_interface("not-an-address") is None
+    assert get_interface(None) is None
 
 
 # --------------------------------------------------------------------------- #
@@ -437,7 +439,7 @@ def test_interface_spec_rejects_an_address_no_interface_holds():
     """
     with pytest.raises(ValueError, match="no local interface holds address"):
         _iface_spec.interface_address("10.0.0.5", strict=True)
-    # strict=False still passes it through: ping(src=) and UdpEndpoint.send()
+    # strict=False still passes it through: ping(src=) and UDPEndpoint.send()
     # both rely on that, and the OS gives the real error when the bind fails.
     assert _iface_spec.interface_address("10.0.0.5", strict=False) == netimps.parse(
         "10.0.0.5"
@@ -470,7 +472,7 @@ def test_interface_spec_resolves_interface_object():
 
 
 # --------------------------------------------------------------------------- #
-# UdpEndpoint                                                                  #
+# UDPEndpoint                                                                  #
 # --------------------------------------------------------------------------- #
 
 
@@ -490,7 +492,7 @@ def _loopback_endpoint(family, host):
         sock = bind(host, 0, family=family)
     except OSError as exc:  # no IPv6 stack, or no ::1 configured
         pytest.skip("cannot bind %s: %s" % (host, exc))
-    endpoint = UdpEndpoint(sock)
+    endpoint = UDPEndpoint(sock)
     endpoint.socket.settimeout(5.0)
     return endpoint
 
@@ -499,7 +501,7 @@ def _loopback_endpoint(family, host):
 def test_udp_endpoint_round_trip(family, host):
     """The flag and the data must agree, for both address families.
 
-    ``supports_pktinfo`` is the single thing the docs tell a caller to check,
+    ``has_pktinfo`` is the single thing the docs tell a caller to check,
     so a ``True`` that is followed by an empty ``interface_index`` is worse
     than an honest ``False``. Asserting only ``data``/``sender`` -- which this
     test used to do -- leaves the whole pktinfo path free to be dead.
@@ -521,9 +523,9 @@ def test_udp_endpoint_round_trip(family, host):
     # where the kernel exports this family's option, it has to be used.
     receive_option = _udp._pktinfo_options(family)[1]
     if receive_option is not None and hasattr(socket.socket, "recvmsg"):
-        assert endpoint.supports_pktinfo
+        assert endpoint.has_pktinfo
 
-    if not endpoint.supports_pktinfo:
+    if not endpoint.has_pktinfo:
         assert packet.interface_index == 0 and packet.interface is None
         return
     assert packet.interface_index != 0
@@ -539,8 +541,8 @@ def test_udp_endpoint_reports_truncated_control_data():
     discarded", not "the kernel had nothing to say" -- and nothing else
     distinguishes the two.
     """
-    with UdpEndpoint(bind("127.0.0.1", 0)) as endpoint:
-        if not endpoint.supports_pktinfo:
+    with UDPEndpoint(bind("127.0.0.1", 0)) as endpoint:
+        if not endpoint.has_pktinfo:
             pytest.skip("no IP_PKTINFO on this platform")
         # Smaller than any cmsg header, so the kernel truncates our own.
         endpoint._cmsg_size = 1
@@ -566,8 +568,8 @@ def test_udp_endpoint_ancillary_buffer_holds_more_than_one_cmsg():
     ``MSG_CTRUNC``. The caller owns the raw socket, so a second enabled
     option is ordinary rather than exotic.
     """
-    with UdpEndpoint(bind("127.0.0.1", 0)) as endpoint:
-        if not endpoint.supports_pktinfo:
+    with UDPEndpoint(bind("127.0.0.1", 0)) as endpoint:
+        if not endpoint.has_pktinfo:
             pytest.skip("no IP_PKTINFO on this platform")
         one = socket.CMSG_SPACE(struct.calcsize(_udp._PKTINFO_V4))
         assert endpoint._cmsg_size >= one * 2
@@ -598,7 +600,7 @@ def test_udp_endpoint_send_rejects_a_source_of_the_wrong_family():
     Measured: ``sendmsg`` returns the byte count, and the pin does nothing.
     So the mismatch has to be caught here -- the kernel will not report it.
     """
-    with UdpEndpoint(bind("127.0.0.1", 0)) as sender:
+    with UDPEndpoint(bind("127.0.0.1", 0)) as sender:
         if not sender.supports_src_pinning:
             pytest.skip("no IPv4 source pinning on this platform")
         with pytest.raises(ValueError, match="IPv6 source"):
@@ -611,7 +613,7 @@ def test_udp_endpoint_send_rejects_an_unresolvable_source():
     Sending from whatever the routing table picks is exactly the silent
     wrong answer ``src`` exists to prevent.
     """
-    with UdpEndpoint(bind("127.0.0.1", 0)) as sender:
+    with UDPEndpoint(bind("127.0.0.1", 0)) as sender:
         if not sender.supports_src_pinning:
             pytest.skip("no IPv4 source pinning on this platform")
         with pytest.raises(ValueError, match="cannot resolve src"):
@@ -621,8 +623,8 @@ def test_udp_endpoint_send_rejects_an_unresolvable_source():
 def test_udp_endpoint_degrades_without_pktinfo(monkeypatch):
     """No IP_PKTINFO must mean empty interface fields, not a failure."""
     monkeypatch.setattr(_udp, "_IP_PKTINFO", None)
-    with UdpEndpoint(bind("127.0.0.1", 0)) as endpoint:
-        assert endpoint.supports_pktinfo is False
+    with UDPEndpoint(bind("127.0.0.1", 0)) as endpoint:
+        assert endpoint.has_pktinfo is False
         # Same constant serves both directions for IPv4, so neither is claimed.
         assert endpoint.supports_src_pinning is False
         endpoint.socket.settimeout(5.0)
@@ -639,19 +641,19 @@ def test_udp_endpoint_degrades_without_pktinfo(monkeypatch):
 
 
 def test_udp_endpoint_send_falls_back_without_source():
-    with UdpEndpoint(bind("127.0.0.1", 0)) as receiver:
+    with UDPEndpoint(bind("127.0.0.1", 0)) as receiver:
         receiver.socket.settimeout(5.0)
         port = receiver.socket.getsockname()[1]
-        with UdpEndpoint(bind("127.0.0.1", 0)) as sender:
+        with UDPEndpoint(bind("127.0.0.1", 0)) as sender:
             assert sender.send(b"hi", "127.0.0.1", port) == 2
         assert receiver.recv(64).data == b"hi"
 
 
 def test_udp_endpoint_repr_and_close():
-    endpoint = UdpEndpoint(bind("127.0.0.1", 0))
+    endpoint = UDPEndpoint(bind("127.0.0.1", 0))
     # Both capability flags belong in the repr: they are what a bug report
     # about "interface is always None" needs to carry.
-    assert "UdpEndpoint(" in repr(endpoint)
+    assert "UDPEndpoint(" in repr(endpoint)
     assert "pktinfo=" in repr(endpoint) and "src_pinning=" in repr(endpoint)
     endpoint.close()
 
@@ -665,12 +667,12 @@ def test_udp_endpoint_claims_pktinfo_whenever_the_platform_delivers_it(family, h
     `_udp._pktinfo_options(family)[1]` -- the function under test -- so when that
     returned None for IPv6 on Windows, the guard switched itself off and the
     round trip passed through its own degraded branch. Measured on a CI runner:
-    `UdpEndpoint(bind("::", 0)).supports_pktinfo` was False while a raw
+    `UDPEndpoint(bind("::", 0)).has_pktinfo` was False while a raw
     `recvmsg` on the very same socket delivered the cmsg.
 
     So: establish the ground truth by hand first, then hold the endpoint to it.
     """
-    if not netimps.supports_recvmsg():
+    if not netimps.has_recvmsg():
         pytest.skip("no recvmsg on this platform at all")
 
     # Ground truth: set every pktinfo option this platform exports for the
@@ -724,9 +726,9 @@ def test_udp_endpoint_claims_pktinfo_whenever_the_platform_delivers_it(family, h
         pytest.skip("platform delivers no pktinfo cmsg for family %s" % (family,))
 
     with _loopback_endpoint(family, host) as endpoint:
-        assert endpoint.supports_pktinfo, (
-            "a raw recvmsg got a pktinfo cmsg for family %s, so UdpEndpoint "
-            "must not report supports_pktinfo=False" % (family,)
+        assert endpoint.has_pktinfo, (
+            "a raw recvmsg got a pktinfo cmsg for family %s, so UDPEndpoint "
+            "must not report has_pktinfo=False" % (family,)
         )
 
 
@@ -749,8 +751,8 @@ def test_udp_endpoint_dual_stack_reports_a_v4_arrival_as_v4_mapped():
     except OSError as exc:
         sock.close()
         pytest.skip("no dual-stack :: socket here -- %s" % (exc,))
-    with UdpEndpoint(sock) as endpoint:
-        if not endpoint.supports_pktinfo:
+    with UDPEndpoint(sock) as endpoint:
+        if not endpoint.has_pktinfo:
             pytest.skip("no pktinfo on this platform")
         endpoint.socket.settimeout(5.0)
         port = endpoint.socket.getsockname()[1]
@@ -783,7 +785,7 @@ def test_udp_endpoint_reports_a_virtual_ip_as_the_arrival_address():
     127.0.0.1 and rejects it, which the skip records rather than hides.
     """
     with _loopback_endpoint(socket.AF_INET, "0.0.0.0") as endpoint:
-        if not endpoint.supports_pktinfo:
+        if not endpoint.has_pktinfo:
             pytest.skip("no pktinfo on this platform")
         port = endpoint.socket.getsockname()[1]
         sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

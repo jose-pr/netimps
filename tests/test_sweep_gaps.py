@@ -13,15 +13,15 @@ import pytest
 
 import netimps
 from netimps import (
-    Fqdn,
+    FQDN,
     MACAddress,
     SocketOption,
-    UdpEndpoint,
+    UDPEndpoint,
     bind,
     disable_connreset,
     is_wildcard,
     join_host,
-    normalize_host,
+    split_host,
     set_buffer_size,
     unmap,
 )
@@ -42,7 +42,7 @@ def test_a_short_bufsize_reports_truncation_rather_than_losing_it_silently():
     decoder was handed a message whose option stream stops mid-option. The
     flag was always there in ``msg_flags``; it was simply dropped.
     """
-    with UdpEndpoint(bind("127.0.0.1", 0)) as endpoint:
+    with UDPEndpoint(bind("127.0.0.1", 0)) as endpoint:
         endpoint.socket.settimeout(5.0)
         port = endpoint.socket.getsockname()[1]
         sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -58,7 +58,7 @@ def test_a_short_bufsize_reports_truncation_rather_than_losing_it_silently():
 
 
 def test_a_datagram_that_fits_is_not_marked_truncated():
-    with UdpEndpoint(bind("127.0.0.1", 0)) as endpoint:
+    with UDPEndpoint(bind("127.0.0.1", 0)) as endpoint:
         endpoint.socket.settimeout(5.0)
         port = endpoint.socket.getsockname()[1]
         sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -79,8 +79,8 @@ def test_a_truncation_is_reported_even_without_pktinfo():
     report ``MSG_TRUNC`` and silent data loss is worse than a missing
     interface.
     """
-    with UdpEndpoint(bind("127.0.0.1", 0), pktinfo=False) as endpoint:
-        assert not endpoint.supports_pktinfo
+    with UDPEndpoint(bind("127.0.0.1", 0), pktinfo=False) as endpoint:
+        assert not endpoint.has_pktinfo
         endpoint.socket.settimeout(5.0)
         port = endpoint.socket.getsockname()[1]
         sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -90,7 +90,7 @@ def test_a_truncation_is_reported_even_without_pktinfo():
         finally:
             sender.close()
         assert len(packet.data) == 300
-        if not netimps.supports_recvmsg():  # pragma: no cover - no such platform now
+        if not netimps.has_recvmsg():  # pragma: no cover - no such platform now
             pytest.skip("no recvmsg here, so recvfrom cannot report truncation")
         assert packet.truncated is True
         # Still no interface information -- that part is the documented degrade.
@@ -98,7 +98,7 @@ def test_a_truncation_is_reported_even_without_pktinfo():
 
 
 # --------------------------------------------------------------------------- #
-# C -- join_host, the inverse of normalize_host                                #
+# C -- join_host, the inverse of split_host                                #
 # --------------------------------------------------------------------------- #
 
 
@@ -138,15 +138,15 @@ def test_join_host_round_trips_through_normalize_host(host, port):
     """The law that makes the pair trustworthy, in both directions.
 
     This is why a port-less IPv6 comes back *unbracketed*: with no port there
-    is nothing to disambiguate, and `normalize_host` returns the bare form.
+    is nothing to disambiguate, and `split_host` returns the bare form.
     """
-    assert normalize_host(join_host(host, port)) == (host, port)
+    assert split_host(join_host(host, port)) == (host, port)
 
 
 def test_join_host_accepts_the_types_a_caller_already_has():
     assert join_host(ipaddress.IPv4Address("1.2.3.4"), 53) == "1.2.3.4:53"
     assert join_host(ipaddress.IPv6Address("2001:db8::1"), 53) == "[2001:db8::1]:53"
-    assert join_host(Fqdn("www.example.com"), 443) == "www.example.com:443"
+    assert join_host(FQDN("www.example.com"), 443) == "www.example.com:443"
     # An interface carries a prefix; a socket address wants only the address.
     assert join_host(ipaddress.IPv4Interface("10.0.0.5/24"), 69) == "10.0.0.5:69"
     assert (
@@ -161,7 +161,7 @@ def test_join_host_never_brackets_a_name():
     many colons someone has managed to put in it.
     """
     assert join_host("example.com", 80) == "example.com:80"
-    assert "[" not in join_host(Fqdn("a.b.c.example.com"), 80)
+    assert "[" not in join_host(FQDN("a.b.c.example.com"), 80)
 
 
 @pytest.mark.parametrize(
@@ -180,7 +180,7 @@ def test_join_host_rejects_bad_input(host, port, match):
 
     `"[::1"` is not an IPv6 literal, so without the check it would emerge
     unbracketed as `"[::1:80"` -- garbage the caller cannot detect.
-    `normalize_host` rejects the same input, and the pair has to agree.
+    `split_host` rejects the same input, and the pair has to agree.
     """
     with pytest.raises(ValueError, match=match):
         join_host(host, port)
@@ -241,7 +241,7 @@ def test_unmap_accepts_parsed_addresses_and_rejects_non_addresses():
 
 
 def test_unmap_is_the_inverse_of_the_dual_stack_mapping():
-    """`UdpEndpoint` maps a v4 arrival up; this maps it back down."""
+    """`UDPEndpoint` maps a v4 arrival up; this maps it back down."""
     assert str(unmap("::ffff:127.0.0.1")) == "127.0.0.1"
 
 
@@ -455,7 +455,7 @@ def test_the_new_names_are_all_exported():
 
 
 # --------------------------------------------------------------------------- #
-# bind() and normalize_host() take the package's usual loose union             #
+# bind() and split_host() take the package's usual loose union             #
 # --------------------------------------------------------------------------- #
 
 
@@ -466,7 +466,7 @@ def test_the_new_names_are_all_exported():
         ("IPv4Address", ipaddress.IPv4Address("127.0.0.1"), "127.0.0.1"),
         ("IPv4Interface", ipaddress.IPv4Interface("127.0.0.1/8"), "127.0.0.1"),
         ("Host", None, "127.0.0.1"),
-        ("Fqdn", None, "127.0.0.1"),
+        ("FQDN", None, "127.0.0.1"),
     ],
 )
 def test_bind_accepts_more_than_a_string(label, value, expected):
@@ -474,13 +474,13 @@ def test_bind_accepts_more_than_a_string(label, value, expected):
     entry point in the package takes.
 
     "str, bytes or bytearray expected, not IPv4Address" -- not even a netimps
-    error, for an address object. `ping`, `resolve` and `UdpEndpoint.send` all
+    error, for an address object. `ping`, `resolve` and `UDPEndpoint.send` all
     coerce through the same helper; this one entry point simply never did.
     """
     if label == "Host":
         value = netimps.Host("127.0.0.1")
-    elif label == "Fqdn":
-        value = netimps.Fqdn("localhost")
+    elif label == "FQDN":
+        value = netimps.FQDN("localhost")
     sock = bind(value, 0)
     try:
         assert sock.getsockname()[0] == expected
@@ -514,13 +514,13 @@ def test_bind_refuses_a_network():
 def test_normalize_host_accepts_more_than_a_string(label, value, expected):
     """`join_host`, its inverse, already did -- this rejected the values a caller
     holding "the host" most often has."""
-    assert netimps.normalize_host(value) == expected
+    assert netimps.split_host(value) == expected
 
 
 def test_normalize_host_accepts_host_and_fqdn():
-    assert netimps.normalize_host(netimps.Host("example.com")) == ("example.com", None)
-    # An Fqdn keeps its trailing dot, which is identity-bearing for a name.
-    assert netimps.normalize_host(netimps.Fqdn("b.com.")) == ("b.com.", None)
+    assert netimps.split_host(netimps.Host("example.com")) == ("example.com", None)
+    # An FQDN keeps its trailing dot, which is identity-bearing for a name.
+    assert netimps.split_host(netimps.FQDN("b.com.")) == ("b.com.", None)
 
 
 @pytest.mark.parametrize("bad", [None, 42, [], b"x", object()])
@@ -532,14 +532,14 @@ def test_normalize_host_uses_an_allowlist_not_a_str_fallback(bad):
     hostname a caller could not detect as bogus. The allowlist is the point.
     """
     with pytest.raises((ValueError, TypeError)):
-        netimps.normalize_host(bad)
+        netimps.split_host(bad)
 
 
 def test_normalize_host_still_refuses_a_network_and_an_empty_string():
     with pytest.raises(TypeError, match="not a network"):
-        netimps.normalize_host(ipaddress.ip_network("10.0.0.0/24"))
+        netimps.split_host(ipaddress.ip_network("10.0.0.0/24"))
     with pytest.raises(ValueError):
-        netimps.normalize_host("")
+        netimps.split_host("")
 
 
 @pytest.mark.parametrize(
@@ -551,10 +551,10 @@ def test_normalize_host_still_refuses_a_network_and_an_empty_string():
     ],
 )
 def test_the_round_trip_law_survives_the_widening(host, port):
-    """`normalize_host(join_host(h, p))` must still come back equal.
+    """`split_host(join_host(h, p))` must still come back equal.
 
     The pair are inverses, and widening one input must not break that -- which is
     why this is asserted against the *parsed* forms the widening added, not only
     against strings.
     """
-    assert netimps.normalize_host(netimps.join_host(host, port)) == (str(host), port)
+    assert netimps.split_host(netimps.join_host(host, port)) == (str(host), port)

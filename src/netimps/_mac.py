@@ -16,12 +16,12 @@ from typing import Optional, Union
 
 from ._exceptions import NetimpsValueError
 
-__all__ = ["MACAddress", "MACLike"]
+__all__ = ["MACAddress", "MACAddressLike"]
 
 #: Anything :class:`MACAddress` accepts. ``bytearray`` is listed because the
 #: constructor takes one; ``bool`` is not, because it is rejected despite
 #: being an ``int`` subclass.
-MACLike = Union[str, int, bytes, bytearray, "MACAddress"]
+MACAddressLike = Union[str, int, bytes, bytearray, "MACAddress"]
 
 
 class MACAddress:
@@ -70,7 +70,7 @@ class MACAddress:
     #: assignment reads ``value._octets``, which it otherwise cannot infer.
     _octets: bytes
 
-    def __init__(self, value: MACLike) -> None:
+    def __init__(self, value: MACAddressLike) -> None:
         if isinstance(value, MACAddress):
             self._octets = value._octets
             return

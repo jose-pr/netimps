@@ -1,4 +1,4 @@
-"""Reported defects in bind() and UdpEndpoint, each pinned by a test."""
+"""Reported defects in bind() and UDPEndpoint, each pinned by a test."""
 
 import errno
 import os
@@ -7,7 +7,7 @@ import socket
 import pytest
 
 import netimps
-from netimps import AddressInUseError, UdpEndpoint, bind
+from netimps import AddressInUseError, UDPEndpoint, bind
 
 IS_WINDOWS = os.name == "nt"
 
@@ -112,7 +112,7 @@ def test_on_posix_reuse_address_governs_so_reuseaddr_for_stream_sockets(reuse_ad
 
 
 # --------------------------------------------------------------------------- #
-# UdpEndpoint.recv() enumerated every interface, per packet                    #
+# UDPEndpoint.recv() enumerated every interface, per packet                    #
 # --------------------------------------------------------------------------- #
 
 
@@ -135,8 +135,8 @@ def test_recv_enumerates_once_for_many_packets(monkeypatch):
 
     monkeypatch.setattr(_ifaddrs, "get_interfaces", counting)
 
-    with UdpEndpoint(bind("127.0.0.1", 0)) as endpoint:
-        if not endpoint.supports_pktinfo:
+    with UDPEndpoint(bind("127.0.0.1", 0)) as endpoint:
+        if not endpoint.has_pktinfo:
             pytest.skip("no pktinfo on this platform")
         endpoint.socket.settimeout(5.0)
         port = endpoint.socket.getsockname()[1]
@@ -167,7 +167,7 @@ def test_the_interface_cache_keeps_a_negative_answer(monkeypatch):
     monkeypatch.setattr(
         _ifaddrs, "get_interfaces", lambda *a, **k: calls.append(1) or real(*a, **k)
     )
-    with UdpEndpoint(bind("127.0.0.1", 0)) as endpoint:
+    with UDPEndpoint(bind("127.0.0.1", 0)) as endpoint:
         assert endpoint._interface_for(999999) is None
         first = len(calls)
         assert endpoint._interface_for(999999) is None
@@ -182,7 +182,7 @@ def test_resolve_interface_false_never_enumerates(monkeypatch):
     monkeypatch.setattr(
         _ifaddrs, "get_interfaces", lambda *a, **k: calls.append(1) or real(*a, **k)
     )
-    with UdpEndpoint(bind("127.0.0.1", 0)) as endpoint:
+    with UDPEndpoint(bind("127.0.0.1", 0)) as endpoint:
         endpoint.socket.settimeout(5.0)
         port = endpoint.socket.getsockname()[1]
         sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -197,8 +197,8 @@ def test_resolve_interface_false_never_enumerates(monkeypatch):
 
 def test_the_cache_is_per_endpoint():
     """Not a module global: two endpoints must not share a stale view."""
-    first = UdpEndpoint(bind("127.0.0.1", 0))
-    second = UdpEndpoint(bind("127.0.0.1", 0))
+    first = UDPEndpoint(bind("127.0.0.1", 0))
+    second = UDPEndpoint(bind("127.0.0.1", 0))
     try:
         first._interface_for(1)
         assert second._iface_cache == {}, "the cache must not be shared"

@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     # Type-only, to keep `Host.fqdn` precisely annotated without a runtime
     # cycle: `_fqdn` imports this module's `IPAddress` to reject an address
     # literal, so a module-level import here would be circular.
-    from ._fqdn import Fqdn
+    from ._fqdn import FQDN
 
 from ipaddress import (
     IPv4Address,
@@ -32,7 +32,7 @@ from ipaddress import (
 
 __all__ = [
     "Host",
-    "APIPA",
+    "LINK_LOCAL_V4",
     "LOOPBACK_V4",
     "LOOPBACK_V6",
     "LINK_LOCAL_V6",
@@ -42,7 +42,7 @@ __all__ = [
     "IPAddressLike",
     "IPInterfaceLike",
     "IPNetworkLike",
-    "AddressLike",
+    "HostLike",
     "IPv4Address",
     "IPv4Interface",
     "IPv4Network",
@@ -52,7 +52,7 @@ __all__ = [
     "get_ip",
     "collapse",
     "subtract",
-    "normalize_host",
+    "split_host",
     "join_host",
     "unmap",
     "is_wildcard",
@@ -157,7 +157,7 @@ _BUILDER_DEFAULTS = {
 #: Anything accepted where a single destination (hostname or address) is
 #: expected -- ``ping``, ``tcp_check``, ``resolve``'s ``query`` and the like.
 #: Not a ``parse()`` target: this is argument coercion, not type-building.
-AddressLike = Union[
+HostLike = Union[
     str,
     IPv4Address,
     IPv6Address,
@@ -210,7 +210,7 @@ def _family_for(ipv6: Optional[bool]) -> int:
     return _socket.AF_UNSPEC
 
 
-def get_ip(address: "AddressLike", ipv6: Optional[bool] = None) -> Optional[IPAddress]:
+def get_ip(address: "HostLike", ipv6: Optional[bool] = None) -> Optional[IPAddress]:
     """Resolve a hostname *or* literal address to an address object, or ``None``.
 
     Tries to parse ``address`` as a literal first and falls back to a DNS
@@ -339,7 +339,7 @@ def subtract(
     return collapse(remaining)
 
 
-def normalize_host(
+def split_host(
     text: "Union[str, IPAddress, IPInterface, Any]",
     default_port: Optional[int] = None,
 ) -> "Tuple[str, Optional[int]]":
@@ -348,11 +348,11 @@ def normalize_host(
     The parsing that looks trivial until IPv6 arrives, because a bare v6
     address is *full of colons*::
 
-        normalize_host("example.com:8080")     # ('example.com', 8080)
-        normalize_host("10.0.0.5")             # ('10.0.0.5', None)
-        normalize_host("[::1]:8080")           # ('::1', 8080)
-        normalize_host("::1")                  # ('::1', None)   -- not port 1
-        normalize_host("example.com", 443)     # ('example.com', 443)
+        split_host("example.com:8080")     # ('example.com', 8080)
+        split_host("10.0.0.5")             # ('10.0.0.5', None)
+        split_host("[::1]:8080")           # ('::1', 8080)
+        split_host("::1")                  # ('::1', None)   -- not port 1
+        split_host("example.com", 443)     # ('example.com', 443)
 
     The rule this implements: a bare IPv6 address must **not** be split on its
     last colon, and only a bracketed one may carry a port. ``"::1"`` is the
@@ -365,7 +365,7 @@ def normalize_host(
 
     ``text`` accepts the package's usual loose union, not only a ``str``: an
     address object, an :class:`IPv4Interface`/:class:`IPv6Interface` (its ``.ip``
-    is used), a :class:`Host` or an :class:`Fqdn`. :func:`join_host`, the inverse,
+    is used), a :class:`Host` or an :class:`FQDN`. :func:`join_host`, the inverse,
     already did -- this insisted on a ``str`` and rejected the values a caller
     holding "the host" most often has. A *network* raises :class:`TypeError`,
     since it names no single host.
@@ -379,19 +379,19 @@ def normalize_host(
     """
     if not isinstance(text, str):
         # The same loose union the rest of the package takes. This used to insist
-        # on a `str` and reject an address object, a `Host` or an `Fqdn` -- values
+        # on a `str` and reject an address object, a `Host` or an `FQDN` -- values
         # a caller holding "the host" very often has, and which `join_host`, the
         # inverse of this function, already accepts. A network still raises, via
         # `_dst_argument`, since it has no single address.
-        from ._fqdn import Fqdn
+        from ._fqdn import FQDN
 
         if isinstance(text, (IPv4Network, IPv6Network)):
             _dst_argument(text)  # raises TypeError, with the reason
         if isinstance(text, (IPv4Address, IPv6Address, IPv4Interface, IPv6Interface)):
             text = _dst_argument(text)
-        elif isinstance(text, (Host, Fqdn)):
+        elif isinstance(text, (Host, FQDN)):
             # Both stringify to the text the caller means -- `Host` to its
-            # original spelling, `Fqdn` to the name with its trailing dot if it
+            # original spelling, `FQDN` to the name with its trailing dot if it
             # has one.
             text = str(text)
         else:
@@ -400,7 +400,7 @@ def normalize_host(
             # kind of answer: a plausible one that is wrong, and one a caller
             # cannot detect. An int or a list went the same way.
             raise NetimpsValueError(
-                "host must be a string, an address, a Host or an Fqdn, got %r" % (text,)
+                "host must be a string, an address, a Host or an FQDN, got %r" % (text,)
             )
     if not text.strip():
         raise NetimpsValueError("host must be a non-empty string, got %r" % (text,))
@@ -496,7 +496,7 @@ def is_link_scoped(ip: IPAddress) -> bool:
 
 #: RFC 3927 link-local ("Automatic Private IP Addressing") -- what a host gives
 #: itself when DHCP fails, so its presence usually means "no lease".
-APIPA = _ipaddress.ip_network("169.254.0.0/16")
+LINK_LOCAL_V4 = _ipaddress.ip_network("169.254.0.0/16")
 
 #: RFC 1122 loopback. Note this is the whole /8, not just 127.0.0.1.
 LOOPBACK_V4 = _ipaddress.ip_network("127.0.0.0/8")
@@ -547,14 +547,14 @@ class Host:
         return is_valid(self.value, IPAddress)
 
     @property
-    def fqdn(self) -> "Optional[Fqdn]":
-        """This host as an :class:`Fqdn`, or ``None`` if it is an address.
+    def fqdn(self) -> "Optional[FQDN]":
+        """This host as an :class:`FQDN`, or ``None`` if it is an address.
 
         The bridge between the two types. :class:`Host` is the union -- "an
-        address *or* a name" -- while :class:`Fqdn` is a name algebra that
+        address *or* a name" -- while :class:`FQDN` is a name algebra that
         refuses an address outright, so this is the narrowing::
 
-            Host("www.example.com").fqdn.domain   # Fqdn('example.com')
+            Host("www.example.com").fqdn.domain   # FQDN('example.com')
             Host("10.0.0.5").fqdn                 # None
 
         ``None`` is also the answer for a name that is syntactically not one
@@ -563,9 +563,9 @@ class Host:
         """
         if self.is_address:
             return None
-        from ._fqdn import Fqdn
+        from ._fqdn import FQDN
 
-        return Fqdn.try_parse(self.value)
+        return FQDN.try_parse(self.value)
 
     def ip(self, refresh: bool = False) -> "Optional[IPAddress]":
         """Resolve to an address, or ``None``.
@@ -613,7 +613,7 @@ class Host:
 
 
 def join_host(host: "Union[str, IPAddress, Any]", port: "Optional[int]" = None) -> str:
-    """Build ``"host:port"`` from its parts -- the inverse of :func:`normalize_host`.
+    """Build ``"host:port"`` from its parts -- the inverse of :func:`split_host`.
 
     The direction everyone writes by hand and gets wrong on IPv6, because a bare
     v6 address is full of colons and must be bracketed before a port can be
@@ -628,7 +628,7 @@ def join_host(host: "Union[str, IPAddress, Any]", port: "Optional[int]" = None) 
 
     ``host`` accepts a string, an :class:`IPv4Address`/:class:`IPv6Address`, an
     :class:`IPv4Interface`/:class:`IPv6Interface` (its ``.ip`` is used) or an
-    :class:`Fqdn`. An already-bracketed string is accepted and not
+    :class:`FQDN`. An already-bracketed string is accepted and not
     double-bracketed.
 
     **Only an IPv6 *literal* is bracketed.** A hostname never is, however many
@@ -638,7 +638,7 @@ def join_host(host: "Union[str, IPAddress, Any]", port: "Optional[int]" = None) 
 
     Brackets are added when a port is present **or** absent, following the same
     rule: a lone ``"::1"`` needs none, since there is no colon to disambiguate
-    from. That is what makes ``normalize_host(join_host(h, p)) == (h, p)`` hold.
+    from. That is what makes ``split_host(join_host(h, p)) == (h, p)`` hold.
 
     :raises ValueError: for an empty host, or a port outside 0-65535.
     """
@@ -658,7 +658,7 @@ def join_host(host: "Union[str, IPAddress, Any]", port: "Optional[int]" = None) 
     if text.startswith("[") or text.endswith("]"):
         # A mismatched bracket has to raise, not fall through: `"[::1"` is not an
         # IPv6 literal, so it would otherwise emerge unbracketed as `"[::1:80"`,
-        # which is garbage the caller cannot detect. `normalize_host` rejects the
+        # which is garbage the caller cannot detect. `split_host` rejects the
         # same input, and the pair must agree.
         if not (text.startswith("[") and text.endswith("]")):
             raise NetimpsValueError("mismatched brackets in %r" % (text,))
@@ -673,7 +673,7 @@ def join_host(host: "Union[str, IPAddress, Any]", port: "Optional[int]" = None) 
 
     if port is None:
         # Strip the brackets back off: with no port there is nothing to
-        # disambiguate, and `normalize_host` returns the bare form, so keeping
+        # disambiguate, and `split_host` returns the bare form, so keeping
         # them would break the round trip.
         return text[1:-1] if text.startswith("[") else text
 
