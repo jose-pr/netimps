@@ -590,6 +590,10 @@ _NSLOOKUP_NO_RECORD_MARKERS = (
 )
 
 
+#: Seconds one ``nslookup`` run may take when the caller passes ``timeout=None``.
+_NSLOOKUP_LIMIT_SECONDS = 30.0
+
+
 def _parse_nslookup_output(text: str, rdtype: str) -> "tuple":
     """Parse the answer section of ``nslookup`` output.
 
@@ -744,7 +748,11 @@ def _resolve_nslookup_once(
     try:
         # The runner closes stdin: an nslookup that finds no usable name
         # argument goes interactive and would look up the caller's input.
-        response = _proc.run(cmd[0], cmd[1:], timeout=timeout)
+        response = _proc.run(
+            cmd[0],
+            cmd[1:],
+            timeout=_NSLOOKUP_LIMIT_SECONDS if timeout is None else timeout,
+        )
     except TimeoutError as exc:
         raise ResolutionTimeoutError("nslookup timed out: %s" % (exc,)) from exc
     except OSError as exc:
@@ -860,8 +868,8 @@ def resolve_nslookup(
     :param ns: nameserver to query, passed as ``nslookup``'s trailing
         ``server`` argument. ``None`` uses ``nslookup``'s own default.
     :param timeout: seconds to allow *each* subprocess attempt to run --
-        one per candidate name tried under ``search``. ``None`` waits
-        indefinitely.
+        one per candidate name tried under ``search``. ``None`` allows 30
+        seconds: a program never runs unbounded.
     :param search: how to expand an unqualified ``query``. ``nslookup`` has
         no built-in search-list handling (unlike ``dnspython``), so this
         tries one ``nslookup`` call per candidate name, in order, and returns

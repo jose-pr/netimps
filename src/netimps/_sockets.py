@@ -108,6 +108,10 @@ _IS_LINUX = _sys.platform.startswith("linux")
 #: get_source_ip).
 _DEFAULT_PROBE = "8.8.8.8"
 
+#: Seconds ``route -n get`` may run on the BSDs before the next hop is reported
+#: as unknown. It answers from the kernel's table and returns at once.
+_ROUTE_TIMEOUT_SECONDS = 5.0
+
 #: Smallest timeout actually handed to ``settimeout``. ``settimeout(0)`` does
 #: **not** mean "do not wait": it puts the socket in *non-blocking* mode, so
 #: ``connect`` raises ``BlockingIOError`` at once and every open port reads as
@@ -1526,7 +1530,7 @@ def _bsd_next_hop(dst: str, ipv6: bool = False) -> "Optional[_NextHop]":
         command.append("-inet6")
     command.append(dst)
     try:
-        result = _proc.run(command[0], command[1:], timeout=5.0)
+        result = _proc.run(command[0], command[1:], timeout=_ROUTE_TIMEOUT_SECONDS)
     except (OSError, ValueError):
         return None
     if result.returncode != 0:
@@ -1691,6 +1695,9 @@ def _hop_count_traceroute(
     try:
         result = _proc.run(cmd[0], cmd[1:], timeout=budget)
     except (OSError, ValueError):
+        return None
+    if result.returncode != 0:
+        # A usage error or a failure to start a trace: its output is not a trace.
         return None
 
     for line in result.stdout.splitlines():

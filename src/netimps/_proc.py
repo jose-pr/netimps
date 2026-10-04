@@ -5,8 +5,9 @@ Every platform binary the library drives (``ping``, ``nslookup``, ``route``,
 them and no caller repeats them:
 
 * an argument list, never a shell;
-* the program is found with :func:`shutil.which` before anything starts, and
-  its absence is a :class:`FileNotFoundError` that names the program;
+* the program is found in the absolute ``PATH`` entries before anything
+  starts, never in the working directory, and its absence is a
+  :class:`FileNotFoundError` that names the program;
 * ``stdin`` is closed, so the child can never read the caller's input;
 * ``LC_ALL=C`` is added to a copy of the environment;
 * both streams are captured and decoded with a named encoding;
@@ -18,11 +19,10 @@ from __future__ import annotations
 
 import functools
 import os
-import shutil
 import signal
 import subprocess
 import sys
-from typing import Dict, Mapping, NamedTuple, Optional, Sequence
+from typing import Dict, List, Mapping, NamedTuple, Optional, Sequence
 
 _IS_WINDOWS = sys.platform == "win32"
 
@@ -49,9 +49,53 @@ class Result(NamedTuple):
     stderr: str
 
 
+#: ``PATHEXT`` when the environment names none.
+_DEFAULT_PATHEXT = ".COM;.EXE;.BAT;.CMD"
+
+
+def _candidates(program: str) -> "List[str]":
+    """The file names ``program`` can be stored under in one directory."""
+    if not _IS_WINDOWS:
+        return [program]
+    extensions = [
+        ext
+        for ext in os.environ.get("PATHEXT", _DEFAULT_PATHEXT).split(os.pathsep)
+        if ext
+    ]
+    lowered = program.lower()
+    if any(lowered.endswith(ext.lower()) for ext in extensions):
+        return [program]
+    return [program + ext for ext in extensions]
+
+
+def _is_program(path: str) -> bool:
+    return os.path.isfile(path) and os.access(path, os.X_OK)
+
+
 @functools.lru_cache(maxsize=None)
 def _which(program: str, path: "Optional[str]") -> "Optional[str]":
-    return shutil.which(program, path=path)
+    """The absolute path of ``program``, or ``None``.
+
+    An absolute ``program`` is used as given. A bare name is searched in the
+    absolute entries of ``path`` only: :func:`shutil.which` looks in the
+    working directory first on Windows and returns a relative path for a
+    relative or empty entry, and either would run whatever file the caller
+    happens to be standing next to.
+    """
+    if os.path.isabs(program):
+        return program if _is_program(program) else None
+    if os.path.dirname(program):
+        raise ValueError("%r is neither a bare name nor an absolute path" % (program,))
+    entries = (os.defpath if path is None else path).split(os.pathsep)
+    for entry in entries:
+        entry = entry.strip('"')
+        if not os.path.isabs(entry):
+            continue
+        for name in _candidates(program):
+            found = os.path.join(entry, name)
+            if _is_program(found):
+                return found
+    return None
 
 
 def clear_cache() -> None:
@@ -111,7 +155,7 @@ def run(
     program: str,
     args: "Sequence[str]" = (),
     *,
-    timeout: "Optional[float]",
+    timeout: float,
     env: "Optional[Mapping[str, str]]" = None,
 ) -> Result:
     """Run ``program`` with ``args`` and return its status and output.
@@ -121,12 +165,18 @@ def run(
     become U+FFFD rather than an exception. A non-zero exit is **not** an
     error here; the caller reads :attr:`Result.returncode`.
 
-    :raises FileNotFoundError: ``program`` is not on ``PATH``.
+    ``timeout`` is required; no program runs unbounded.
+
+    :raises TypeError: ``timeout`` is ``None``.
+    :raises ValueError: ``program`` has a relative directory part.
+    :raises FileNotFoundError: ``program`` is in no absolute ``PATH`` entry.
     :raises PermissionError: it resolves to a ``.bat`` or ``.cmd`` script.
     :raises TimeoutError: it ran past ``timeout`` seconds; the child and its
         children are killed first.
     :raises OSError: the system could not start it.
     """
+    if timeout is None:
+        raise TypeError("timeout is required; a program never runs unbounded")
     path = _find(program)
     environment: "Dict[str, str]" = dict(os.environ)
     environment["LC_ALL"] = "C"

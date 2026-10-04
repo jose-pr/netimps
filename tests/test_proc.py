@@ -177,3 +177,58 @@ def test_ping_finds_and_runs_a_fake_ping_with_the_argv_it_built(fake_program):
     assert bool(result) is True and result.ttl == 128
     assert fake.calls == [argv[1:]]
     assert argv[0] == "ping"
+
+
+def _decoy_name():
+    return "netimps-probe.exe" if sys.platform == "win32" else "netimps-probe"
+
+
+def test_a_program_in_the_working_directory_is_never_taken(
+    fake_program, tmp_path, monkeypatch
+):
+    """A same-named file beside the caller is not what ``PATH`` names.
+
+    ``shutil.which`` searches the working directory first on Windows (measured
+    on 3.9: ``which("pip")`` gave a ``pip.EXE`` in the working directory with
+    only System32 on ``PATH``), so the runner searches the ``PATH`` entries.
+    """
+    fake = fake_program("netimps-probe", stdout="from path")
+    here = tmp_path / "cwd"
+    here.mkdir()
+    decoy = here / _decoy_name()
+    decoy.write_bytes(b"MZ not a program")
+    decoy.chmod(0o755)
+    monkeypatch.chdir(here)
+    _proc.clear_cache()
+    found = _proc._find("netimps-probe")
+    assert os.path.isabs(found)
+    assert os.path.normcase(os.path.dirname(found)) == os.path.normcase(
+        str(fake.directory)
+    )
+
+
+def test_a_relative_path_entry_is_not_searched(tmp_path, monkeypatch):
+    """``.`` or an empty entry on ``PATH`` would be the working directory again."""
+    here = tmp_path / "cwd"
+    here.mkdir()
+    decoy = here / _decoy_name()
+    decoy.write_bytes(b"x")
+    decoy.chmod(0o755)
+    monkeypatch.chdir(here)
+    for entry in (".", "", os.curdir + os.sep, "cwd"):
+        monkeypatch.setenv("PATH", entry + os.pathsep + str(tmp_path / "empty"))
+        _proc.clear_cache()
+        with pytest.raises(FileNotFoundError):
+            _proc._find("netimps-probe")
+
+
+def test_a_program_name_with_a_relative_directory_is_refused():
+    """``./tool`` is a path, not a name to look up."""
+    with pytest.raises(ValueError, match="bare"):
+        _proc._find("." + os.sep + "netimps-probe")
+
+
+def test_every_run_has_a_timeout():
+    """``timeout=None`` would run unbounded; the runner refuses it."""
+    with pytest.raises(TypeError, match="timeout"):
+        _proc.run(sys.executable, ["-c", "pass"], timeout=None)

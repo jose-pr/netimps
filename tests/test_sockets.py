@@ -447,6 +447,20 @@ def test_traceroute_parser_no_match_is_none(fake_program):
     assert _sockets._hop_count_traceroute("8.8.8.8", 30, 1.0) is None
 
 
+def test_traceroute_failing_exit_status_is_none(fake_program):
+    """A non-zero exit means the output is not a trace, even if it names the target.
+
+    A usage message that echoes the destination would otherwise be read as a
+    hop line.
+    """
+    _traceroute_program(
+        fake_program,
+        stdout="  3     9 ms     7 ms    11 ms  8.8.8.8 \n",
+        returncode=2,
+    )
+    assert _sockets._hop_count_traceroute("8.8.8.8", 30, 1.0) is None
+
+
 # --------------------------------------------------------------------------- #
 # ICMP reply classification                                                    #
 # --------------------------------------------------------------------------- #

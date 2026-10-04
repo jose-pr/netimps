@@ -216,6 +216,15 @@ probe says so in its prefix.
 
 ### Fixed
 
+- **The programs the library runs are looked up in the absolute `PATH`
+  entries only.** On Windows `shutil.which` searched the working directory
+  first, so `ping`, `nslookup`, `tracert` and `route` ran a same-named file
+  next to the caller; a relative or empty `PATH` entry is now skipped on every
+  platform. The runner refuses a call without a timeout:
+  `resolve_nslookup(timeout=None)` allows 30 seconds instead of waiting
+  forever. `count_hops` gives `None` when `traceroute` or `tracert` exits
+  non-zero, and the header names the supported programs.
+
 - **`recvmsg` and `sendmsg` honour a socket timeout on Windows.** A socket
   with a timeout is non-blocking underneath, and the Winsock calls returned
   at once: `UDPEndpoint.recv()` on a socket with `settimeout(0.3)` raised
