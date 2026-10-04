@@ -67,7 +67,7 @@ A v4 arrival on an ``AF_INET6`` socket is reported differently again:
 
 Hence the option is set with the error ignored, and a plain v4 address decoded
 on an ``AF_INET6`` socket is normalised to ``::ffff:`` form, so
-``local_address`` means one thing everywhere. A v6-only socket (``IPV6_V6ONLY``)
+``destination`` means one thing everywhere. A v6-only socket (``IPV6_V6ONLY``)
 refuses ``IP_PKTINFO`` on both macOS and Windows, which the same ignore covers.
 
 Platform reality
@@ -323,11 +323,12 @@ class Datagram(NamedTuple):
         data: the payload.
         sender: ``(address, port)`` of the peer, as ``recvfrom`` reports it --
             a four-tuple for an IPv6 socket.
-        local_address: the address the datagram was sent *to*, or ``None``.
+        destination: the address the datagram was sent *to*, or ``None``.
             For a broadcast this is the broadcast address, not the interface's
             own address -- use ``interface`` to identify the adapter. On a
             dual-stack IPv6 socket an IPv4 arrival reports the v4-mapped form
-            (``::ffff:10.0.0.1``), matching what ``sender`` shows.
+            (``::ffff:10.0.0.1``), matching what ``sender`` shows. Absent
+            without pktinfo.
         interface_index: receiving interface index, or ``0`` when unknown.
         interface: the resolved :class:`Interface`, or ``None`` when
             unavailable (no pktinfo, or no matching adapter).
@@ -348,11 +349,28 @@ class Datagram(NamedTuple):
 
     data: bytes
     sender: "SocketAddress"
-    local_address: "Optional[IPAddress]" = None
+    destination: "Optional[IPAddress]" = None
     interface_index: int = 0
     interface: "Optional[Interface]" = None
     control_truncated: bool = False
     truncated: bool = False
+
+    @property
+    def is_unicast(self) -> "Optional[bool]":
+        """Whether the datagram was addressed to one host: not a broadcast, a
+        multicast group or the wildcard.
+
+        ``None`` when ``destination`` is unknown -- there was no pktinfo -- since
+        a guess in either direction would make a server answer, or ignore, the
+        wrong packets. The subnet broadcast is judged against the arrival
+        ``interface``, so this costs no enumeration when that is set; see
+        :func:`netimps.is_unicast`.
+        """
+        if self.destination is None:
+            return None
+        from ._ifaddrs import is_unicast
+
+        return is_unicast(self.destination, self.interface, cache=True)
 
     @property
     def reply_address(self) -> "SocketAddress":
@@ -592,7 +610,7 @@ class UDPEndpoint:
             # IPPROTO_IP carrying the **plain** v4 address, while Linux and macOS
             # report the v4-mapped form in the v6 cmsg -- measured on CI, and the
             # two halves of the same Windows datagram even disagree, since its
-            # `sender` is already ::ffff:127.0.0.1. `local_address` is documented
+            # `sender` is already ::ffff:127.0.0.1. `destination` is documented
             # as v4-mapped on an AF_INET6 endpoint, so normalise rather than let
             # the platform show through.
             local = IPv6Address("::ffff:%s" % (local,))
@@ -604,7 +622,7 @@ class UDPEndpoint:
         return Datagram(
             data=data,
             sender=sender,
-            local_address=local,
+            destination=local,
             interface_index=int(index),
             interface=interface,
             control_truncated=bool(flags & _MSG_CTRUNC),
@@ -639,12 +657,25 @@ class UDPEndpoint:
             return None
         want_ipv6 = family == _socket.AF_INET6
 
-        # Both lookups are tolerant: a spec may name an adapter with no
-        # address of the wanted family (index only), or an address no local
-        # adapter claims (address only). Only resolving to *neither* is an
-        # error. Passing an Interface answers both without enumerating.
-        local = interface_address(src, want_ipv6=want_ipv6, strict=False)
-        index = interface_index(src, strict=False) or 0
+        local: "Optional[IPAddress]"
+        literal = src if isinstance(src, (IPv4Address, IPv6Address)) else None
+        if literal is None and isinstance(src, str):
+            literal = try_parse(src, IPAddress)
+        if literal is not None:
+            # An address is already what the cmsg carries, so it is used as
+            # given. Resolving it to its adapter means enumerating every
+            # interface on each send -- measured at 1.29 ms against 0.04 ms for
+            # an `Interface`. The cost is that the kernel, not this call, picks
+            # the adapter; a `%zone` still names one.
+            local = literal
+            index = _zone_index(literal)
+        else:
+            # Both lookups are tolerant: a spec may name an adapter with no
+            # address of the wanted family (index only), or an address no local
+            # adapter claims (address only). Only resolving to *neither* is an
+            # error. Passing an Interface answers both without enumerating.
+            local = interface_address(src, want_ipv6=want_ipv6, strict=False)
+            index = interface_index(src, strict=False) or 0
         if local is None and not index:
             raise ValueError(
                 "cannot resolve src %r to a local address or interface index" % (src,)
@@ -726,8 +757,11 @@ class UDPEndpoint:
         a source address this host cannot send from is a real failure, not an
         unsupported platform.
 
-        Resolving a MAC, adapter name or bare address enumerates interfaces;
-        pass an :class:`Interface` in a send loop to avoid that.
+        A ``src`` that is an **address** is used as given and enumerates nothing;
+        the kernel then chooses the adapter, except that a ``%zone`` names one.
+        Resolving a MAC or an adapter name enumerates interfaces; pass an
+        :class:`Interface` in a send loop to avoid that, and to pin the adapter
+        as well as the address.
 
         A timeout set on the socket raises the builtin :class:`TimeoutError`
         on every supported Python.
@@ -788,13 +822,9 @@ class UDPEndpoint:
         :func:`netimps.is_broadcast` is for. Passing ``interface`` keeps that
         check off the enumerating path.
         """
-        from ._ifaddrs import is_broadcast
+        from ._ifaddrs import is_unicast
 
-        if local.is_unspecified or local.is_multicast:
-            return False
-        if is_multicast(local):
-            return False
-        return not is_broadcast(local, interface, cache=True)
+        return is_unicast(local, interface, cache=True)
 
     def reply_socket(
         self,
@@ -858,7 +888,7 @@ class UDPEndpoint:
         The non-hijackable bind options apply as everywhere else.
 
         :param datagram: a :class:`Datagram` from :meth:`recv`. Its
-            ``local_address`` is what this binds to; with ``None`` -- no pktinfo
+            ``destination`` is what this binds to; with ``None`` -- no pktinfo
             -- it goes straight to the fallbacks.
         :param port: local port for the reply socket; ``0`` lets the OS choose,
             which is what a per-transaction socket wants. Also accepts **any
@@ -880,13 +910,13 @@ class UDPEndpoint:
         # with `IPV6_V6ONLY=1` (the platform default, which `bind()` does not
         # clear) and `sendto` to a mapped address fails with `WinError 10049`,
         # "address not valid in its context". The transfer then silently never
-        # starts. That happened whenever there was no `local_address` to go on
+        # starts. That happened whenever there was no `destination` to go on
         # -- `pktinfo=False`, or a platform that reported none -- because both
         # fallbacks used the listener's family.
         family = self._reply_family(datagram)
         candidates: "list" = []
 
-        local = datagram.local_address
+        local = datagram.destination
         if local is not None and self._is_repliable(local, datagram.interface):
             plain = unmap(local)
             if isinstance(plain, IPv4Address):
@@ -971,7 +1001,7 @@ class UDPEndpoint:
         # Every candidate failed, including the wildcard, so something is wrong
         # with the socket rather than with the address.
         raise OSError(
-            "could not bind a reply socket for %r" % (datagram.local_address,)
+            "could not bind a reply socket for %r" % (datagram.destination,)
         ) from last
 
     async def arecv(
@@ -1013,7 +1043,11 @@ class UDPEndpoint:
                 continue
 
     async def datagrams(
-        self, bufsize: int = 65535, resolve_interface: bool = True
+        self,
+        bufsize: int = 65535,
+        resolve_interface: bool = True,
+        *,
+        on_error: "Optional[Callable[[BaseException], bool]]" = None,
     ) -> "Any":
         """Yield datagrams until the endpoint is closed -- ``async for`` sugar.
 
@@ -1022,15 +1056,23 @@ class UDPEndpoint:
             async for packet in endpoint.datagrams():
                 ...
 
-        Stops cleanly on :meth:`close`; any other error propagates, because a
-        receive loop that swallows them is how a dead server looks healthy.
+        Stops cleanly on :meth:`close`. By default any other error propagates and
+        ends the loop, because a receive loop that swallows them is how a dead
+        server looks healthy.
+
+        :param on_error: called with the exception when a receive fails. Return
+            true to carry on with the next datagram, false (or raise) to stop
+            with that error. The caller decides, so log or count there; nothing
+            is dropped silently. Not called for the error a close causes.
         """
         while True:
             try:
                 yield await self.arecv(bufsize, resolve_interface)
-            except (RuntimeError, OSError, ValueError):
+            except (RuntimeError, OSError, ValueError) as exc:
                 if self._closed_for_async():
                     return
+                if on_error is not None and on_error(exc):
+                    continue
                 raise
 
     def _ensure_notifier(self) -> "Any":
@@ -1106,6 +1148,19 @@ class UDPEndpoint:
             self.has_pktinfo,
             self.has_src_pinning,
         )
+
+
+def _zone_index(address: "IPAddress") -> int:
+    """The interface index an IPv6 ``%zone`` names, else ``0`` (kernel's choice)."""
+    zone = getattr(address, "scope_id", None)
+    if not zone:
+        return 0
+    if str(zone).isdigit():
+        return int(zone)
+    try:
+        return _socket.if_nametoindex(str(zone))
+    except (OSError, AttributeError, ValueError):
+        return 0
 
 
 _PKTINFO_SUPPORT: "Dict[int, bool]" = {}

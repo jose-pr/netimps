@@ -43,9 +43,9 @@ def test_reply_socket_answers_from_the_address_the_client_addressed():
                 packet = server.recv(1500)
             except OSError as exc:
                 pytest.skip("127.0.0.2 is not reachable here: %s" % (exc,))
-            if packet.local_address is None:
+            if packet.destination is None:
                 pytest.skip("no arrival address reported")
-            assert str(packet.local_address) == "127.0.0.2"
+            assert str(packet.destination) == "127.0.0.2"
 
             with server.reply_socket(packet) as reply:
                 assert reply.getsockname()[0] == "127.0.0.2"
@@ -109,9 +109,7 @@ def test_reply_socket_falls_back_for_an_unbindable_destination(label, local):
     as a bind failure.
     """
     with UDPEndpoint(bind("0.0.0.0", 0)) as server:
-        datagram = Datagram(
-            data=b"", sender=("127.0.0.1", 1), local_address=parse(local)
-        )
+        datagram = Datagram(data=b"", sender=("127.0.0.1", 1), destination=parse(local))
         sock = server.reply_socket(datagram)
         try:
             assert sock.getsockname()[0] in ("0.0.0.0", "")
@@ -120,9 +118,9 @@ def test_reply_socket_falls_back_for_an_unbindable_destination(label, local):
 
 
 def test_reply_socket_without_pktinfo_falls_straight_through():
-    """`local_address is None` is the no-pktinfo case, not an error."""
+    """`destination is None` is the no-pktinfo case, not an error."""
     with UDPEndpoint(bind("0.0.0.0", 0)) as server:
-        datagram = Datagram(data=b"", sender=("127.0.0.1", 1), local_address=None)
+        datagram = Datagram(data=b"", sender=("127.0.0.1", 1), destination=None)
         sock = server.reply_socket(datagram)
         try:
             assert sock.getsockname()[0] in ("0.0.0.0", "")
@@ -134,7 +132,7 @@ def test_reply_socket_prefers_the_endpoints_own_address_over_the_wildcard():
     """A listener pinned to one address should answer from it, not the wildcard."""
     with UDPEndpoint(bind("127.0.0.1", 0)) as server:
         datagram = Datagram(
-            data=b"", sender=("127.0.0.1", 1), local_address=parse("255.255.255.255")
+            data=b"", sender=("127.0.0.1", 1), destination=parse("255.255.255.255")
         )
         sock = server.reply_socket(datagram)
         try:
@@ -170,9 +168,9 @@ def test_reply_socket_unmaps_a_dual_stack_v4_arrival():
             client.close()
             pytest.skip("no dual-stack v4 delivery here: %s" % (exc,))
         try:
-            if packet.local_address is None:
+            if packet.destination is None:
                 pytest.skip("no arrival address reported")
-            assert packet.local_address.version == 6, "the arrival is v4-mapped"
+            assert packet.destination.version == 6, "the arrival is v4-mapped"
             with server.reply_socket(packet) as reply:
                 assert (
                     reply.family == socket.AF_INET
@@ -189,7 +187,7 @@ def test_reply_socket_disables_connreset_by_default():
     server's, and the report is only useful to a client talking to one peer.
     """
     with UDPEndpoint(bind("0.0.0.0", 0)) as server:
-        datagram = Datagram(data=b"", sender=("127.0.0.1", 1), local_address=None)
+        datagram = Datagram(data=b"", sender=("127.0.0.1", 1), destination=None)
         sock = server.reply_socket(datagram)
         try:
             assert sock.fileno() > 0
@@ -240,7 +238,7 @@ def test_reply_socket_takes_a_range_of_ports():
             s.close()
 
         datagram = Datagram(
-            data=b"", sender=("127.0.0.1", 1), local_address=parse("127.0.0.1")
+            data=b"", sender=("127.0.0.1", 1), destination=parse("127.0.0.1")
         )
         sock = server.reply_socket(datagram, port=wanted)
         try:
@@ -270,7 +268,7 @@ def test_a_held_port_advances_the_port_not_the_address():
             pytest.skip("this platform permits a second live bind here")
 
         datagram = Datagram(
-            data=b"", sender=("127.0.0.1", 1), local_address=parse("127.0.0.1")
+            data=b"", sender=("127.0.0.1", 1), destination=parse("127.0.0.1")
         )
         try:
             sock = server.reply_socket(datagram, port=[taken, free])
@@ -301,7 +299,7 @@ def test_exhausting_the_ports_raises_rather_than_moving_address():
             pytest.skip("this platform permits a second live bind here")
 
         datagram = Datagram(
-            data=b"", sender=("127.0.0.1", 1), local_address=parse("127.0.0.1")
+            data=b"", sender=("127.0.0.1", 1), destination=parse("127.0.0.1")
         )
         try:
             with pytest.raises(netimps.AddressInUseError):
@@ -323,7 +321,7 @@ def test_an_unbindable_address_still_advances_the_address():
             s.close()
 
         datagram = Datagram(
-            data=b"", sender=("127.0.0.1", 1), local_address=parse("255.255.255.255")
+            data=b"", sender=("127.0.0.1", 1), destination=parse("255.255.255.255")
         )
         sock = server.reply_socket(datagram, port=wanted)
         try:
@@ -347,7 +345,7 @@ def test_a_generator_of_ports_survives_every_address_candidate():
         # An unbindable arrival address, so the first candidate fails and the
         # second has to see the same ports.
         datagram = Datagram(
-            data=b"", sender=("127.0.0.1", 1), local_address=parse("255.255.255.255")
+            data=b"", sender=("127.0.0.1", 1), destination=parse("255.255.255.255")
         )
         sock = server.reply_socket(datagram, port=(p for p in [wanted]))
         try:
@@ -405,7 +403,7 @@ def test_a_held_port_does_not_answer_from_another_address():
 
         with UDPEndpoint(bind("127.0.0.1", 0)) as server:
             datagram = Datagram(
-                data=b"", sender=("127.0.0.1", 1), local_address=parse(other)
+                data=b"", sender=("127.0.0.1", 1), destination=parse(other)
             )
             with pytest.raises(netimps.AddressInUseError):
                 server.reply_socket(datagram, port=port)
@@ -417,7 +415,7 @@ def test_an_empty_port_iterable_is_an_error_not_a_wildcard():
     """`port=[]` is a caller bug. Treating it as "any port" would bind something
     the caller's firewall rule does not cover."""
     with UDPEndpoint(bind("0.0.0.0", 0)) as server:
-        datagram = Datagram(data=b"", sender=("127.0.0.1", 1), local_address=None)
+        datagram = Datagram(data=b"", sender=("127.0.0.1", 1), destination=None)
         with pytest.raises(ValueError, match="empty"):
             server.reply_socket(datagram, port=[])
 
@@ -425,7 +423,7 @@ def test_an_empty_port_iterable_is_an_error_not_a_wildcard():
 def test_a_plain_int_port_still_works():
     """The int form is the common case and must not have become an iterable."""
     with UDPEndpoint(bind("0.0.0.0", 0)) as server:
-        datagram = Datagram(data=b"", sender=("127.0.0.1", 1), local_address=None)
+        datagram = Datagram(data=b"", sender=("127.0.0.1", 1), destination=None)
         sock = server.reply_socket(datagram, port=0)
         try:
             assert sock.getsockname()[1] > 0
@@ -465,11 +463,11 @@ def test_a_v4_client_of_a_dual_stack_listener_gets_a_real_reply(pktinfo):
     `AF_INET` client on `127.0.0.1` talking to a `bind("::", family=AF_INET6,
     IPV6_V6ONLY=0)` listener:
 
-    - `pktinfo=True`: `local_address` is `::ffff:127.0.0.1`, so `reply_socket`
+    - `pktinfo=True`: `destination` is `::ffff:127.0.0.1`, so `reply_socket`
       correctly chose an `AF_INET` socket -- but `datagram.sender` is still the
       v6 4-tuple, so the documented `reply.sendto(answer, packet.sender)` raised
       `TypeError: AF_INET address must be a pair (host, port)`.
-    - `pktinfo=False`: no `local_address`, so both fallbacks used the
+    - `pktinfo=False`: no `destination`, so both fallbacks used the
       *listener's* family and produced an `AF_INET6` socket with
       `IPV6_V6ONLY=1` (the Windows default, which `bind()` does not clear).
       `sendto` to a mapped address then fails with `WinError 10049` and the

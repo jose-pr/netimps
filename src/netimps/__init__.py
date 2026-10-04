@@ -94,6 +94,7 @@ from ._ifaddrs import (
     interface_enumerations,
     get_interfaces,
     is_broadcast,
+    is_unicast,
     iter_addresses,
 )
 from ._dns import (
@@ -206,6 +207,7 @@ __all__ = [
     "interface_enumerations",
     "INTERFACE_CACHE_TTL",
     "is_broadcast",
+    "is_unicast",
     "iter_addresses",
     # Socket / route helpers.
     "get_source_ip",

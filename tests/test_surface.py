@@ -77,6 +77,7 @@ EXPECTED = [
     "is_local_address",
     "is_multicast",
     "is_socket_patched",
+    "is_unicast",
     "is_valid",
     "is_wildcard",
     "iter_addresses",

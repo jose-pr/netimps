@@ -530,7 +530,7 @@ def test_udp_endpoint_round_trip(family, host):
         return
     assert packet.interface_index != 0
     assert packet.interface is not None
-    assert packet.local_address is not None and packet.local_address.is_loopback
+    assert packet.destination is not None and packet.destination.is_loopback
 
 
 def test_udp_endpoint_reports_truncated_control_data():
@@ -637,7 +637,7 @@ def test_udp_endpoint_degrades_without_pktinfo(monkeypatch):
             sender.close()
     assert packet.data == b"x"
     assert packet.interface is None and packet.interface_index == 0
-    assert packet.local_address is None and packet.control_truncated is False
+    assert packet.destination is None and packet.control_truncated is False
 
 
 def test_udp_endpoint_send_falls_back_without_source():
@@ -733,7 +733,7 @@ def test_udp_endpoint_claims_pktinfo_whenever_the_platform_delivers_it(family, h
 
 
 def test_udp_endpoint_dual_stack_reports_a_v4_arrival_as_v4_mapped():
-    """`local_address` on an AF_INET6 endpoint is v4-mapped on every platform.
+    """`destination` on an AF_INET6 endpoint is v4-mapped on every platform.
 
     The platforms genuinely disagree about the wire form: Linux and macOS put
     the v4-mapped address in the v6 cmsg, while Windows reports a *plain* v4
@@ -766,14 +766,14 @@ def test_udp_endpoint_dual_stack_reports_a_v4_arrival_as_v4_mapped():
             sender.close()
 
         assert packet.data == b"v4-arrival"
-        if packet.local_address is None:
+        if packet.destination is None:
             pytest.skip("this platform reported no arrival address for a v4 arrival")
         assert (
-            packet.local_address.version == 6
+            packet.destination.version == 6
         ), "an AF_INET6 endpoint must report a v6 address, got %r" % (
-            packet.local_address,
+            packet.destination,
         )
-        assert packet.local_address == ipaddress.IPv6Address("::ffff:127.0.0.1")
+        assert packet.destination == ipaddress.IPv6Address("::ffff:127.0.0.1")
 
 
 def test_udp_endpoint_reports_a_virtual_ip_as_the_arrival_address():
@@ -796,11 +796,11 @@ def test_udp_endpoint_reports_a_virtual_ip_as_the_arrival_address():
             pytest.skip("127.0.0.2 is not reachable on this host: %s" % (exc,))
         finally:
             sender.close()
-        if packet.local_address is None:
+        if packet.destination is None:
             pytest.skip("no arrival address reported")
-        assert str(packet.local_address) == "127.0.0.2", (
+        assert str(packet.destination) == "127.0.0.2", (
             "the wildcard socket reported %r, losing which address the client "
-            "actually addressed" % (packet.local_address,)
+            "actually addressed" % (packet.destination,)
         )
 
 

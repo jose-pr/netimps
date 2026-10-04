@@ -67,6 +67,7 @@ from netimps import (
     is_local_address,
     is_valid,
     is_wildcard,
+    is_unicast,
     bind,
     join_host,
     max_udp_payload,
@@ -426,3 +427,22 @@ assert_type(is_broadcast("10.0.0.255"), bool)
 assert_type(bind("::1", 0), socket.socket)
 assert_type(bind(family=None, connreset=None), socket.socket)
 assert_type(bind("", 67, family=socket.AF_INET, connreset=False), socket.socket)
+
+
+# `destination` is the address the datagram was sent to, `is_unicast` is three
+# valued (unknown without pktinfo), and `datagrams` takes a callable that
+# returns whether to carry on.
+def _datagram_destination(packet: Datagram) -> None:
+    assert_type(packet.destination, Optional[IPAddress])
+    assert_type(packet.is_unicast, Optional[bool])
+    assert_type(is_unicast("10.0.0.5"), bool)
+    assert_type(
+        is_unicast(packet.destination or "::", packet.interface, cache=True), bool
+    )
+
+
+async def _datagrams_on_error(endpoint: UDPEndpoint) -> None:
+    async for packet in endpoint.datagrams(
+        on_error=lambda exc: isinstance(exc, OSError)
+    ):
+        assert_type(packet, Any)

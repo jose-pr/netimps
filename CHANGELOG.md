@@ -47,6 +47,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   non-`str`; `Host.try_parse(text, default=None)` joins the other two, whose
   `try_parse` gains `default=`. `Host.parse` refuses only empty or blank text.
 
+- **`is_unicast(address, interface=None, *, cache=False)` and `Datagram.is_unicast`**: false for the wildcard, a multicast group and a broadcast (limited or subnet), true otherwise. `Datagram.is_unicast` is `None` when there was no pktinfo to say where the datagram went.
+
+- **`UDPEndpoint.datagrams(*, on_error=None)`**: a callable given the exception from a failed receive; return true to carry on with the next datagram. Without it the loop still stops at the first error.
+
 - Four aliases that already appeared in public signatures are exported:
   `InterfaceLike` (what names a local interface), `InterfaceQuery` (what
   `get_interface` looks up), `PortsLike` and `SocketAddress`.
@@ -87,6 +91,7 @@ probe says so in its prefix.
 | `wait_for_port(connect_timeout=)` (one attempt) | `wait_for_port(timeout=)` |
 | `PingResult.rtt_ms` (milliseconds) | `PingResult.rtt` (seconds) |
 | `PingResult.host`, `PingResult(host=)` | `PingResult.dst`, `PingResult(dst=)` |
+| `Datagram.local_address`, `Datagram(local_address=)` | `Datagram.destination`, `Datagram(destination=)` (the address the datagram was sent *to*) |
 
 ### Changed
 
@@ -101,6 +106,7 @@ probe says so in its prefix.
   function recognises, keeping its `OSError` subclass and `errno`;
   `set_buffer_size` logs one `WARNING` per socket when the kernel grants less
   than was asked.
+- **`UDPEndpoint.send(src=<address>)` enumerates no interfaces.** An address `src` is used as given and the kernel picks the adapter (a `%zone` still names one); a MAC or an adapter name still resolves, and an `Interface` still pins the adapter as well.
 - **`Host`, `MACAddress`, `PingResult`, `Route` and `Interface` are read-only.**
   Assigning to or deleting any attribute raises `AttributeError`; build a new
   value instead. All six value types (`FQDN` already was) copy and pickle.

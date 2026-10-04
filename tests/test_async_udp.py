@@ -84,7 +84,7 @@ def test_arecv_delivers_a_datagram_with_pktinfo_on_every_loop(factory):
     assert packet.truncated is False
     if supports:
         assert packet.interface_index != 0, "the arrival interface was lost"
-        assert packet.local_address is not None
+        assert packet.destination is not None
 
 
 @pytest.mark.parametrize("factory", LOOP_FACTORIES, ids=LOOP_IDS)

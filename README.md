@@ -178,7 +178,8 @@ netimps.retry(lambda: netimps.tcp_check("example.com", 443), attempts=3)
 | `ping`, `PingResult` | reachability with RTT and TTL |
 | `bind`, `bind_error_hint`, `get_interface`, `iter_interfaces`, `is_local_address` | socket creation and local membership |
 | `get_source_ip`, `get_free_port`, `tcp_check`, `wait_for_port` | socket helpers |
-| `UDPEndpoint`, `Datagram` | UDP receive with arrival interface (`IP_PKTINFO`), every platform |
+| `UDPEndpoint`, `Datagram` | UDP receive with arrival interface (`IP_PKTINFO`), every platform; `Datagram.destination` and `.is_unicast` say where it was sent |
+| `is_broadcast`, `is_unicast` | was a destination a broadcast / one host (not broadcast, multicast or the wildcard) |
 | `recvmsg`, `sendmsg`, `CMSG_LEN`, `CMSG_SPACE` | ancillary-data messaging, Windows included |
 | `Host` | hostname-or-address value type; `.fqdn()` narrows a name |
 | `FQDN`, `FQDNLike` | domain name value type with label algebra (inverted from `pathlib`) |

@@ -115,6 +115,7 @@ map:
 | `get_interfaces`, `Interface`, `iter_addresses` | native cross-platform NIC discovery; `cache=`/`clear_interface_cache` make a per-packet lookup affordable (97x measured) |
 | `clear_interface_cache`, `INTERFACE_CACHE_TTL`, `interface_enumerations` | invalidate the shared enumeration cache, its default 1 s TTL, and a count of the enumerations actually performed |
 | `is_broadcast` | is this an IPv4 broadcast, limited or subnet (needs interface prefixes) |
+| `is_unicast` | was this destination one host: not broadcast, multicast or the wildcard; `Datagram.is_unicast` asks it of `Datagram.destination` |
 | `is_link_scoped` | scope classification |
 | `collapse`, `subtract` | CIDR set maths |
 | `split_host` | `host:port` splitting, IPv6-aware |
@@ -132,7 +133,7 @@ map:
 | `UDPEndpoint.reply_socket` | a socket bound to answer *from* the address the client addressed |
 | `has_pktinfo` | can this host report a datagram's arrival interface — ask before choosing a wildcard or per-address bind |
 | `Datagram.reply_address` | the sender in the family `reply_socket` chose — what to pass to `sendto`, since a dual-stack listener's v4 peer arrives as a v6 4-tuple |
-| `UDPEndpoint.arecv`, `.datagrams` | `recv` awaited / `async for`; pktinfo survives even on the Windows Proactor loop |
+| `UDPEndpoint.arecv`, `.datagrams` | `recv` awaited / `async for`; pktinfo survives even on the Windows Proactor loop; `datagrams(on_error=)` carries on past a receive error the caller chooses to ignore |
 | `recvmsg`, `sendmsg`, `CMSG_LEN`, `CMSG_SPACE`, `has_recvmsg` | ancillary-data messaging on **every** platform, Windows included (via `WSARecvMsg`/`WSASendMsg`) |
 | `patch_socket_module`, `is_socket_patched` | install/remove the default-on `socket` patch that gives Windows the stdlib method names |
 | `Host` | hostname-or-address value type; `.fqdn()` narrows a name to `FQDN` |
@@ -356,6 +357,8 @@ Tests live in `tests/` and run via `pytest -q` from a checkout;
 | `test_sweep_gaps.py` | the gaps the 2026-10-03 consumer sweep found; each test pins the *difference* from the hand-rolled version |
 | `test_async_udp.py` | `arecv`/`datagrams` on a **real loop**, both Windows loop types, and no leaked threads |
 | `test_server_helpers.py` | `reply_socket`, `is_broadcast`, `max_udp_payload` |
+| `test_udp_datagram.py` | `send(src=<address>)` without enumeration, truncation on both receive paths, `Datagram.destination` / `is_unicast`, `datagrams(on_error=)` |
+| `test_bind_defaults.py` | `bind()` family inference, the `connreset` default, the hint in the error message, the buffer warning |
 | `test_msg.py` | `recvmsg`/`sendmsg` on every platform, and the `socket` patch (install, reverse, no-op on POSIX) |
 | `test_cli.py` | the CLI; skips itself when the `cli` extra is absent |
 | `test_platform_smoke.py` | the **only** non-mocked tests — the real `ping`/`ping6` binary and real loopback sockets |

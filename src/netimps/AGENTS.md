@@ -1317,7 +1317,7 @@ takes "another name".
 
 **`is_broadcast(address: IPAddressLike, interface: Interface | None = None, *, cache=False)`** — whether *address* is an IPv4
 broadcast, limited **or** subnet. What a wildcard-bound server asks about
-`Datagram.local_address` before answering: RFC 1123 says a TFTP server ignores a
+`Datagram.destination` before answering: RFC 1123 says a TFTP server ignores a
 broadcast request, and DHCP must tell a broadcast DISCOVER from a unicast RENEW.
 
 - `255.255.255.255` needs no context, and short-circuits before any lookup. The
@@ -1339,6 +1339,16 @@ broadcast request, and DHCP must tell a broadcast DISCOVER from a unicast RENEW.
 - Never raises; an address it cannot parse is not a broadcast.
 - A `/31` or `/32` is skipped: it has no broadcast address distinct from its
   hosts, though `broadcast_address` still answers for one.
+
+**`is_unicast(address: IPAddressLike, interface: Interface | None = None, *, cache=False) -> bool`**
+— whether a datagram sent to *address* was meant for one host: `False` for the
+wildcard (`0.0.0.0`, `::`), a multicast group and a broadcast (limited or
+subnet), `True` otherwise. The "answer it or ignore it" test a DHCP or TFTP
+server runs on `Datagram.destination`, in place of `is_broadcast` and
+`is_multicast` plus a wildcard test. `interface` and `cache` mean what they do
+on `is_broadcast`, the only part that can enumerate. A v4-mapped address is
+judged as the v4 address inside; a `%zone` is ignored; never raises, and an
+address that cannot be parsed is not unicast.
 
 **`max_udp_payload(mtu, *, ipv6=False)`** — the largest UDP payload that fits
 without fragmenting: `mtu - ip_header - 8`, so `1472` for a 1500 MTU and `1452`
@@ -1500,8 +1510,10 @@ protocols, where a wildcard-bound server otherwise cannot tell which network a
 request came from.
 
 `recv(bufsize=65535, resolve_interface=True) -> Datagram`, a `NamedTuple` of
-`.data`, `.sender`, `.local_address`, `.interface_index`, `.interface`,
-`.control_truncated` and `.truncated`. `send(data, address, port, src=None) -> int` pins the
+`.data`, `.sender`, `.destination`, `.interface_index`, `.interface`,
+`.control_truncated` and `.truncated`, plus the property `.is_unicast`
+(`is_unicast(destination, interface)`, or `None` when `destination` is unknown
+because there was no pktinfo). `send(data, address, port, src=None) -> int` pins the
 outgoing interface; `address` accepts `HostLike` and `src` the usual loose
 interface spec (`Interface`, MAC, adapter name or address). `close()` closes
 the wrapped socket, and the endpoint is a **context manager**
@@ -1527,7 +1539,7 @@ wrapped socket expires, on every supported Python (before 3.10
   49 and 50) **and** the struct layout (`in_pktinfo` is index-then-addresses,
   `in6_pktinfo` is the 16-byte address **first**, then the index). An IPv6
   endpoint therefore reports a real `interface_index`, `interface` and
-  `local_address`, where it used to report `0`/`None`/`None` while claiming
+  `destination`, where it used to report `0`/`None`/`None` while claiming
   `has_pktinfo`.
 - **Two honest flags, decided once at construction from the socket's own
   family.** `has_pktinfo` — `recv` will report the arrival interface;
@@ -1568,13 +1580,21 @@ wrapped socket expires, on every supported Python (before 3.10
   available. An `OSError` from the kernel, meaning a source this host cannot
   send from, propagates; only platform incapability degrades to `sendto`.
 - **`async arecv(bufsize=65535, resolve_interface=True)`** and
-  **`datagrams(...)`** — `recv()` awaited, and an `async for` over arrivals:
+  **`datagrams(bufsize=65535, resolve_interface=True, *, on_error=None)`** —
+  `recv()` awaited, and an `async for` over arrivals:
 
   ```python
   async for packet in endpoint.datagrams():
       with endpoint.reply_socket(packet) as reply:
           reply.sendto(answer(packet), packet.reply_address)
   ```
+
+  `datagrams()` stops at the first receive error, closing the loop's `async for`
+  with that exception: a loop that swallows errors is how a dead server looks
+  healthy. `on_error` opts out per error: it is called with the exception and
+  returns true to carry on with the next datagram, false to stop with that error.
+  The caller decides, so log or count inside it. The error a `close()` causes
+  ends the loop quietly and does not reach it.
 
   **Pktinfo survives on every loop type**, which is not free. The Windows default
   `ProactorEventLoop` raises `NotImplementedError` from `add_reader`, and its own
@@ -1661,7 +1681,7 @@ wrapped socket expires, on every supported Python (before 3.10
   > that went wrong. With pktinfo, the `AF_INET` socket was right but
   > `datagram.sender` was still the v6 4-tuple, so the `sendto` shown above
   > raised `TypeError: AF_INET address must be a pair (host, port)`. Without
-  > pktinfo there was no `local_address`, both fallbacks used the *listener's*
+  > pktinfo there was no `destination`, both fallbacks used the *listener's*
   > family, and the resulting `AF_INET6` socket has `IPV6_V6ONLY=1` on Windows
   > (the platform default, which `bind()` does not clear) — so `sendto` to a
   > mapped address failed with `WinError 10049` and the exchange silently never
@@ -1718,7 +1738,10 @@ wrapped socket expires, on every supported Python (before 3.10
   fatal belongs to the protocol, not here. It is reported on the no-pktinfo path
   too, which goes through `recvmsg` with a zero-length control buffer rather than
   `recvfrom` precisely because `recvfrom` cannot report it — losing the interface
-  is a documented degrade, losing this is silent data loss.
+  is a documented degrade, losing this is silent data loss. **Windows included**:
+  a bare `sock.recvfrom(576)` of a larger datagram raises `WinError 10040`
+  (`WSAEMSGSIZE`), while `recv()` returns the first 576 octets with
+  `truncated=True`, so no `WSAEMSGSIZE` handling is needed around it.
 - **`control_truncated`** reports `MSG_CTRUNC`: the kernel had more ancillary
   data than the buffer held. When it is `True` and the interface fields are
   empty, they are empty because something was dropped. The buffer is sized for
@@ -1728,12 +1751,15 @@ wrapped socket expires, on every supported Python (before 3.10
   discarded the pktinfo.
 - **A dual-stack `AF_INET6` socket needs only its own option.** An IPv4 arrival
   then reports the v4-mapped form (`::ffff:10.0.0.1`) in both `.sender` and
-  `.local_address`.
-- `.local_address` for a broadcast is the **broadcast** address, not the
+  `.destination`.
+- `.destination` for a broadcast is the **broadcast** address, not the
   interface's own — use `.interface` to identify the adapter.
 - Pass `resolve_interface=False` in a hot loop and use `.interface_index` —
-  enumeration is a syscall. Resolving a MAC, adapter name or bare address in
-  `send(src=)` enumerates too; pass an `Interface` in a send loop to avoid it.
+  enumeration is a syscall. Resolving a MAC or an adapter name in `send(src=)`
+  enumerates too; pass an `Interface` in a send loop to avoid it. A `src` that is
+  an **address** is used as given and enumerates nothing — the kernel then picks
+  the adapter (a `%zone` still names one), so pass an `Interface` when the adapter
+  must be pinned as well.
 - Wraps rather than subclasses the socket; the raw one stays on `.socket`.
 
 ## Retry

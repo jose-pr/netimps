@@ -1189,7 +1189,7 @@ def is_broadcast(
     """Whether *address* is an IPv4 broadcast address, limited or subnet.
 
     The question a wildcard-bound UDP server asks about
-    :attr:`netimps.Datagram.local_address` before answering: RFC 1123 says a TFTP
+    :attr:`netimps.Datagram.destination` before answering: RFC 1123 says a TFTP
     server must ignore a broadcast request, and DHCP has to tell a broadcast
     DISCOVER from a unicast RENEW.
 
@@ -1253,6 +1253,39 @@ def is_broadcast(
             if parsed == network.broadcast_address:
                 return True
     return False
+
+
+def is_unicast(
+    address: "IPAddressLike",
+    interface: "Optional[Interface]" = None,
+    *,
+    cache: "Union[bool, float]" = False,
+) -> bool:
+    """Whether a datagram sent to *address* was meant for one host.
+
+    False for the wildcard, a multicast group, and a broadcast (limited or
+    subnet); true for everything else. This is the "answer it or ignore it"
+    question a DHCP or TFTP server asks of :attr:`netimps.Datagram.destination`,
+    which callers wrote as ``not (is_broadcast(...) or is_multicast(...))`` plus
+    a wildcard test of their own.
+
+    *interface* and *cache* mean what they mean on :func:`is_broadcast`, the one
+    part that can enumerate. A v4-mapped address is judged as the v4 address
+    inside it. Never raises: an address that cannot be parsed is not unicast.
+    """
+    from ._ip import IPAddress, IPv4Address, IPv6Address, is_wildcard
+
+    if isinstance(address, (IPv4Address, IPv6Address)):
+        parsed = address
+    else:
+        candidate = try_parse(str(address).split("%", 1)[0], IPAddress)
+        if candidate is None:
+            return False
+        parsed = candidate
+    parsed = unmap(parsed)
+    if is_wildcard(parsed) or parsed.is_multicast:
+        return False
+    return not is_broadcast(parsed, interface, cache=cache)
 
 
 def iter_addresses(

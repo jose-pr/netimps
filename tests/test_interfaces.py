@@ -937,7 +937,7 @@ def test_reply_socket_does_not_enumerate_per_datagram(monkeypatch):
         datagram = Datagram(
             data=b"",
             sender=("127.0.0.1", 1),
-            local_address=netimps.parse("127.0.0.1"),
+            destination=netimps.parse("127.0.0.1"),
             interface=None,
         )
         for _ in range(5):
