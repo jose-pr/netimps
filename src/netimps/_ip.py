@@ -479,7 +479,34 @@ def _parse_port(raw: str, original: object) -> int:
     return _port_number(int(raw), original)
 
 
-def is_link_scoped(ip: IPAddress) -> bool:
+def _as_address(value: object) -> "IPAddress":
+    """The address ``value`` stands for, for the classifiers.
+
+    Takes what :data:`IPAddressLike` does, and an interface (its ``.ip``), a
+    :class:`Host` or an :class:`FQDN` holding address text.
+
+    :raises TypeError: for a network, or a value of any other type.
+    :raises NetimpsValueError: for text that is no address.
+    """
+    from ._parse import parse
+
+    if isinstance(value, (IPv4Address, IPv6Address)):
+        return value
+    if isinstance(value, (IPv4Interface, IPv6Interface)):
+        return value.ip
+    if isinstance(value, (IPv4Network, IPv6Network)):
+        raise TypeError("expected an address, not a network (%r)" % (value,))
+    if isinstance(value, (Host, FQDN)):
+        value = str(value)
+    if isinstance(value, bool) or not isinstance(value, (str, int, bytes)):
+        raise TypeError(
+            "expected an address (text, int, bytes or an address object), not %r"
+            % (type(value).__name__,)
+        )
+    return parse(value, IPAddress)
+
+
+def is_link_scoped(ip: "IPAddressLike") -> bool:
     """True if ``ip`` is confined to link scope or narrower.
 
     Covers loopback (``127/8``, ``::1`` -- host scope) and link-local
@@ -500,7 +527,8 @@ def is_link_scoped(ip: IPAddress) -> bool:
        ``192.168/16``) are globally *scoped* and routable within a site, so
        they return ``False`` -- use ``ip.is_private`` for that question.
     """
-    return ip.is_loopback or ip.is_link_local
+    address = unmap(_as_address(ip))
+    return address.is_loopback or address.is_link_local
 
 
 # ---------------------------------------------------------------------------
@@ -547,9 +575,13 @@ class Host:
     _resolved: "Optional[IPAddress]"
     _attempted: bool
 
-    def __init__(self, value: "Optional[Union[str, Host]]") -> None:
+    def __init__(self, value: "Optional[HostLike]") -> None:
         if isinstance(value, Host):
             value = value.value
+        elif value is not None:
+            # An interface is its address and a network is no host, as for
+            # every `dst` parameter.
+            value = _dst_argument(value)
         object.__setattr__(self, "value", "" if value is None else str(value).strip())
         object.__setattr__(self, "_resolved", None)
         object.__setattr__(self, "_attempted", False)
@@ -949,7 +981,7 @@ def join_host(host: "HostLike", port: "Optional[int]" = None) -> str:
     return "%s:%d" % (text, _port_number(port, port))
 
 
-def unmap(value: "Union[str, IPAddress]") -> "IPAddress":
+def unmap(value: "IPAddressLike") -> "IPAddress":
     """Collapse an IPv4-mapped IPv6 address to plain IPv4; pass anything else through.
 
     ``::ffff:10.0.0.5`` is how a dual-stack socket reports an IPv4 peer, and
@@ -975,15 +1007,10 @@ def unmap(value: "Union[str, IPAddress]") -> "IPAddress":
 
     One address has many spellings, and only the parsed form sees through them.
 
-    :raises ValueError: if ``value`` is not an address at all.
+    :raises NetimpsValueError: for text that is no address.
+    :raises TypeError: for a value that is no address type.
     """
-    from ._parse import parse
-
-    address = (
-        value
-        if isinstance(value, (IPv4Address, IPv6Address))
-        else parse(str(value), IPAddress)
-    )
+    address = _as_address(value)
     if isinstance(address, IPv6Address):
         mapped = address.ipv4_mapped
         if mapped is not None:
@@ -991,29 +1018,27 @@ def unmap(value: "Union[str, IPAddress]") -> "IPAddress":
     return address
 
 
-def is_wildcard(value: "Union[str, IPAddress, None]") -> bool:
+def is_wildcard(value: "Union[IPAddressLike, None]") -> bool:
     """Whether ``value`` means "every local address" -- the bind-anything form.
 
     True for ``""``, ``None``, ``"0.0.0.0"``, ``"::"`` and any other spelling
-    whose address form is unspecified (``"::0"``, ``"0000::0"``)::
+    whose address form is unspecified (``"::0"``, ``"0000::0"``), and for the
+    v4-mapped ``::ffff:0.0.0.0``::
 
         is_wildcard("")           # True -- what bind("") means
         is_wildcard("0.0.0.0")    # True
         is_wildcard("::")         # True
         is_wildcard("127.0.0.1")  # False
 
-    A ``%zone`` suffix is stripped first, since a zone does not change whether
-    the address is unspecified. Never raises: anything unparseable is simply not
-    a wildcard, which keeps this usable in a branch without a guard.
+    A ``%zone`` suffix does not change whether the address is unspecified.
+
+    :raises NetimpsValueError: for text that is no address.
+    :raises TypeError: for a value of another type.
     """
     if value is None:
         return True
-    if isinstance(value, (IPv4Address, IPv6Address)):
-        return value.is_unspecified
-    text = str(value).strip()
-    if not text:
-        return True
-    try:
-        return _ipaddress.ip_address(text.split("%", 1)[0]).is_unspecified
-    except ValueError:
-        return False
+    if isinstance(value, str):
+        value = value.strip().split("%", 1)[0]
+        if not value:
+            return True
+    return bool(unmap(_as_address(value)).is_unspecified)

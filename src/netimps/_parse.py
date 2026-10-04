@@ -9,6 +9,7 @@ Re-exported from :mod:`netimps`.
 
 from __future__ import annotations
 
+import inspect as _inspect
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -277,6 +278,49 @@ def parse(  # type: ignore[no-redef]  # the overloads above are the signature
     return result
 
 
+def _check_options(target: "Any", value: object, options: "Dict[str, Any]") -> None:
+    """:class:`TypeError` for an option the callable that will receive it does
+    not take, so a caller's mistake is not read as a rejected value.
+
+    Skipped when the callable has a ``**`` parameter or no inspectable
+    signature.
+    """
+    if not options:
+        return
+    try:
+        wanted = _CONCRETE.get(target)
+        builder = _BUILDER_TABLE.get(wanted if wanted is not None else target)
+    except TypeError:
+        return
+    if builder is not None:
+        receiver: "Any" = builder
+    elif (
+        isinstance(value, str)
+        and isinstance(target, _ClassType)
+        and issubclass(target, _TEXT_TYPES)
+    ):
+        receiver = target.parse
+    else:
+        receiver = target
+    try:
+        parameters = list(_inspect.signature(receiver).parameters.values())
+    except (TypeError, ValueError):
+        return
+    if any(p.kind is p.VAR_KEYWORD for p in parameters):
+        return
+    names = {
+        p.name
+        for p in parameters
+        if p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)
+    }
+    for key in options:
+        if key not in names:
+            raise TypeError(
+                "%s() got an unexpected keyword argument %r"
+                % (getattr(receiver, "__qualname__", repr(receiver)), key)
+            )
+
+
 #: Sentinel distinguishing "the parse returned None" from "it rejected the
 #: input" -- ``None`` cannot do that job, since it is a legitimate result.
 _MISSING = object()
@@ -332,6 +376,10 @@ def try_parse(  # type: ignore[no-redef]  # the overloads above are the signatur
     # parse itself is guarded.
     target: Any = type
     _check_parser(target)
+    kwargs = dict(options)
+    if strict is not None:
+        kwargs["strict"] = strict
+    _check_options(target, value, kwargs)
     try:
         return parse(value, target, strict=strict, **options)
     except (ValueError, TypeError):

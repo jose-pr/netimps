@@ -567,9 +567,15 @@ def test_ipv6_has_no_broadcast():
     assert not is_broadcast("::1")
 
 
-def test_unicast_and_junk_are_not_broadcasts():
-    for value in ("127.0.0.1", "10.0.0.5", "nonsense", "", "a.b.c.d"):
+def test_unicast_addresses_are_not_broadcasts():
+    for value in ("127.0.0.1", "10.0.0.5"):
         assert not is_broadcast(value)
+
+
+def test_text_that_is_no_address_is_not_a_broadcast_question():
+    for value in ("nonsense", "", "a.b.c.d"):
+        with pytest.raises(netimps.NetimpsValueError):
+            is_broadcast(value)
 
 
 def test_a_subnet_broadcast_needs_prefixes_and_is_found_with_them():

@@ -145,12 +145,16 @@ def test_the_destination_field_replaces_local_address():
         ("::ffff:224.0.0.1", False),
         ("::ffff:255.255.255.255", False),
         ("::ffff:10.0.0.5", True),
-        ("not an address", False),
     ],
 )
 def test_is_unicast_is_not_broadcast_multicast_or_the_wildcard(address, expected):
     """A server wrote ``not (is_broadcast(a) or is_multicast(a) or wildcard)``."""
     assert is_unicast(address) is expected
+
+
+def test_is_unicast_raises_for_text_that_is_no_address():
+    with pytest.raises(netimps.NetimpsValueError):
+        is_unicast("not an address")
 
 
 def test_is_unicast_judges_a_subnet_broadcast_by_the_given_interface():

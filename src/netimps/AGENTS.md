@@ -31,7 +31,8 @@ The package is consistent about what the first argument means:
 | `address` / `ip` | an address being **classified** (no DNS) | `get_interface`, `iter_interfaces`, `is_local_address`, `is_multicast`, `is_link_scoped` |
 
 `dst`/`src` are abbreviated symmetrically, matching packet-header convention.
-A `dst` accepts a hostname; an `address` does not.
+A `dst` accepts a hostname; an `address` does not, and a classifier given text
+that is no address raises `NetimpsValueError`.
 
 **Options are keyword-only.** A function takes the thing it acts on (and, where
 the signature below shows it, one more operand) positionally; every other
@@ -135,6 +136,10 @@ keyword. Key behaviours:
   `bytes` MAC, a `Host` or `FQDN` already built) goes to the constructor.
   `try_parse(None, MACAddress)` is `None` — the generic form answers `default`
   for any object — whereas `MACAddress.try_parse(None)` raises `TypeError`.
+- **An option the callable does not take raises `TypeError` from `try_parse` and
+  `is_valid` too**, before the guarded call: `try_parse("10.0.0.5", IPAddress,
+  strict=True)` is a caller's bug, not a rejected value, and is not `None`.
+  Skipped for a callable with a `**` parameter or no inspectable signature.
 
 - **Every type accepts the full stdlib input range** — `str`, `int`, packed
   `bytes`, or an existing object — because the builders are `ipaddress.ip_*`,
@@ -307,9 +312,18 @@ so nothing is lost. Pass an existing enumeration in a loop; it is a syscall.
 
 ## Address and network helpers
 
-- **`is_link_scoped(ip) -> bool`** — loopback (host scope) or link-local (link
-  scope): confined to this host or link. **Not "is private"** — RFC 1918 ranges
-  are globally scoped and return `False`.
+- **`is_link_scoped(ip: IPAddressLike) -> bool`** — loopback (host scope) or
+  link-local (link scope): confined to this host or link. **Not "is private"** —
+  RFC 1918 ranges are globally scoped and return `False`. A v4-mapped address is
+  judged as the v4 address inside, the same on every Python.
+- **One rule for the classifiers** (`is_link_scoped`, `is_wildcard`,
+  `is_multicast`, `is_local_address`, `is_broadcast`, `is_unicast`, and `unmap`):
+  each takes `IPAddressLike` (text, `int`, packed `bytes`, an address object; an
+  interface is read as its `.ip`) and raises `NetimpsValueError` for text that is
+  no address, and `TypeError` for a network or a value of another type
+  (`None`, `float`, `bool`, `list`). `is_wildcard` alone also takes `None` and
+  blank text, which mean "every address". `is_local_host` alone takes a name:
+  it never raises, and anything that is not a host is `False`.
 - **`collapse(networks) -> List[IPNetwork]`** — merge adjacent/overlapping
   networks into the minimal equivalent list. Mixed families collapse
   independently.
@@ -358,12 +372,13 @@ so nothing is lost. Pass an existing enumeration in a loop; it is a syscall.
   `startswith("::ffff:") and "." in text` check leaves every one untouched:
   `::FFFF:10.0.0.5` (case), `::ffff:0:1` (no dot), `0:0:0:0:0:ffff:0a00:0005`
   (expanded). One address has many spellings; only the parsed form sees through
-  them. Raises `ValueError` if the input is not an address.
-- **`is_wildcard(value) -> bool`** — whether a value means "every local
-  address": `""`, `None`, `"0.0.0.0"`, `"::"`, and any other spelling whose
-  address form is unspecified. A `%zone` is stripped first. **Never raises** —
-  anything unparseable is simply not a wildcard, so it stays usable in a branch
-  without a guard. Agrees with what `bind("")` treats as the wildcard.
+  them. Takes `IPAddressLike`; raises `NetimpsValueError` for text that is no
+  address.
+- **`is_wildcard(value: IPAddressLike | None) -> bool`** — whether a value
+  means "every local address": `""`, `None`, `"0.0.0.0"`, `"::"`, the v4-mapped
+  `::ffff:0.0.0.0`, and any other spelling whose address form is unspecified. A
+  `%zone` is stripped first. Raises `NetimpsValueError` for text that is no
+  address. Agrees with what `bind("")` treats as the wildcard.
 - **`split_zone(text) -> (host, zone | None)`** — split an IPv6 `%zone` suffix
   off a host: `"fe80::1%eth0"` → `("fe80::1", "eth0")`, `"10.0.0.5"` →
   `("10.0.0.5", None)`. Use it before `try_parse` or a comparison, because
@@ -1058,8 +1073,8 @@ at least 3 there.
   common example), so use this plural form when every owner matters.
 - **`is_local_address(address) -> bool`** — true only for loopback or an
   address assigned to a local adapter. Private, link-local, on-link, routable
-  or reachable alone do not count. Malformed input raises like `parse`;
-  loopback answers before interface discovery.
+  or reachable alone do not count. Text that is no address raises
+  `NetimpsValueError`; loopback answers before interface discovery.
 - **`is_local_host(host, *, resolve=False, cache=False) -> bool`** — whether a
   host string names this machine. True for a literal `is_local_address` accepts
   (zone ignored, v4-mapped judged as v4), for `localhost` and `*.localhost`, and
@@ -1284,7 +1299,8 @@ accepts a scheme name too; passing both raises `ValueError`.
 - **`join_group(sock, group, *, interface=None)`** / **`leave_group(...)`** —
   closing the socket drops membership too, so `leave_group` is only needed to
   leave while keeping the socket open.
-- **`is_multicast(address) -> bool`** — `224.0.0.0/4` or `ff00::/8`; never raises.
+- **`is_multicast(address: IPAddressLike) -> bool`** — `224.0.0.0/4` or
+  `ff00::/8`; an interface is read as its `.ip`.
   **Unmaps first**, so a v4-mapped group answers the same on every interpreter: the
   stdlib only began delegating a mapped address's `is_*` properties to the embedded
   v4 address in **3.13**, so `IPv6Address("::ffff:224.0.0.1").is_multicast` is `False`
@@ -1484,7 +1500,7 @@ broadcast request, and DHCP must tell a broadcast DISCOVER from a unicast RENEW.
   always `False`. `is_multicast` is the companion, kept separate on purpose: "do
   not answer this" is usually the `or` of the two, and one name meaning both would
   hide which matched.
-- Never raises; an address it cannot parse is not a broadcast.
+- Raises `NetimpsValueError` for text that is no address.
 - A `/31` or `/32` is skipped: it has no broadcast address distinct from its
   hosts, though `broadcast_address` still answers for one.
 
@@ -1495,8 +1511,8 @@ subnet), `True` otherwise. The "answer it or ignore it" test a DHCP or TFTP
 server runs on `Datagram.destination`, in place of `is_broadcast` and
 `is_multicast` plus a wildcard test. `interface` and `cache` mean what they do
 on `is_broadcast`, the only part that can enumerate. A v4-mapped address is
-judged as the v4 address inside; a `%zone` is ignored; never raises, and an
-address that cannot be parsed is not unicast.
+judged as the v4 address inside; a `%zone` is ignored; text that is no address
+raises `NetimpsValueError`.
 
 **`max_udp_payload(mtu, *, ipv6=False)`** — the largest UDP payload that fits
 without fragmenting: `mtu - ip_header - 8`, so `1472` for a 1500 MTU and `1452`
@@ -2035,7 +2051,10 @@ returns to the base the moment the peer moves the transfer forward.
 
 ## Host
 
-**`Host(value)`** — a host named by either an address or a hostname.
+**`Host(value)`** — a host named by either an address or a hostname. `value`
+is `HostLike` or `None`: an interface is reduced to its address as every `dst`
+parameter does (`Host(IPv4Interface("127.0.0.1/8"))` is `Host('127.0.0.1')`), and
+a network raises `TypeError`.
 
 `str(host)` is **always the original text**, so a URL can still be rebuilt when
 resolution fails: a failed lookup returns `None` for the address and the

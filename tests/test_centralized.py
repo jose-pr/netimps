@@ -405,7 +405,7 @@ def test_is_local_address_malformed_input_raises(monkeypatch):
     _mock_lookup_interfaces(monkeypatch)
     with pytest.raises(ValueError):
         is_local_address("not-an-address")
-    with pytest.raises(ValueError):
+    with pytest.raises(TypeError):
         is_local_address(None)
 
 

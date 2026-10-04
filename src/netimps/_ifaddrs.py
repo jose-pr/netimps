@@ -1218,16 +1218,12 @@ def is_broadcast(
     usually ``is_broadcast(a, i) or is_multicast(a)``, and one name meaning both
     would hide which of the two it matched.
 
-    Never raises: an address it cannot parse is not a broadcast.
+    :raises NetimpsValueError: for text that is no address.
+    :raises TypeError: for a network or a value of another type.
     """
-    from ._ip import IPAddress, IPv4Address
+    from ._ip import IPv4Address, _as_address
 
-    parsed = address if isinstance(address, (IPv4Address,)) else None
-    if parsed is None:
-        candidate = try_parse(str(address), IPAddress)
-        if candidate is None:
-            return False
-        parsed = unmap(candidate)  # type: ignore[assignment]
+    parsed = unmap(_as_address(address))
     if not isinstance(parsed, IPv4Address):
         return False
 
@@ -1271,18 +1267,16 @@ def is_unicast(
 
     *interface* and *cache* mean what they mean on :func:`is_broadcast`, the one
     part that can enumerate. A v4-mapped address is judged as the v4 address
-    inside it. Never raises: an address that cannot be parsed is not unicast.
-    """
-    from ._ip import IPAddress, IPv4Address, IPv6Address, is_wildcard
+    inside it.
 
-    if isinstance(address, (IPv4Address, IPv6Address)):
-        parsed = address
-    else:
-        candidate = try_parse(str(address).split("%", 1)[0], IPAddress)
-        if candidate is None:
-            return False
-        parsed = candidate
-    parsed = unmap(parsed)
+    :raises NetimpsValueError: for text that is no address.
+    :raises TypeError: for a network or a value of another type.
+    """
+    from ._ip import _as_address, is_wildcard
+
+    if isinstance(address, str):
+        address = address.split("%", 1)[0]
+    parsed = unmap(_as_address(address))
     if is_wildcard(parsed) or parsed.is_multicast:
         return False
     return not is_broadcast(parsed, interface, cache=cache)

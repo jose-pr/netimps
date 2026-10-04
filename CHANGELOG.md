@@ -379,6 +379,27 @@ probe says so in its prefix.
   and raises `NetimpsValueError` naming `port=` for another port, which
   `nslookup` cannot use; the chain leaves it out for such an entry.
 
+- **The classifiers answer the same on every Python and take one input rule.**
+  `is_link_scoped` and `is_wildcard` answered `True` on 3.13 and later and
+  `False` before for a v4-mapped address (`::ffff:127.0.0.1`,
+  `::ffff:0.0.0.0`); they unmap first. `is_link_scoped`, `is_wildcard`,
+  `is_multicast`, `is_local_address`, `is_broadcast`, `is_unicast` and `unmap`
+  take `IPAddressLike` (`is_link_scoped("127.0.0.1")` raised `AttributeError`,
+  `unmap(2130706433)` raised) and raise `NetimpsValueError` for text that is
+  no address, where `is_multicast`, `is_broadcast`, `is_unicast` and
+  `is_wildcard` answered `False`. A network or a value of another type is a
+  `TypeError` (`is_multicast(None)` was `False`). `join_group` and `leave_group`
+  still say "not a multicast group". `is_local_host` still never raises.
+
+- **`try_parse` and `is_valid` raise `TypeError` for an option the builder
+  does not take.** `try_parse("10.0.0.5", IPAddress, strict=True)` answered
+  `None` while `parse` raised.
+
+- **`Host(...)` reduces an interface to its address, as every `dst` parameter
+  does.** `Host(IPv4Interface("127.0.0.1/8"))` kept the text `127.0.0.1/8`, so
+  `.ip()` was `None` and the resolver was asked for it; a network is a
+  `TypeError`.
+
 ## [0.3.4] - 2026-10-03
 
 ### Fixed

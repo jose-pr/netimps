@@ -497,13 +497,22 @@ def test_services_reverse_lookup_names_the_protocol(monkeypatch):
         ("ff02::fb", True),
         ("10.0.0.1", False),
         ("127.0.0.1", False),
-        ("garbage", False),
-        ("", False),
-        (None, False),
     ],
 )
 def test_is_multicast(address, expected):
     assert is_multicast(address) is expected
+
+
+@pytest.mark.parametrize("address", ["garbage", "", "1.2.3"])
+def test_is_multicast_raises_for_text_that_is_no_address(address):
+    with pytest.raises(netimps.NetimpsValueError):
+        is_multicast(address)
+
+
+@pytest.mark.parametrize("address", [None, 1.5, ipaddress.ip_network("239.1.2.0/24")])
+def test_is_multicast_raises_type_error_for_a_non_address(address):
+    with pytest.raises(TypeError):
+        is_multicast(address)
 
 
 @pytest.mark.parametrize(
@@ -513,7 +522,6 @@ def test_is_multicast(address, expected):
         (ipaddress.ip_interface("239.1.2.3/32"), True),
         (ipaddress.ip_interface("ff02::fb/128"), True),
         (ipaddress.ip_interface("10.0.0.1/24"), False),
-        (ipaddress.ip_network("239.1.2.0/24"), False),  # a network is not an address
         (12345, False),
     ],
 )
@@ -523,7 +531,7 @@ def test_is_multicast_accepts_the_same_forms_as_its_callers(address, expected):
     Testing an ``IPv4Interface`` directly asked whether a *network* was
     multicast -- which it never is -- so a real group passed in the form every
     other function in this package accepts came back "not a multicast group".
-    A network still answers False, and nothing raises.
+    A network is not an address and raises `TypeError`.
     """
     assert is_multicast(address) is expected
 

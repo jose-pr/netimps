@@ -43,6 +43,7 @@ from ._ip import (
     IPInterface,
     IPNetwork,
     Host,
+    _as_address,
     _dst_argument,
     _host_text,
     split_host,
@@ -750,7 +751,8 @@ def is_local_address(
 
     This is deliberately narrower than private, link-local, on-link, routable
     or reachable: those properties do not mean an address belongs to this
-    machine. Malformed input raises exactly as :func:`parse` does.
+    machine. Text that is no address raises :class:`NetimpsValueError`, and a
+    network or a value of another type :class:`TypeError`.
 
     A ``%zone`` suffix is honoured rather than rejected (see
     :func:`iter_interfaces`), so the address ``getsockname()`` hands back can be
@@ -761,7 +763,7 @@ def is_local_address(
         only matters for the addresses that actually reach the adapter scan.
     """
 
-    wanted = parse(address, IPAddress)
+    wanted = _as_address(address)
     if wanted.is_loopback:
         return True
     return next(iter_interfaces(wanted, cache=cache), None) is not None

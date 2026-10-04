@@ -262,8 +262,6 @@ def test_unmap_is_the_inverse_of_the_dual_stack_mapping():
         ("0.0.0.0%eth0", True),
         ("127.0.0.1", False),
         ("::1", False),
-        ("example.com", False),
-        ("garbage", False),
         ("10.0.0.5", False),
     ],
 )
@@ -271,13 +269,16 @@ def test_is_wildcard(value, expected):
     assert is_wildcard(value) is expected
 
 
-def test_is_wildcard_accepts_parsed_addresses_and_never_raises():
+def test_is_wildcard_accepts_parsed_addresses():
     assert is_wildcard(ipaddress.IPv4Address("0.0.0.0")) is True
     assert is_wildcard(ipaddress.IPv6Address("::")) is True
     assert is_wildcard(ipaddress.IPv4Address("1.2.3.4")) is False
-    # Junk is simply not a wildcard, so this stays usable in a branch.
-    for junk in ("...", "999.999.999.999", "[::1", "a b c"):
-        assert is_wildcard(junk) is False
+
+
+def test_is_wildcard_raises_for_text_that_is_no_address():
+    for junk in ("example.com", "garbage", "...", "999.999.999.999", "[::1", "a b c"):
+        with pytest.raises(netimps.NetimpsValueError):
+            is_wildcard(junk)
 
 
 def test_is_wildcard_agrees_with_what_bind_treats_as_the_wildcard():

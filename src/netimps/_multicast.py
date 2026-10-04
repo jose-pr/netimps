@@ -38,13 +38,14 @@ from typing import List, Optional, Union
 from ._iface_spec import InterfaceLike, interface_address as _interface_address
 from ._iface_spec import interface_index as _interface_index
 from ._ifaddrs import get_interfaces
-from ._ip import HostLike, IPAddress
+from ._exceptions import NetimpsValueError
+from ._ip import IPAddress, IPAddressLike
 from ._parse import try_parse
 
 __all__ = ["multicast_socket", "join_group", "leave_group", "is_multicast"]
 
 
-def is_multicast(address: "HostLike") -> bool:
+def is_multicast(address: "IPAddressLike") -> bool:
     """True if ``address`` is a multicast group (``224.0.0.0/4`` or ``ff00::/8``).
 
     ::
@@ -53,42 +54,36 @@ def is_multicast(address: "HostLike") -> bool:
         is_multicast("ff02::fb")      # True
         is_multicast("10.0.0.1")      # False
 
-    Accepts everything :data:`HostLike` does, including an
-    :class:`IPv4Interface`/:class:`IPv6Interface` -- its ``.ip`` is tested::
+    Accepts an address as text, an ``int``, packed ``bytes`` or an address
+    object, and an :class:`IPv4Interface`/:class:`IPv6Interface`, whose ``.ip``
+    is tested::
 
         is_multicast(IPv4Interface("239.1.2.3/32"))   # True
 
     That matters because this is the gatekeeper :func:`join_group` and
-    :func:`leave_group` use. Testing the interface object directly asked
-    whether a *network* was multicast, which it never is, so a real group
-    passed in the form every other function here accepts was rejected as "not
-    a multicast group".
+    :func:`leave_group` use: testing the interface object directly asks whether
+    a *network* is multicast, which it never is.
 
-    Never raises: anything unparseable is ``False``.
+    A v4-mapped address is judged as the v4 address inside it, the same on
+    every Python (the stdlib delegates only from 3.13). A mapped group is a
+    real group -- it is how a dual-stack listener sees one.
+
+    :raises NetimpsValueError: for text that is no address.
+    :raises TypeError: for a network or a value of another type.
     """
+    from ._ip import _as_address, unmap
 
-    from ._ip import _dst_argument
+    return bool(unmap(_as_address(address)).is_multicast)
 
+
+def _require_group(group: object) -> None:
+    """:class:`ValueError` unless ``group`` is a multicast address."""
     try:
-        address = _dst_argument(address)
-    except (TypeError, ValueError):
-        return False
-    parsed = try_parse(address, IPAddress)
-    if parsed is None:
-        return False
-    # Unmap first, because the stdlib only started delegating `is_multicast`
-    # (and the other `is_*` properties) of a v4-mapped address to the embedded
-    # v4 address in **3.13**. Measured here: `IPv6Address("::ffff:224.0.0.1")`
-    # answers `is_multicast` False on 3.9 and True on 3.14, so trusting the
-    # property makes this function's answer depend on the interpreter.
-    #
-    # A v4-mapped group is a real group -- it is how a dual-stack listener sees
-    # one -- and `_is_repliable` inherits whatever this returns, so on 3.9-3.12
-    # the gap let a reply socket bind a mapped multicast destination.
-    # `is_broadcast` already unmaps, so this is also the consistent answer.
-    from ._ip import unmap
-
-    return bool(unmap(parsed).is_multicast)
+        found = is_multicast(group)  # type: ignore[arg-type]
+    except NetimpsValueError:
+        found = False
+    if not found:
+        raise ValueError("%r is not a multicast group" % (group,))
 
 
 #: Multicast scope values (low nibble of the address's second byte, RFC 4291):
@@ -184,8 +179,7 @@ def join_group(
     that resolves to no usable address (IPv4) or no index (IPv6), and
     :class:`OSError` if the kernel rejects the join.
     """
-    if not is_multicast(group):
-        raise ValueError("%r is not a multicast group" % (group,))
+    _require_group(group)
 
     ipv6 = ":" in group
     request = _membership_request(group, interface, ipv6)
@@ -203,8 +197,7 @@ def leave_group(
     Closing the socket drops membership too, so this is only needed to leave a
     group while keeping the socket open.
     """
-    if not is_multicast(group):
-        raise ValueError("%r is not a multicast group" % (group,))
+    _require_group(group)
 
     ipv6 = ":" in group
     request = _membership_request(group, interface, ipv6)
