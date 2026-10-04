@@ -7,6 +7,7 @@ import time as _time
 from typing import Any, List, Optional, Tuple
 from .._ip import HostLike, IPAddress, _dst_argument
 from .._parse import parse
+from .._ping import _probe_targets
 from .._scheme import coerce_port as _coerce_port
 
 #: Probe destination for "which way does traffic go by default?". A
@@ -30,16 +31,12 @@ def _resolve_targets(
     """``(family, sockaddr)`` pairs for ``dst``, in resolver order.
 
     One shared spelling of "resolve, honouring ``ipv6=``", reusing
-    :func:`netimps._ping._probe_targets` rather than a second copy:
+    :func:`netimps._ping._probe._probe_targets` rather than a second copy:
     ``gethostbyname`` is IPv4-only, so the family comes from ``getaddrinfo``.
-    The import is function-local only to keep the module import order free to
-    change; ``_ping`` does not import this module.
 
     Returns ``[]`` when nothing resolves, which every caller reads as "no
     answer" rather than raising.
     """
-    from .._ping import _probe_targets
-
     return _probe_targets(dst, port, ipv6, socktype)
 
 

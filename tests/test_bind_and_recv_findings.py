@@ -125,6 +125,7 @@ def test_recv_enumerates_once_for_many_packets(monkeypatch):
     controls the rate.
     """
     from netimps import _ifaddrs
+    from netimps._udp import _endpoint
 
     calls = []
     real = _ifaddrs.get_interfaces
@@ -133,7 +134,7 @@ def test_recv_enumerates_once_for_many_packets(monkeypatch):
         calls.append(1)
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(_ifaddrs, "get_interfaces", counting)
+    monkeypatch.setattr(_endpoint, "get_interfaces", counting)
 
     with UDPEndpoint(bind("127.0.0.1", 0)) as endpoint:
         if not endpoint.has_pktinfo:
@@ -161,11 +162,12 @@ def test_the_interface_cache_keeps_a_negative_answer(monkeypatch):
     full cost -- the expensive case becoming the common one.
     """
     from netimps import _ifaddrs
+    from netimps._udp import _endpoint
 
     calls = []
     real = _ifaddrs.get_interfaces
     monkeypatch.setattr(
-        _ifaddrs, "get_interfaces", lambda *a, **k: calls.append(1) or real(*a, **k)
+        _endpoint, "get_interfaces", lambda *a, **k: calls.append(1) or real(*a, **k)
     )
     with UDPEndpoint(bind("127.0.0.1", 0)) as endpoint:
         assert endpoint._interface_for(999999) is None
@@ -176,11 +178,12 @@ def test_the_interface_cache_keeps_a_negative_answer(monkeypatch):
 
 def test_resolve_interface_false_never_enumerates(monkeypatch):
     from netimps import _ifaddrs
+    from netimps._udp import _endpoint
 
     calls = []
     real = _ifaddrs.get_interfaces
     monkeypatch.setattr(
-        _ifaddrs, "get_interfaces", lambda *a, **k: calls.append(1) or real(*a, **k)
+        _endpoint, "get_interfaces", lambda *a, **k: calls.append(1) or real(*a, **k)
     )
     with UDPEndpoint(bind("127.0.0.1", 0)) as endpoint:
         endpoint.socket.settimeout(5.0)

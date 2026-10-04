@@ -39,7 +39,7 @@ from ._ifaddrs import InterfaceLike, get_interfaces
 from ._ifaddrs import interface_address as _interface_address
 from ._ifaddrs import interface_index as _interface_index
 from ._exceptions import NetimpsValueError
-from ._ip import IPAddress, IPAddressLike
+from ._ip import IPAddress, IPAddressLike, _as_address, unmap
 from ._parse import try_parse
 
 __all__ = ["multicast_socket", "join_group", "leave_group", "is_multicast"]
@@ -71,8 +71,6 @@ def is_multicast(address: "IPAddressLike") -> bool:
     :raises NetimpsValueError: for text that is no address.
     :raises TypeError: for a network or a value of another type.
     """
-    from ._ip import _as_address, unmap
-
     return bool(unmap(_as_address(address)).is_multicast)
 
 

@@ -5,9 +5,11 @@ from __future__ import annotations
 import socket as _socket
 from typing import Iterable, Optional, Union
 
-from .._ifaddrs import Interface
-from .._ip import IPAddress, IPv4Address, IPv6Address
+from .._exceptions import AddressInUseError
+from .._ifaddrs import Interface, is_unicast
+from .._ip import IPAddress, IPv4Address, IPv6Address, unmap
 from .._parse import parse, try_parse
+from .._sockets import bind as _bind
 from ._datagram import Datagram
 
 
@@ -33,8 +35,6 @@ class _ReplyMixin:
         Falls back to the socket's own family when the sender cannot be parsed,
         the only thing left to guess with.
         """
-        from .._ip import unmap
-
         sender = datagram.sender
         host = sender[0] if isinstance(sender, tuple) and sender else None
         if isinstance(host, str):
@@ -63,8 +63,6 @@ class _ReplyMixin:
         :func:`netimps.is_broadcast` is for. Passing ``interface`` keeps that
         check off the enumerating path.
         """
-        from .._ifaddrs import is_unicast
-
         return is_unicast(local, interface, cache=True)
 
     def reply_socket(
@@ -142,8 +140,6 @@ class _ReplyMixin:
         :raises AddressInUseError: every port was held on an otherwise bindable
             address. Deliberately *not* a fallback to a different address.
         """
-        from .._ip import unmap
-
         # **The sender's real family decides the reply socket's**, not the
         # listener's. A dual-stack `AF_INET6` listener sees a v4 client as
         # `::ffff:a.b.c.d`, and a reply socket in the listener's family cannot
@@ -195,9 +191,6 @@ class _ReplyMixin:
 
         # Fallback 2: the wildcard, which always binds.
         candidates.append((family, ""))
-
-        from .._sockets import bind as _bind
-        from .._exceptions import AddressInUseError
 
         if isinstance(port, int):
             ports: "tuple" = (port,)

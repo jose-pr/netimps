@@ -6,14 +6,8 @@ import socket as _socket
 import struct as _struct
 from typing import Optional, Tuple
 
-from .._ifaddrs import InterfaceLike
-from .._ip import (
-    HostLike,
-    IPAddress,
-    IPv4Address,
-    IPv6Address,
-    _dst_argument,
-)
+from .._ifaddrs import InterfaceLike, interface_address, interface_index
+from .._ip import HostLike, IPAddress, IPv4Address, IPv6Address, _dst_argument, unmap
 from .._msg import sendmsg as _sendmsg
 from .._parse import try_parse
 from .._pktinfo import (
@@ -91,8 +85,6 @@ class _SendMixin:
         if not self.has_src_pinning:
             return None
 
-        from .._ifaddrs import interface_address, interface_index
-
         family = self.socket.family
         level, _receive_option, send_type, _layout = _pktinfo_options(family)
         want_ipv6 = family == _socket.AF_INET6
@@ -148,8 +140,6 @@ class _SendMixin:
 
         if want_ipv6:
             if _IS_WINDOWS:
-                from .._ip import unmap
-
                 if local is not None:
                     local = unmap(local)
                 _refuse_zero_source(local, index)

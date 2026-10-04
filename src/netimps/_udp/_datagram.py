@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import NamedTuple, Optional, Tuple, Union
 
 from .._ifaddrs import Interface, is_unicast
-from .._ip import IPAddress
+from .._ip import IPAddress, unmap
 from .._parse import try_parse
 
 #: What ``recvfrom``/``recvmsg`` report as the peer: ``(address, port)`` for
@@ -88,8 +88,6 @@ class Datagram(NamedTuple):
         else is returned unchanged, so this is the right thing to pass on a
         single-family listener too.
         """
-        from .._ip import unmap
-
         sender = self.sender
         if not isinstance(sender, tuple) or len(sender) < 2:
             return sender

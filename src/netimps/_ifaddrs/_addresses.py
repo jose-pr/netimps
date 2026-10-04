@@ -4,7 +4,14 @@ from __future__ import annotations
 
 import socket as _socket
 from typing import Iterable, Iterator, Optional, Sequence, Tuple, Union
-from .._ip import IPAddressLike, _family_argument, unmap
+from .._ip import (
+    IPAddressLike,
+    IPv4Address,
+    _as_address,
+    _family_argument,
+    is_wildcard,
+    unmap,
+)
 from ._cache import get_interfaces
 from ._model import Interface, _IPInterface
 
@@ -50,8 +57,6 @@ def is_broadcast(
     :raises NetimpsValueError: for text that is no address.
     :raises TypeError: for a network or a value of another type.
     """
-    from .._ip import IPv4Address, _as_address
-
     parsed = unmap(_as_address(address))
     if not isinstance(parsed, IPv4Address):
         return False
@@ -101,8 +106,6 @@ def is_unicast(
     :raises NetimpsValueError: for text that is no address.
     :raises TypeError: for a network or a value of another type.
     """
-    from .._ip import _as_address, is_wildcard
-
     if isinstance(address, str):
         address = address.split("%", 1)[0]
     parsed = unmap(_as_address(address))

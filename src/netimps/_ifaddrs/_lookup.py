@@ -15,6 +15,7 @@ from .._ip import (
     split_host,
     split_zone,
     unmap,
+    get_hostname,
 )
 from .._mac import MACAddress
 from .._parse import parse, try_parse
@@ -333,8 +334,6 @@ def is_local_host(
         return True
     if not resolve:
         return False
-
-    from .._ip import get_hostname
 
     if name == get_hostname(fqdn=True).lower():
         return True

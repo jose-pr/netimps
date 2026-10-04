@@ -6,6 +6,7 @@ import ipaddress as _ipaddress
 from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
 from .._exceptions import NoAnswerError
 from ._chain import resolve
+from .._fqdn import FQDN
 
 #: The resolver options ``Host`` and ``FQDN`` methods take and pass on, in the
 #: order their signatures list them.
@@ -139,8 +140,6 @@ def lookup_fqdn(
 ) -> "Optional[Any]":
     """The name ``address`` reverses to, as an ``FQDN`` without its root dot, or
     ``None`` (internal; ``address`` is a literal)."""
-    from .._fqdn import FQDN
-
     answers = _query(
         address,
         "ptr",

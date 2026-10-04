@@ -823,8 +823,8 @@ def _force_index_only_spec(monkeypatch):
     names an address or resolves to one -- so the resolver is faked. What is
     being tested is our own branch, not the resolver.
     """
-    monkeypatch.setattr(_ifaddrs, "interface_address", lambda *a, **k: None)
-    monkeypatch.setattr(_ifaddrs, "interface_index", lambda *a, **k: 1)
+    monkeypatch.setattr(_udp._send, "interface_address", lambda *a, **k: None)
+    monkeypatch.setattr(_udp._send, "interface_index", lambda *a, **k: 1)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="the zero-address rule is Windows-only")

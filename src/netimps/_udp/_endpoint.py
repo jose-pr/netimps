@@ -13,7 +13,7 @@ from typing import (
     cast,
 )
 
-from .._ifaddrs import INTERFACE_CACHE_TTL, Interface, InterfaceLike
+from .._ifaddrs import INTERFACE_CACHE_TTL, Interface, InterfaceLike, get_interfaces
 from .._ip import HostLike, IPAddress, IPv4Address, IPv6Address
 from .._msg import CMSG_SPACE as _cmsg_space
 from .._msg import has_recvmsg as _supports_recvmsg
@@ -190,8 +190,6 @@ class UDPEndpoint(_SendMixin, _ReplyMixin):
         fresh = (_time.monotonic() - self._iface_cache_at) < self._IFACE_CACHE_TTL
         if cached is not _MISSING and fresh:
             return cached  # type: ignore[return-value]
-
-        from .._ifaddrs import get_interfaces
 
         self._iface_cache = {i.index: i for i in get_interfaces() if i.index}
         self._iface_cache_at = _time.monotonic()
