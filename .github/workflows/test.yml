@@ -40,8 +40,10 @@ jobs:
     name: Lint and type-check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-python@v7
         with:
           # The floor, deliberately: `[tool.mypy] python_version = "3.9"` means the
           # errors that only appear on the oldest supported version are the ones
@@ -106,10 +108,10 @@ jobs:
           - os: macos-latest
             python-version: "3.14"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || github.ref }}
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install package with all extras
@@ -117,7 +119,7 @@ jobs:
         # silently skip (pytest.importorskip) instead of actually running.
         run: python -m pip install -e ".[dev]"
       - name: Run tests
-        # tests/test_platform_smoke.py is collected here on purpose. The rest of
+        # tests/integration/test_platform_smoke.py is collected here on purpose. The rest of
         # the suite fakes subprocess.run throughout, so it asserts the argv the
         # library BUILDS and never that the platform's binary accepts it -- which
         # is how every IPv6 ping on macOS can break while CI stays green
@@ -129,3 +131,119 @@ jobs:
         # platform tests never running at all, which is the failure this whole
         # file exists to make impossible.
         run: python -m pytest -q -rs
+
+  # The declared floors, exercised: every runtime dependency and feature extra
+  # installed AT the lower bound pyproject.toml declares (`>=X.Y.0` -> `==X.Y.0`),
+  # on the oldest supported Python. The matrix above only ever gets the newest
+  # releases, so a floor that no longer works would otherwise go unnoticed.
+  floors:
+    name: Test at the declared dependency floors
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.9"
+      - name: Pin every declared dependency to its floor
+        shell: python
+        run: |
+          import re
+          import subprocess
+          import sys
+
+          subprocess.run([sys.executable, "-m", "pip", "install", "-q", "tomli"], check=True)
+          import tomli
+
+          project = tomli.load(open("pyproject.toml", "rb"))["project"]
+          specs = list(project.get("dependencies", []))
+          for extra, deps in project.get("optional-dependencies", {}).items():
+              if extra not in ("dev", "docs"):
+                  specs += deps
+          pins = []
+          for spec in specs:
+              m = re.match(r"^\s*([A-Za-z0-9._-]+)(\[[^\]]*\])?\s*[^;]*?>=\s*([^,;\s]+)", spec)
+              if m:
+                  pins.append("%s==%s" % (m.group(1), m.group(3)))
+          open("floors.txt", "w").write("\n".join(pins) + "\n")
+          print("\n".join(pins) or "(no floors declared)")
+      - name: Install at the floors
+        run: python -m pip install -c floors.txt -e ".[dev]"
+      - name: Run tests
+        run: python -m pytest -q -rs
+
+  # What a user gets from `pip install netimps` with no extra: the library
+  # imports, and the console script says which extra it needs instead of
+  # raising an ImportError. The test jobs above always have every extra.
+  bare:
+    name: Bare install (py${{ matrix.python-version }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.9", "3.14"] # oldest + newest supported
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install with no extra
+        run: python -m pip install .
+      - name: The library imports and the console script names the extra
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          python -c "import netimps; print('imported', netimps.__version__)"
+          if netimps interfaces > out.txt 2> err.txt; then
+            echo "the console script ran without the cli extra"; exit 1
+          fi
+          cat err.txt
+          grep -q "'cli' extra" err.txt
+
+  # What a user installs is the built wheel, not the checkout: build it, install
+  # it with the cli extra into a clean environment away from the source tree,
+  # and run the console script, on each OS.
+  wheel:
+    name: Built wheel and console script (py${{ matrix.python-version }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.9", "3.14"] # oldest + newest supported
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Build the wheel
+        run: |
+          python -m pip install build
+          python -m build --wheel --outdir "${{ runner.temp }}/dist"
+      - name: Install it into a fresh environment, away from the checkout
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          python -m venv wheel-env
+          if [ -d wheel-env/Scripts ]; then BIN=wheel-env/Scripts; else BIN=wheel-env/bin; fi
+          "$BIN/python" -m pip install "$(ls dist/*.whl)[cli]"
+          "$BIN/netimps" addr 00:00:5e:00:53:01
+          "$BIN/netimps" split "[::1]:8080"
+          "$BIN/netimps" interfaces > /dev/null
+          "$BIN/python" - <<'PY'
+          from importlib.resources import files
+
+          import netimps
+
+          root = files("netimps")
+          for name in ("py.typed", "AGENTS.md"):
+              assert (root / name).is_file(), "the wheel does not ship %s" % name
+          assert "site-packages" in netimps.__file__, netimps.__file__
+          print("ok:", netimps.__file__)
+          PY
