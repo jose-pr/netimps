@@ -237,21 +237,42 @@ class _StingySocket:
         self.values[option] = value // 2
 
 
-def test_a_shortfall_is_logged_once_for_the_socket(caplog):
-    """Both protocol libraries wrapped ``set_buffer_size`` to log this.
+@pytest.fixture
+def no_shortfall_seen(monkeypatch):
+    """Each test starts with no shortfall logged yet in this process."""
+    # Private: the set of shortfalls already logged is process-wide.
+    from netimps._sockets import _options
+
+    monkeypatch.setattr(_options, "_warned_shortfalls", set())
+
+
+def test_a_shortfall_is_logged_once_however_many_sockets_have_it(
+    caplog, no_shortfall_seen
+):
+    """A server that opens a socket per transfer has one shortfall, not one per
+    transfer: a warning for each drowned the log and said nothing new.
 
     The kernel agrees to a ``setsockopt`` and grants less; the stand-in does
     exactly that, since Windows grants 2 GiB and cannot show it.
     """
-    sock = _StingySocket()
     with caplog.at_level(logging.WARNING, logger="netimps._sockets"):
-        assert set_buffer_size(sock, receive=8000, send=8000) == (4000, 4000)
-        set_buffer_size(sock, receive=9000)
+        for _ in range(3):
+            sock = _StingySocket()
+            assert set_buffer_size(sock, receive=8000, send=8000) == (4000, 4000)
     records = [r for r in caplog.records if r.name == "netimps._sockets"]
     assert len(records) == 1
     assert records[0].levelno == logging.WARNING
     assert "SO_RCVBUF" in records[0].getMessage()
     assert "8000" in records[0].getMessage()
+
+
+def test_a_different_shortfall_is_logged_as_well(caplog, no_shortfall_seen):
+    with caplog.at_level(logging.WARNING, logger="netimps._sockets"):
+        set_buffer_size(_StingySocket(), receive=8000)
+        set_buffer_size(_StingySocket(), receive=9000)
+    records = [r for r in caplog.records if r.name == "netimps._sockets"]
+    assert len(records) == 2
+    assert "9000" in records[1].getMessage()
 
 
 def test_no_warning_when_the_request_is_met(caplog):

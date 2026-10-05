@@ -5,8 +5,8 @@ from __future__ import annotations
 import logging as _logging
 import socket as _socket
 import sys as _sys
-import weakref as _weakref
-from typing import Optional, Tuple
+
+from typing import Optional, Set, Tuple
 
 _log = _logging.getLogger("netimps._sockets")
 
@@ -93,8 +93,9 @@ def set_buffer_size(
     direction. A refused option is skipped rather than raised, and the
     corresponding return value is whatever the socket reports.
 
-    A shortfall is logged once per socket, at ``WARNING`` on this module's
-    logger (``netimps._sockets``); the package installs no handler.
+    A shortfall is logged once per process for each distinct request and
+    grant, at ``WARNING`` on this module's logger (``netimps._sockets``); the
+    package installs no handler. The return value reports it on every call.
     """
     for option, wanted in (
         (_socket.SO_RCVBUF, receive),
@@ -125,12 +126,20 @@ def set_buffer_size(
         )
         if wanted is not None and got < wanted
     ]
-    if short and sock not in _warned_short:
-        _warned_short.add(sock)
-        _log.warning("socket buffer smaller than requested (%s)", "; ".join(short))
+    if short:
+        message = "; ".join(short)
+        if message not in _warned_shortfalls:
+            if len(_warned_shortfalls) < _WARNED_SHORTFALLS_MAX:
+                _warned_shortfalls.add(message)
+            _log.warning("socket buffer smaller than requested (%s)", message)
     return granted
 
 
-#: Sockets already warned about, so a retry loop logs one shortfall, not one per
-#: attempt. Weak: it must not keep a closed socket alive.
-_warned_short: "_weakref.WeakSet[_socket.socket]" = _weakref.WeakSet()
+#: Shortfalls already warned about in this process, by their text. A program
+#: that opens a socket per transfer has the same shortfall on every one of
+#: them, and the return value already tells each caller; the log says it once.
+_warned_shortfalls: "Set[str]" = set()
+
+#: Past this many distinct shortfalls the set stops growing and each further
+#: one is logged every time: a bound on memory, far above what one host shows.
+_WARNED_SHORTFALLS_MAX = 64

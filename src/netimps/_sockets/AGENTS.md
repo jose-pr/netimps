@@ -129,8 +129,9 @@ name below is imported from `netimps`.
   and not a bug. The silent partial grant is the failure mode, hence the return
   value. Only ever grows, so it cannot undo earlier tuning; `None` skips a
   direction, and both `None` is a pure query. A shortfall is logged once per
-  socket at `WARNING` on `logging.getLogger("netimps._sockets")`; no handler is
-  installed.
+  process for each distinct request and grant, at `WARNING` on
+  `logging.getLogger("netimps._sockets")`; no handler is installed, and the
+  return value reports it on every call.
 
   > **A link-local `interface=` address is bound with its zone.** The same
   > `fe80::` address can exist on several adapters, so the kernel cannot tell
