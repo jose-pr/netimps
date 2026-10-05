@@ -11,6 +11,7 @@ import ast
 import inspect
 import re
 import socket
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,8 @@ _SUBHEADERS = sorted(p for p in _PACKAGE.rglob("AGENTS.md") if p != _TOP)
 #: and a sub-header for one topic; past these, detail moves down or out.
 TOP_MAX_LINES = 900
 SUB_MAX_LINES = 500
+#: The repo-root file orients a contributor and points elsewhere for detail.
+ROOT_MAX_LINES = 220
 
 
 def _lines(path):
@@ -76,6 +79,54 @@ def test_a_sub_header_says_its_directory_is_private(path):
     assert "public API header" in head
     if path.parent.name != "cli":
         assert "private" in head and "not an import path" in head
+
+
+def _committed_headers():
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "--", "*AGENTS.md"],
+            cwd=str(_ROOT),
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        pytest.skip("not a git checkout")
+    return [p for p in out.split() if p != "AGENTS.md"]
+
+
+def test_the_root_file_names_every_committed_header():
+    root = _ROOT / "AGENTS.md"
+    if not root.exists():
+        pytest.skip("the root AGENTS.md is not part of this tree")
+    text = root.read_text(encoding="utf-8")
+    missing = [p for p in _committed_headers() if p not in text]
+    assert not missing, "the root AGENTS.md does not name: %s" % ", ".join(missing)
+
+
+def test_the_root_file_is_not_over_its_limit():
+    root = _ROOT / "AGENTS.md"
+    if not root.exists():
+        pytest.skip("the root AGENTS.md is not part of this tree")
+    assert len(_lines(root)) <= ROOT_MAX_LINES
+
+
+def test_the_tests_header_names_every_test_file_and_directory():
+    tests = _ROOT / "tests"
+    header = tests / "AGENTS.md"
+    if not header.exists():
+        pytest.skip("tests/AGENTS.md is not part of this tree")
+    text = header.read_text(encoding="utf-8")
+    names = [
+        p.relative_to(tests).as_posix()
+        for p in tests.rglob("*")
+        if p.is_file()
+        and "__pycache__" not in p.parts
+        and p.suffix in (".py", ".ini")
+        and p.name not in ("__init__.py", "conftest.py", "consumer.ini")
+    ]
+    missing = [n for n in names if n not in text]
+    assert not missing, "tests/AGENTS.md does not name: %s" % ", ".join(missing)
 
 
 # --------------------------------------------------------------------------
