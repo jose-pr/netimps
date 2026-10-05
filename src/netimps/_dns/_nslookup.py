@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import Any, List, Literal, Optional, Union, overload
 from .. import _proc
 from .._exceptions import NetimpsValueError, ResolutionError, ResolutionTimeoutError
-from .._ip import HostLike, IPv4Address, IPv6Address, _dst_argument
+from .._ip import HostLike, IPv4Address, IPv6Address
+from ._common import query_argument
 from .._parse import try_parse
 from ._common import _auto_rdtype, _budget, _nameservers, search_candidates
 
@@ -325,7 +326,7 @@ def resolve_nslookup(
     :data:`subprocess.DEVNULL` for stdin as well, so it can never read the
     caller's.
     """
-    query = _dst_argument(query)
+    query = query_argument(query)
     _check_nslookup_query(query)
     if ns:
         _check_nslookup_query(ns, "nameserver")

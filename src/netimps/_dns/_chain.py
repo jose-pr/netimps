@@ -7,7 +7,8 @@ from functools import partial as _partial
 from typing import Any, Callable, List, Literal, Optional, Tuple, Union, overload
 from . import _dnswire
 from .._exceptions import ResolutionError
-from .._ip import HostLike, IPv4Address, IPv6Address, _dst_argument
+from .._ip import HostLike, IPv4Address, IPv6Address
+from ._common import query_argument
 from ._cache import RESOLUTION_CACHE_TTL, _cache_get, _cache_key, _cache_put
 from ._common import (
     _DEADLINE,
@@ -228,7 +229,7 @@ def resolve(
     :class:`ValueError` immediately, without trying every backend, since that
     is a caller bug rather than a resolution outcome.
     """
-    query = _dst_argument(query)
+    query = query_argument(query)
     if cache is not False:
         key = _cache_key(
             query, rdtype, ns, timeout, port, tcp, search, backends, strict, source

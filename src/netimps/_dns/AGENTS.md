@@ -22,7 +22,9 @@ not be asked is not an empty answer**: every backend raises
 `ResolutionTimeoutError` for a deadline and `ResolutionError` for a server that
 does not answer, a SERVFAIL, a temporary `getaddrinfo` failure or a missing
 program. Only `resolve()` without `strict=True` turns that into `[]`, so that
-`if not resolve(h):` keeps working; `strict=True` re-raises it.
+`if not resolve(h):` keeps working; `strict=True` re-raises it. An **empty
+query** (`""`, `"."`) is a caller's mistake and raises `NetimpsValueError`
+from every entry point, `resolve()` included.
 
 **`resolve(query, rdtype=None, *, ns=None, timeout=5.0, port=53, tcp=False, search=True, backends=None, strict=False, source=None, cache=False, deadline=None)`**
 

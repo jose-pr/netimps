@@ -8,6 +8,7 @@ import socket as _socket
 import time as _time
 from typing import List, Optional, Tuple, Union
 from .._exceptions import NetimpsValueError, ResolutionTimeoutError
+from .._ip import HostLike, _dst_argument
 from .._parse import try_parse
 
 _ADDRESS_RDTYPES = ("a", "aaaa")
@@ -225,3 +226,19 @@ def _ns_entries(ns: "Optional[Union[str, List[str]]]") -> "List[str]":
         if isinstance(ns, str) and ns
         else list(ns or []) if not isinstance(ns, str) else []
     )
+
+
+def query_argument(query: "HostLike") -> str:
+    """The text of ``query``, refused when there is nothing to ask about.
+
+    An empty name is looked up differently by every resolver: the OS and
+    dnspython apply the search list and answer for the search domain itself,
+    ``nslookup`` reads it as a missing argument. One refusal here gives every
+    backend the same answer.
+
+    :raises NetimpsValueError: for an empty query (``""``, ``"."``).
+    """
+    text = _dst_argument(query)
+    if not text.strip().strip("."):
+        raise NetimpsValueError("empty query: there is no name or address to look up")
+    return text

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional, Tuple, Type, Union, overload
 from .._exceptions import ResolutionError, ResolutionTimeoutError
-from .._ip import HostLike, IPv4Address, IPv6Address, _dst_argument
+from .._ip import HostLike, IPv4Address, IPv6Address
+from ._common import query_argument
 from ._common import (
     _NEEDS_DNS,
     _auto_rdtype,
@@ -163,7 +164,7 @@ def resolve_dnspython(
     Needs the ``dns`` extra (``pip install "netimps[dns]"``); without it this
     raises :class:`ResolutionError` saying so. :func:`has_dns` tells which.
     """
-    query = _dst_argument(query)
+    query = query_argument(query)
     if not rdtype:
         rdtype = _auto_rdtype(query)
     rdtype = rdtype.lower()

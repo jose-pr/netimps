@@ -10,7 +10,8 @@ import time as _time
 from typing import Any, List, Literal, Optional, Tuple, Union, overload
 from . import _dnswire
 from .._exceptions import DNSDecodeError, ResolutionError, ResolutionTimeoutError
-from .._ip import HostLike, IPv4Address, IPv6Address, _dst_argument
+from .._ip import HostLike, IPv4Address, IPv6Address
+from ._common import query_argument
 from ._common import _auto_rdtype, _budget, _nameservers, search_candidates
 
 
@@ -231,7 +232,7 @@ def resolve_wire(
     :class:`DNSDecodeError` is the ``__cause__`` of the final error.
     A CNAME chain inside the reply is followed.
     """
-    query = _dst_argument(query)
+    query = query_argument(query)
     name, rdtype = _question(query, rdtype)
     servers = _servers(ns, port)
     names = search_candidates(name, search, wire=True)

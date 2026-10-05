@@ -6,7 +6,8 @@ import socket as _socket
 from typing import Any, Callable, List, Literal, Optional, Type, overload
 from . import _dnswire
 from .._exceptions import DNSDecodeError, ResolutionError, ResolutionTimeoutError
-from .._ip import HostLike, IPv4Address, IPv6Address, _dst_argument
+from .._ip import HostLike, IPv4Address, IPv6Address
+from ._common import query_argument
 from ._wire import _question
 
 #: The most a DoH reply may carry: the DNS message limit is 65,535 octets
@@ -167,7 +168,7 @@ def resolve_doh(
             "DNS over HTTPS needs an https:// URL, got scheme %r; pass "
             "allow_http=True for a plain-http endpoint" % (scheme,)
         )
-    query = _dst_argument(query)
+    query = query_argument(query)
     name, rdtype = _question(query, rdtype)
     payload = _dnswire.build_query(name, rdtype, 0)
     headers = {

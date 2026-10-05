@@ -339,7 +339,9 @@ def is_local_host(
         return True
     try:
         found = _socket.getaddrinfo(name, None)
-    except OSError:
+    except (OSError, UnicodeError):
+        # UnicodeError: a name the IDNA codec refuses (an empty label, a label
+        # over 63 octets) is no name of this machine.
         return False
     return any(
         is_local_address(unmap(parsed), cache=cache)

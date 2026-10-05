@@ -5,8 +5,9 @@ from __future__ import annotations
 import socket as _socket
 from functools import partial as _partial
 from typing import Any, Callable, List, Literal, Optional, Tuple, Union, overload
-from .._exceptions import ResolutionError, ResolutionTimeoutError
-from .._ip import HostLike, IPv4Address, IPv6Address, _dst_argument
+from .._exceptions import NetimpsValueError, ResolutionError, ResolutionTimeoutError
+from .._ip import HostLike, IPv4Address, IPv6Address
+from ._common import query_argument
 from .._parse import try_parse
 from ._common import (
     _ADDRESS_RDTYPES,
@@ -115,6 +116,12 @@ def _resolve_system_once(
         if _is_no_answer(exc):
             return []
         raise _system_outage(exc, query) from exc
+    except UnicodeError as exc:
+        # The IDNA codec inside getaddrinfo refuses an empty label and a label
+        # over 63 octets before anything is asked.
+        raise NetimpsValueError(
+            "%r is not a name that can be looked up: %s" % (query, exc)
+        ) from exc
 
     seen = []
     for info in infos:
@@ -237,7 +244,7 @@ def resolve_system(
     unsupported ``rdtype`` raises :class:`ResolutionError` too, since that is
     this backend's fixed limitation, not a DNS outcome to report as "no records".
     """
-    query = _dst_argument(query)
+    query = query_argument(query)
     if isinstance(rdtype, (tuple, list)):
         # Both families in one getaddrinfo call, in the order the OS chose.
         _address_rdtypes(rdtype)

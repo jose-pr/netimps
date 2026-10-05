@@ -115,3 +115,43 @@ def test_a_passed_deadline_is_not_rewritten_by_the_dnspython_socket_handler():
             resolve_dnspython("host.test", "a", ns="127.0.0.1", search=False)
     finally:
         _dns._common._DEADLINE.reset(token)
+
+
+# --------------------------------------------------------------------------- #
+# A query that is no name                                                      #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("empty", ["", ".", "  "])
+def test_an_empty_query_is_refused_by_every_entry_point(empty):
+    """The OS and dnspython applied the search list to an empty name and
+    answered with the search domain's own records; ``nslookup`` refused it."""
+    for entry in (
+        netimps.resolve,
+        netimps.resolve_system,
+        netimps.resolve_nslookup,
+        netimps.resolve_dnspython,
+    ):
+        with pytest.raises(netimps.NetimpsValueError, match="empty query"):
+            entry(empty)
+    with pytest.raises(netimps.NetimpsValueError, match="empty query"):
+        netimps.resolve_wire(empty, ns="127.0.0.1")
+    with pytest.raises(netimps.NetimpsValueError, match="empty query"):
+        netimps.resolve_doh(empty, "https://127.0.0.1/dns-query")
+
+
+@pytest.mark.parametrize("name", ["a..b", "x" * 70 + ".test"])
+def test_a_name_the_codec_refuses_is_a_value_error_from_the_os_resolver(
+    name, allow_resolver
+):
+    """It was the codec's own ``UnicodeEncodeError``, from inside
+    ``getaddrinfo``. The guard is lifted because the real call is what
+    refuses; the codec fails before anything is asked of a resolver."""
+    with pytest.raises(netimps.NetimpsValueError, match="not a name that can"):
+        netimps.resolve_system(name, search=False)
+
+
+def test_an_empty_host_still_answers_none():
+    """``Host("")`` asks nothing, so the refusal above never reaches it."""
+    assert netimps.Host("").ip() is None
+    assert netimps.Host(None).ip() is None

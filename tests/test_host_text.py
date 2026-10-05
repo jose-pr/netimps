@@ -482,3 +482,20 @@ def test_the_round_trip_law_survives_the_widening(host, port):
     against strings.
     """
     assert netimps.split_host(netimps.join_host(host, port)) == (str(host), port)
+
+
+# --------------------------------------------------------------------------- #
+# A name the IDNA codec refuses                                                #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("name", ["a..b", "x" * 70 + ".test", ".leading.test"])
+def test_is_local_host_never_raises_for_a_name_the_codec_refuses(name, allow_resolver):
+    """``getaddrinfo`` encodes the name before asking, and an empty label or
+    one over 63 octets came out of ``is_local_host(..., resolve=True)`` as a
+    ``UnicodeEncodeError``.
+
+    The real ``getaddrinfo`` is what refuses, so the guard is lifted; the codec
+    fails before anything is asked of a resolver.
+    """
+    assert netimps.is_local_host(name, resolve=True) is False
