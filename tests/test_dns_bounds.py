@@ -413,11 +413,15 @@ def test_a_reply_body_over_64_kib_is_refused(endpoint):
 
 
 def test_a_redirect_is_not_followed(endpoint):
-    with pytest.raises(ResolutionError, match="307"):
+    with pytest.raises(ResolutionError, match="307") as caught:
         netimps.resolve_doh(
             "host.test", endpoint + "/redirect", rdtype="a", allow_http=True
         )
     assert _Endpoint.hits == ["/redirect"], "the redirect target was requested"
+    # The HTTPError is an open response that resolve_doh leaves to the garbage
+    # collector; closing it here keeps the interpreter's ResourceWarning for an
+    # unclosed response out of a run with warnings as errors.
+    caught.value.__cause__.close()
 
 
 def test_the_query_string_stays_out_of_messages(endpoint):
@@ -427,6 +431,7 @@ def test_the_query_string_stays_out_of_messages(endpoint):
             "host.test", endpoint + "/fail?token=SECRET", rdtype="a", allow_http=True
         )
     assert "SECRET" not in str(caught.value) and "/fail" in str(caught.value)
+    caught.value.__cause__.close()  # the unclosed HTTPError response, as above
     refused = "http://127.0.0.1:1/dns-query?token=SECRET"
     with pytest.raises(ResolutionError) as caught:
         netimps.resolve_doh(
