@@ -29,9 +29,9 @@ _IS_WINDOWS = _sys.platform == "win32"
 #: buy almost nothing more and would widen the window in which the answer is
 #: wrong.
 #:
-#: :class:`netimps.UDPEndpoint` uses this same constant for its own
-#: arrival-interface cache, so there is one number rather than two that can
-#: disagree. Pass a number to choose your own, and prefer ``cache=math.inf``
+#: :class:`netimps.UDPEndpoint` builds its arrival-interface index from this
+#: cache with this same constant, so there is one number rather than two that
+#: can disagree. Pass a number to choose your own, and prefer ``cache=math.inf``
 #: plus :func:`clear_interface_cache` when you know the moment it changes.
 INTERFACE_CACHE_TTL = 1.0
 
@@ -203,10 +203,20 @@ def get_interfaces(
     # That last case is what a caller means by "refresh", so it needs no
     # argument of its own.
     ttl = INTERFACE_CACHE_TTL if cache is True else float(cache)
+    return _copy_interfaces(_interface_snapshot(raw, ttl)[1])
+
+
+def _interface_snapshot(raw: bool, ttl: float) -> "Tuple[float, List[Interface]]":
+    """The shared enumeration no older than ``ttl`` seconds, and when it began.
+
+    Returns ``(monotonic stamp, interfaces)``. The list is the cache's own and
+    must not be mutated. The stamp lets a caller that derives its own index
+    from the snapshot age it from the enumeration, not from the derivation.
+    """
     with _CACHE_LOCK:
         entry = _INTERFACE_CACHE.get(bool(raw))
         if entry is not None and (_time.monotonic() - entry[0]) < ttl:
-            return _copy_interfaces(entry[1])
+            return entry
         generation = _GENERATION
     started = _time.monotonic()
 
@@ -220,6 +230,4 @@ def get_interfaces(
         # cleared meanwhile: the snapshot predates whatever the clear was for.
         if _GENERATION == generation:
             _INTERFACE_CACHE[bool(raw)] = (started, found)
-    # The freshly enumerated list is already the caller's own, so it is handed
-    # back directly; only a cache *hit* has to copy.
-    return _copy_interfaces(found)
+    return started, found

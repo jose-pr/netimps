@@ -48,6 +48,7 @@ from __future__ import annotations
 from ._addresses import is_broadcast, is_unicast, iter_addresses
 from ._cache import (
     INTERFACE_CACHE_TTL,
+    _interface_snapshot,
     clear_interface_cache,
     get_interfaces,
     interface_enumerations,

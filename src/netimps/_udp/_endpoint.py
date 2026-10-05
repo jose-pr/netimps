@@ -13,7 +13,8 @@ from typing import (
     cast,
 )
 
-from .._ifaddrs import INTERFACE_CACHE_TTL, Interface, InterfaceLike, get_interfaces
+from .._ifaddrs import INTERFACE_CACHE_TTL, Interface, InterfaceLike
+from .._ifaddrs import _interface_snapshot
 from .._ip import HostLike, IPAddress, IPv4Address, IPv6Address
 from .._msg import CMSG_SPACE as _cmsg_space
 from .._msg import has_recvmsg as _supports_recvmsg
@@ -163,10 +164,8 @@ class UDPEndpoint(_SendMixin, _ReplyMixin):
     #: enumeration rather than one per datagram.
     #:
     #: Deliberately **the same constant** as the process-wide enumeration cache
-    #: rather than a second number, so two caches of the same fact cannot
-    #: disagree about how stale is too stale. One second bounds the cost at a
-    #: single enumeration per second whatever the arrival rate; a longer window
-    #: only widens the time a renamed adapter goes unnoticed.
+    #: the mapping is built from, so the two cannot disagree about how stale is
+    #: too stale.
     _IFACE_CACHE_TTL = INTERFACE_CACHE_TTL
 
     def _interface_for(self, index: int) -> "Optional[Interface]":
@@ -179,20 +178,25 @@ class UDPEndpoint(_SendMixin, _ReplyMixin):
         many adapters. The sender controls the packet rate in a server loop, so
         that cost is on the hot path by definition.
 
-        Cached per endpoint, keyed by index, and refreshed on a **miss** as well
-        as on a TTL. A miss is the interesting signal: an index this endpoint has
-        not seen means the adapter set changed, so re-enumerating then is both
-        cheap and exactly when it is needed. A negative result is cached too --
-        an index with no matching adapter is a real answer, and re-enumerating
-        for it on every packet is how a wrong one becomes expensive.
+        The index map is per endpoint; the enumeration behind it is the
+        process-wide one (:func:`netimps.get_interfaces` with ``cache=``), so
+        any number of endpoints and the caller's own cached lookups cost one
+        enumeration per TTL between them. The map is as old as the enumeration
+        it was built from, so it is never trusted for longer than that TTL.
+
+        Refreshed on a **miss** as well as on the TTL: an index a fresh map
+        lacks means the adapter set changed since the shared enumeration, so
+        that one case enumerates anew. A negative result is cached too -- an
+        index with no adapter is a real answer, and must not cost every packet.
         """
         cached = self._iface_cache.get(index, _MISSING)
         fresh = (_time.monotonic() - self._iface_cache_at) < self._IFACE_CACHE_TTL
         if cached is not _MISSING and fresh:
             return cached  # type: ignore[return-value]
 
-        self._iface_cache = {i.index: i for i in get_interfaces() if i.index}
-        self._iface_cache_at = _time.monotonic()
+        ttl = 0.0 if fresh else self._IFACE_CACHE_TTL
+        self._iface_cache_at, interfaces = _interface_snapshot(False, ttl)
+        self._iface_cache = {i.index: i for i in interfaces if i.index}
         found = self._iface_cache.get(index)
         if found is None:
             # Pin the negative so a stale or vanished index does not re-enumerate

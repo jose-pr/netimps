@@ -248,17 +248,20 @@ wrapped socket expires, on every supported Python (before 3.10
   > `127.0.0.1:57014`. So when the ports run out on an otherwise bindable
   > address, this raises **`AddressInUseError`** and binds nothing, rather than
   > answering from somewhere else.
-- **The arrival interface is cached per endpoint**, so the default path is not
-  the slow one. Calling `get_interfaces()` and scanning it for *every*
-  datagram costs 1.07 ms per packet against 0.015 with
-  `resolve_interface=False`, a 70x cost, and 35–42 ms per enumeration on a host
-  with many adapters. So `recv()` keeps an `index -> Interface` cache refreshed
-  on a miss and on a 30-second TTL — 0.017 ms per packet, one enumeration for
-  ten datagrams.
-  A miss triggers a refresh because an unseen index means the adapter set
-  changed; negative results are cached so a vanished index does not re-enumerate
-  forever. `resolve_interface=False` still skips it entirely and never
-  enumerates.
+- **The arrival interface comes from an index each endpoint keeps over the
+  shared enumeration**, so the default path is not the slow one. Calling
+  `get_interfaces()` and scanning it for *every* datagram costs 1.07 ms per
+  packet against 0.015 with `resolve_interface=False`, a 70x cost, and 35–42 ms
+  per enumeration on a host with many adapters. So `recv()` keeps an
+  `index -> Interface` map (0.017 ms per packet) built from the process-wide
+  enumeration cache, the one `get_interfaces(cache=True)` reads, and trusts it
+  for `INTERFACE_CACHE_TTL` (1 second) counted from that enumeration. Any
+  number of endpoints, and the caller's own cached lookups, cost one
+  enumeration per second between them.
+  An index the map lacks enumerates anew at once, because an unseen index means
+  the adapter set changed; negative results are cached so a vanished index does
+  not re-enumerate forever. `resolve_interface=False` still skips it entirely
+  and never enumerates.
 - **`reply_address`** — `sender`, in the family `reply_socket` will use. **Pass
   this to `sendto`, not `sender`.** A v4-mapped sender becomes the plain
   `(host, port)` pair, dropping the flowinfo and scope id that an `AF_INET`

@@ -600,6 +600,15 @@ probe says so in its prefix.
   labels, where a checker saw `Any`), and the named networks are typed with their
   concrete classes, not `IPv4Network | IPv6Network`.
 
+- **Every `UDPEndpoint` resolves arrival interfaces from the one shared
+  enumeration.** Each endpoint enumerated for itself, beside the process-wide
+  cache: twice a second for a server with one socket that also made cached
+  lookups, three times with two sockets. An endpoint's index is now built from
+  the enumeration `get_interfaces(cache=True)` shares, and is trusted for
+  `INTERFACE_CACHE_TTL` from the moment that enumeration began; an index it
+  lacks still enumerates at once. The UDP header gave that lifetime as 30
+  seconds; it is `INTERFACE_CACHE_TTL`, one second.
+
 ## [0.3.4] - 2026-10-03
 
 ### Fixed

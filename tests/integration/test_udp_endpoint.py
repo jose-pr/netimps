@@ -480,7 +480,7 @@ def test_posix_packs_a_zero_source_for_an_index_only_pin(monkeypatch):
 # --------------------------------------------------------------------------- #
 
 
-def test_recv_enumerates_once_for_many_packets(monkeypatch):
+def test_recv_enumerates_once_for_many_packets():
     """The default path used to call get_interfaces() on every datagram.
 
     Measured on Windows loopback: 1.07 ms/packet against 0.015 with
@@ -488,20 +488,8 @@ def test_recv_enumerates_once_for_many_packets(monkeypatch):
     example uses. A server loop is a hot loop by definition, since the sender
     controls the rate.
     """
-    # Private: the native walks, caches and sockaddr decoders are tested apart from the live host.
-    from netimps import _ifaddrs
-
-    # Private: the receive path's private seams.
-    from netimps._udp import _endpoint
-
-    calls = []
-    real = _ifaddrs.get_interfaces
-
-    def counting(*args, **kwargs):
-        calls.append(1)
-        return real(*args, **kwargs)
-
-    monkeypatch.setattr(_endpoint, "get_interfaces", counting)
+    netimps.clear_interface_cache()
+    before = netimps.interface_enumerations()
 
     with UDPEndpoint(bind("127.0.0.1", 0)) as endpoint:
         if not endpoint.has_pktinfo:
@@ -517,47 +505,30 @@ def test_recv_enumerates_once_for_many_packets(monkeypatch):
         finally:
             sender.close()
 
-    assert (
-        len(calls) == 1
-    ), "10 datagrams on one interface must cost one enumeration, got %d" % len(calls)
+    enumerated = netimps.interface_enumerations() - before
+    assert enumerated == 1, (
+        "10 datagrams on one interface must cost one enumeration, got %d" % enumerated
+    )
 
 
-def test_the_interface_cache_keeps_a_negative_answer(monkeypatch):
+def test_the_interface_cache_keeps_a_negative_answer():
     """An index with no adapter is a real answer, and must not re-enumerate.
 
     Otherwise a stale or vanished index makes every subsequent packet pay the
     full cost -- the expensive case becoming the common one.
     """
-    # Private: the native walks, caches and sockaddr decoders are tested apart from the live host.
-    from netimps import _ifaddrs
-
-    # Private: the receive path's private seams.
-    from netimps._udp import _endpoint
-
-    calls = []
-    real = _ifaddrs.get_interfaces
-    monkeypatch.setattr(
-        _endpoint, "get_interfaces", lambda *a, **k: calls.append(1) or real(*a, **k)
-    )
     with UDPEndpoint(bind("127.0.0.1", 0)) as endpoint:
         assert endpoint._interface_for(999999) is None
-        first = len(calls)
+        first = netimps.interface_enumerations()
         assert endpoint._interface_for(999999) is None
-        assert len(calls) == first, "a cached negative must not re-enumerate"
+        assert (
+            netimps.interface_enumerations() == first
+        ), "a cached negative must not re-enumerate"
 
 
-def test_resolve_interface_false_never_enumerates(monkeypatch):
-    # Private: the native walks, caches and sockaddr decoders are tested apart from the live host.
-    from netimps import _ifaddrs
-
-    # Private: the receive path's private seams.
-    from netimps._udp import _endpoint
-
-    calls = []
-    real = _ifaddrs.get_interfaces
-    monkeypatch.setattr(
-        _endpoint, "get_interfaces", lambda *a, **k: calls.append(1) or real(*a, **k)
-    )
+def test_resolve_interface_false_never_enumerates():
+    netimps.clear_interface_cache()
+    before = netimps.interface_enumerations()
     with UDPEndpoint(bind("127.0.0.1", 0)) as endpoint:
         endpoint.socket.settimeout(5.0)
         port = endpoint.socket.getsockname()[1]
@@ -568,7 +539,7 @@ def test_resolve_interface_false_never_enumerates(monkeypatch):
         finally:
             sender.close()
         assert packet.interface is None
-        assert calls == []
+        assert netimps.interface_enumerations() == before
 
 
 def test_the_cache_is_per_endpoint():
@@ -581,6 +552,71 @@ def test_the_cache_is_per_endpoint():
     finally:
         first.close()
         second.close()
+
+
+def _a_real_index():
+    return next(i.index for i in netimps.get_interfaces() if i.index)
+
+
+def test_two_endpoints_resolve_from_one_enumeration():
+    """The index maps are per endpoint; the enumeration behind them is shared."""
+    index = _a_real_index()
+    netimps.clear_interface_cache()
+    before = netimps.interface_enumerations()
+    with UDPEndpoint(bind("127.0.0.1", 0)) as first:
+        with UDPEndpoint(bind("127.0.0.1", 0)) as second:
+            assert first._interface_for(index) is not None
+            assert second._interface_for(index) is not None
+    assert netimps.interface_enumerations() - before == 1
+
+
+def test_an_endpoint_reuses_an_enumeration_a_lookup_already_made():
+    index = _a_real_index()
+    netimps.clear_interface_cache()
+    netimps.get_interfaces(cache=True)
+    before = netimps.interface_enumerations()
+    with UDPEndpoint(bind("127.0.0.1", 0)) as endpoint:
+        assert endpoint._interface_for(index) is not None
+    assert netimps.interface_enumerations() == before
+
+
+def test_an_index_the_shared_enumeration_lacks_enumerates_afresh():
+    """An unseen index means the adapter set changed since the snapshot."""
+    index = _a_real_index()
+    netimps.clear_interface_cache()
+    with UDPEndpoint(bind("127.0.0.1", 0)) as endpoint:
+        assert endpoint._interface_for(index) is not None
+        before = netimps.interface_enumerations()
+        assert endpoint._interface_for(999999) is None
+        assert netimps.interface_enumerations() - before == 1
+        assert endpoint._interface_for(999999) is None
+        assert netimps.interface_enumerations() - before == 1
+
+
+def test_an_endpoint_map_is_as_old_as_the_enumeration_it_was_built_from(monkeypatch):
+    """Else a map built from a nearly stale snapshot is trusted for twice the TTL."""
+    # Private: the receive path's private seams.
+    from netimps._udp import _endpoint
+
+    index = _a_real_index()
+    netimps.clear_interface_cache()
+    netimps.get_interfaces(cache=True)
+    enumerated_at = _endpoint._time.monotonic()
+    later = enumerated_at + netimps.INTERFACE_CACHE_TTL * 0.9
+
+    class _Clock:
+        @staticmethod
+        def monotonic():
+            return later
+
+    with UDPEndpoint(bind("127.0.0.1", 0)) as endpoint:
+        # Private: the native walks, caches and sockaddr decoders are tested apart from the live host.
+        from netimps._ifaddrs import _cache
+
+        monkeypatch.setattr(_cache, "_time", _Clock)
+        monkeypatch.setattr(_endpoint, "_time", _Clock)
+        assert endpoint._interface_for(index) is not None
+        assert endpoint._iface_cache_at <= enumerated_at
 
 
 # --------------------------------------------------------------------------- #
