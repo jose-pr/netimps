@@ -38,16 +38,32 @@ def test_the_ssh_and_http_canonical_names_are_unchanged():
     assert netimps.get_default_scheme(443) == "https"
 
 
-@pytest.mark.parametrize("text, port", [("443", 443), (" 80 ", 80), ("0", 0)])
+@pytest.mark.parametrize("text, port", [("443", 443), ("0", 0), ("65535", 65535)])
 def test_a_port_number_as_text_is_that_port(text, port):
     assert netimps.get_default_port(text) == port
     assert isinstance(netimps.get_default_port(text), int)
 
 
-@pytest.mark.parametrize("text", ["65536", "99999", "-1"])
+@pytest.mark.parametrize("text", ["65536", "99999"])
 def test_a_port_number_out_of_range_raises(text):
     with pytest.raises(netimps.NetimpsValueError, match="out of range"):
         netimps.get_default_port(text)
+
+
+@pytest.mark.parametrize(
+    "text", [" 80 ", "+80", "-1", "8_0", "\u0668\u0660", "\uff18\uff10", "80.0", ""]
+)
+def test_only_ascii_digits_are_a_port_number(text):
+    """``int()`` reads every one of these as a number; ``split_host`` refuses
+    each as port text, and the two agreed on nothing."""
+    assert netimps.get_default_port(text) is None
+
+
+@pytest.mark.parametrize("wrong", [None, 22, 22.0, b"ssh", ["ssh"]])
+def test_a_scheme_that_is_not_text_is_a_type_error(wrong):
+    """``None`` and ``22`` raised ``AttributeError`` from inside the function."""
+    with pytest.raises(TypeError, match="scheme must be text"):
+        netimps.get_default_port(wrong)
 
 
 @pytest.mark.parametrize("text", ["4.5", "²", "0x50"])

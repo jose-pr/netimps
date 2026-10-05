@@ -323,7 +323,7 @@ CIDR maths, address classification and `host:port` handling. Detail:
   — an IPv6 `%zone` suffix off a host.
 - **`unmap(value) -> IPAddress`** — an IPv4-mapped IPv6 address as plain IPv4.
 - **`is_wildcard(value: IPAddressLike | None) -> bool`**
-  — whether a value means "every local address".
+  — whether a value means "every local address"; a host name is `False`.
 - **`Host(value)`** — a host named by an address or a hostname:
   `Host.parse(text)`, `Host.try_parse(text, default=None)`, `.is_address`, and
   the lookups `.ip(...)`, `.fqdn(...)` and `.resolve(...)`, which return an
@@ -333,9 +333,11 @@ CIDR maths, address classification and `host:port` handling. Detail:
 
 ## Scheme ↔ port registry
 
-- **`get_default_port(scheme) -> int | None`** — text that is a whole number is
+- **`get_default_port(scheme) -> int | None`** — text made of ASCII digits is
   a port and comes back as an `int` (`"443"` → `443`; outside `0-65535` raises
-  `NetimpsValueError`). Otherwise the built-in table (35 entries,
+  `NetimpsValueError`). Any other spelling of a number (`"+80"`, `"8_0"`,
+  `" 80 "`) is looked up as a name and is `None`; a `scheme` that is not text
+  raises `TypeError`. Otherwise the built-in table (35 entries,
   including the socks variants, the `ws`/`wss` websocket schemes and the
   WS-Management spellings `wsman`/`wsmans` (IANA), `winrm`/`winrms` and `psrp`
   — 5985 for the plain forms, 5986 for the `s` forms — all absent from

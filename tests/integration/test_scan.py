@@ -192,9 +192,14 @@ def test_resolve_ports_rejects_out_of_range(port):
     # Private: the scan's private helpers hold the port and probe edge cases.
     from netimps._scan import _resolve_ports
 
-    for spec in (port, [port], str(port)):
+    for spec in (port, [port]):
         with pytest.raises(ValueError, match="out of range"):
             _resolve_ports(spec)
+    # As text, a port is ASCII digits: "-1" is no number at all, so it is
+    # looked up as a name and is unknown.
+    message = "out of range" if port >= 0 else "unknown port range or scheme"
+    with pytest.raises(ValueError, match=message):
+        _resolve_ports(str(port))
 
 
 def test_coerce_port_accepts_the_whole_range_and_nothing_else():

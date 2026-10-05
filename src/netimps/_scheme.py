@@ -228,21 +228,26 @@ def get_default_port(scheme: str) -> Optional[int]:
     answers with its TCP port on every platform rather than with whichever
     entry that host's database lists first.
 
-    Text that is a whole number is a port, not a scheme: it comes back as an
+    Text made of ASCII digits is a port, not a scheme: it comes back as an
     ``int``, so a command line or a config file can hand over either spelling.
     A number outside ``0-65535`` raises :class:`NetimpsValueError`; it is
-    neither a port nor a scheme.
+    neither a port nor a scheme. Any other spelling of a number (``"+80"``,
+    ``"8_0"``, surrounding spaces) is looked up as a name and is unknown.
+
+    :raises TypeError: for a ``scheme`` that is not text.
 
     Case-insensitive. Extend the table with :func:`register_port`.
     """
-    scheme = scheme.strip().lower()
-    # The conversion is the test: str.isdigit() passes superscripts that
-    # int() then rejects.
-    try:
+    if not isinstance(scheme, str):
+        raise TypeError(
+            "scheme must be text (a name or a port number), got %s"
+            % (type(scheme).__name__,)
+        )
+    scheme = scheme.lower()
+    # A port is ASCII digits and nothing else, the rule split_host applies:
+    # int() alone also reads "+80", "8_0", " 80 " and non-ASCII digits.
+    if scheme.isascii() and scheme.isdigit():
         number = int(scheme)
-    except ValueError:
-        pass
-    else:
         if not MIN_PORT <= number <= MAX_PORT:
             raise NetimpsValueError(
                 "port out of range: %r (must be %d-%d)" % (scheme, MIN_PORT, MAX_PORT)
