@@ -15,7 +15,7 @@ from ipaddress import (
     IPv6Network,
 )
 from ._host import Host
-from ._types import IPAddress, IPAddressLike
+from ._types import IPAddress, IPAddressLike, ip_literal
 
 
 def _family_argument(family: object, *, required: bool = False) -> "Optional[int]":
@@ -168,8 +168,11 @@ def is_wildcard(value: "Union[IPAddressLike, None]") -> bool:
 
     A ``%zone`` suffix does not change whether the address is unspecified.
 
-    :raises NetimpsValueError: for text that is no address.
-    :raises TypeError: for a value of another type.
+    Text that is no address is a host name, and a name is never the wildcard:
+    the answer is ``False``. This is the one classifier that takes a name,
+    because it is asked of a listen host, and ``bind`` takes a name there.
+
+    :raises TypeError: for a value that is neither text nor an address.
     """
     if value is None:
         return True
@@ -177,4 +180,8 @@ def is_wildcard(value: "Union[IPAddressLike, None]") -> bool:
         value = value.strip().split("%", 1)[0]
         if not value:
             return True
+        literal = ip_literal(value)
+        if literal is None:
+            return False
+        value = literal
     return bool(unmap(_as_address(value)).is_unspecified)

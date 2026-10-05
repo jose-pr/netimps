@@ -16,14 +16,15 @@ below is imported from `netimps`.
   link-local (link scope): confined to this host or link. **Not "is private"** —
   RFC 1918 ranges are globally scoped and return `False`. A v4-mapped address is
   judged as the v4 address inside, the same on every Python.
-- **One rule for the classifiers** (`is_link_scoped`, `is_wildcard`,
-  `is_multicast`, `is_local_address`, `is_broadcast`, `is_unicast`, and `unmap`):
-  each takes `IPAddressLike` (text, `int`, packed `bytes`, an address object; an
-  interface is read as its `.ip`) and raises `NetimpsValueError` for text that is
-  no address, and `TypeError` for a network or a value of another type
-  (`None`, `float`, `bool`, `list`). `is_wildcard` alone also takes `None` and
-  blank text, which mean "every address". `is_local_host` alone takes a name:
-  it never raises, and anything that is not a host is `False`.
+- **One rule for the classifiers** (`is_link_scoped`, `is_multicast`,
+  `is_local_address`, `is_broadcast`, `is_unicast`, and `unmap`): each takes
+  `IPAddressLike` (text, `int`, packed `bytes`, an address object; an interface
+  is read as its `.ip`) and raises `NetimpsValueError` for text that is no
+  address, and `TypeError` for a network or a value of another type (`None`,
+  `float`, `bool`, `list`). Two take a host instead, because they are asked of
+  one: `is_wildcard` takes what `bind` takes as its host (`None` and blank text
+  mean "every address", and a name is `False`), and `is_local_host` takes a
+  name, never raises, and answers `False` for anything that is not a host.
 - **`collapse(networks) -> List[IPNetwork]`** — merge adjacent/overlapping
   networks into the minimal equivalent list. Mixed families collapse
   independently.
@@ -77,8 +78,9 @@ below is imported from `netimps`.
 - **`is_wildcard(value: IPAddressLike | None) -> bool`** — whether a value
   means "every local address": `""`, `None`, `"0.0.0.0"`, `"::"`, the v4-mapped
   `::ffff:0.0.0.0`, and any other spelling whose address form is unspecified. A
-  `%zone` is stripped first. Raises `NetimpsValueError` for text that is no
-  address. Agrees with what `bind("")` treats as the wildcard.
+  `%zone` is stripped first. Text that is no address is a host
+  name and answers `False`: `bind` takes a name as its host, and a name is
+  never the wildcard. `TypeError` for a network or a value of another type.
 - **`split_zone(text) -> (host, zone | None)`** — split an IPv6 `%zone` suffix
   off a host: `"fe80::1%eth0"` → `("fe80::1", "eth0")`, `"10.0.0.5"` →
   `("10.0.0.5", None)`. Use it before `try_parse` or a comparison, because

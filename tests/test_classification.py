@@ -69,13 +69,14 @@ def test_is_multicast_and_is_unicast_agree_on_a_mapped_address():
 # One rule for the family of predicates                                        #
 # --------------------------------------------------------------------------- #
 
+#: ``is_wildcard`` is not among them: it is asked of a listen host, which may
+#: be a name, and answers ``False`` for one.
 PREDICATES = [
     is_link_scoped,
     is_multicast,
     is_local_address,
     is_broadcast,
     is_unicast,
-    is_wildcard,
 ]
 
 

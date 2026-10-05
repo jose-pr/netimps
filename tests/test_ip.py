@@ -736,10 +736,20 @@ def test_is_wildcard_accepts_parsed_addresses():
     assert is_wildcard(ipaddress.IPv4Address("1.2.3.4")) is False
 
 
-def test_is_wildcard_raises_for_text_that_is_no_address():
-    for junk in ("example.com", "garbage", "...", "999.999.999.999", "[::1", "a b c"):
-        with pytest.raises(netimps.NetimpsValueError):
-            is_wildcard(junk)
+def test_is_wildcard_of_a_host_name_is_false():
+    """``bind`` takes a name as its host, so the question "is this listen host
+    the wildcard?" has to take one too: a server given ``"localhost"`` asked it
+    and got an exception where the answer is plainly no."""
+    for name in ("localhost", "example.com", "garbage", "...", "999.999.999.999"):
+        assert is_wildcard(name) is False
+    for junk in ("[::1", "a b c", "*"):
+        assert is_wildcard(junk) is False
+
+
+def test_is_wildcard_still_refuses_a_value_that_is_no_host():
+    for wrong in (1.5, True, ["0.0.0.0"], ipaddress.ip_network("0.0.0.0/0")):
+        with pytest.raises(TypeError):
+            is_wildcard(wrong)
 
 
 def test_is_wildcard_agrees_with_what_bind_treats_as_the_wildcard():
