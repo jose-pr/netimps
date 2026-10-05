@@ -65,6 +65,8 @@ def _urllib_fetch(
     except ResolutionError:
         raise  # already says what was wrong with the reply
     except urllib.error.HTTPError as exc:
+        # The error is itself an open response; only its status is wanted.
+        exc.close()
         raise ResolutionError("%s answered HTTP %d" % (shown, exc.code)) from exc
     except (urllib.error.URLError, OSError) as exc:
         reason = getattr(exc, "reason", exc)

@@ -304,6 +304,10 @@ probe says so in its prefix.
 
 ### Fixed
 
+- **`resolve_doh` closes the response of an HTTP error status.** The error
+  urllib raises is itself an open response; it was left for the garbage
+  collector, which reports it as a `ResourceWarning` at an unrelated moment.
+
 - **`is_broadcast` and `is_unicast` read an interface object as its address.**
   `IPv4Interface` is an `IPv4Address` subclass and was compared as address and
   network, so `is_broadcast(IPv4Interface("10.0.0.255/24"), nic)` was false and
