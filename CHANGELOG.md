@@ -107,6 +107,8 @@ probe says so in its prefix.
 | `supports_recvmsg` | `has_recvmsg` |
 | `socket_patched` | `is_socket_patched` |
 | `APIPA` | `LINK_LOCAL_V4` |
+| `InterfaceSpec` | `InterfaceLike` (it was never exported, so importing it from the root already failed) |
+| `HOST_DN` | `get_hostname()` (a constant becomes a call) |
 | `UdpEndpoint.supports_pktinfo` | `UDPEndpoint.has_pktinfo` |
 | `UdpEndpoint.supports_src_pinning` | `UDPEndpoint.has_src_pinning` |
 | `Interface.loopback`, `Interface(loopback=)` | `Interface.is_loopback`, `Interface(is_loopback=)` |
@@ -114,18 +116,37 @@ probe says so in its prefix.
 | `Fqdn.wire` (property) | `FQDN.encode()`, `bytes(name)` |
 | `Fqdn.unicode` (property) | `FQDN.to_unicode()` |
 | `Fqdn.as_fully_qualified()` | `FQDN.fully_qualified()` |
+| `Host.value = ...` | read-only; build a new `Host` |
+| `Interface.ips (list)` | `Interface.ips (tuple)` |
+| `MACAddress._VALID_MAC` | `MACAddress.is_valid(text)` |
 | `get_ip(x)` | `Host(x).ip()` (removed; `check=True` raises where `get_ip` returned `None`) |
-| `Host.fqdn` (property) | `Host.fqdn()` (method; reverse lookup for an address) |
+| `Host.fqdn (property)` | `Host.fqdn()` (method; reverse lookup for an address) |
 | `Host.ip(refresh)` | `Host.ip(*, check, ipv6, refresh, <resolver options>)` |
 | `Fqdn.resolve() -> records` | `FQDN.resolve() -> (fqdn, ip)`; records come from `netimps.resolve(name, rdtype)` |
 | `wait_for_port(timeout=)` (whole wait) | `wait_for_port(deadline=)` |
 | `wait_for_port(connect_timeout=)` (one attempt) | `wait_for_port(timeout=)` |
+| `(Fqdn/Host method) strict=` | `check=` |
+| `UDPEndpoint.send(data, address=, port, src)` | `UDPEndpoint.send(data, dst, port, *, src=)` |
+| `UDPEndpoint.recv/arecv/datagrams(bufsize, resolve_interface) positional` | `resolve_interface=` keyword-only |
+| `UDPEndpoint.reply_socket(datagram, port, connreset) positional` | `connreset=` keyword-only |
+| `Interface.primary_ip(ipv6, loopback_ok) positional` | `loopback_ok=` keyword-only |
+| `retry/backoff_delays/Backoff _sleep= and _random= parameters` | removed; patch `netimps._retry._sleep` and `netimps._retry._random` |
 | `PingResult.rtt_ms` (milliseconds) | `PingResult.rtt` (seconds) |
 | `PingResult.host`, `PingResult(host=)` | `PingResult.dst`, `PingResult(dst=)` |
 | `Datagram.local_address`, `Datagram(local_address=)` | `Datagram.destination`, `Datagram(destination=)` (the address the datagram was sent *to*) |
+| `NETIMPS_NO_SOCKET_PATCH` | `NETIMPS_SOCKET_PATCH` (sense inverted: a false spelling opts out; the old variable set at all is an error at import) |
+| `netimps.cli:run` | `netimps.cli:main` |
 
 ### Changed
 
+- **The shipped API header is split.** `netimps/AGENTS.md` keeps every public
+  name with its signature and one sentence, the exceptions, the command line's
+  contract, the environment variables (`NETIMPS_SOCKET_PATCH` with its accepted
+  spellings and its import-time error, `NETIMPS_MCP`, `AGENT_HELP`), the asyncio
+  rules and the cross-cutting gotchas; the detail of each large topic is in an
+  `AGENTS.md` beside the code that implements it (`_dns`, `_ping`, `_sockets`,
+  `_ifaddrs`, `_ip`, `_fqdn`, `_msg`, `_udp` and `cli`), listed in a table in the
+  top header. All of them ship inside the package.
 - **The command line is the `netimps.cli` package, and its entry point is
   `netimps.cli:main(argv=None) -> int`.** `netimps.cli:run` is gone (it could
   return `None`); the `netimps` console script and `python -m netimps` call
