@@ -1,10 +1,13 @@
 import ipaddress
-
+import os
 import pathlib
+import socket
 
 import pytest
 
 import netimps
+
+# Private: the IP helpers' private seams.
 from netimps import (
     IPAddress,
     IPInterface,
@@ -16,10 +19,15 @@ from netimps import (
     IPv6Interface,
     IPv6Network,
     MACAddress,
+    _ip,
+    bind,
+    is_wildcard,
     parse,
     try_parse,
+    unmap,
 )
-from netimps import _ip
+
+# Private: the IP helpers' private seams.
 from netimps._ip import _dst_argument
 
 
@@ -611,6 +619,7 @@ def test_version_is_read_not_restated():
 def test_the_root_reexports_the_generic_parse_functions_themselves():
     """The root must hand out the owner's objects, not wrappers: a wrapper
     would split `netimps.parse` from the one internal code imports."""
+    # Private: the parse dispatch is tested through its seam.
     from netimps import _parse
 
     assert netimps.parse is _parse.parse
@@ -638,3 +647,106 @@ def test_get_hostname_takes_its_option_by_keyword_only():
     """A positional ``True`` would read as a name, not as a switch."""
     with pytest.raises(TypeError):
         netimps.get_hostname(True)  # type: ignore[misc]
+
+
+IS_WINDOWS = os.name == "nt"
+
+
+# --------------------------------------------------------------------------- #
+# unmap                                                                       #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("::ffff:10.0.0.5", "10.0.0.5"),
+        ("10.0.0.5", "10.0.0.5"),
+        ("2001:db8::1", "2001:db8::1"),
+        ("::1", "::1"),
+        ("::", "::"),
+    ],
+)
+def test_unmap_collapses_a_mapped_address_and_passes_the_rest_through(value, expected):
+    assert str(unmap(value)) == expected
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("::FFFF:10.0.0.5", "10.0.0.5"),
+        ("::ffff:0:1", "0.0.0.1"),
+        ("0:0:0:0:0:ffff:0a00:0005", "10.0.0.5"),
+    ],
+)
+def test_unmap_sees_through_spellings_a_string_test_misses(value, expected):
+    """The reason this is not `startswith("::ffff:")` plus a slice.
+
+    All three of these *are* mapped addresses. The string test -- which is what
+    a consuming project had -- leaves every one of them untouched: wrong case,
+    no dot, expanded form. One address has many spellings and only the parsed
+    form sees through them.
+    """
+    assert str(unmap(value)) == expected
+    naive = value[7:] if value.startswith("::ffff:") and "." in value else value
+    assert str(unmap(value)) != naive, "the string test would have been right here"
+
+
+def test_unmap_accepts_parsed_addresses_and_rejects_non_addresses():
+    assert unmap(ipaddress.IPv6Address("::ffff:1.2.3.4")) == ipaddress.IPv4Address(
+        "1.2.3.4"
+    )
+    assert unmap(ipaddress.IPv4Address("1.2.3.4")) == ipaddress.IPv4Address("1.2.3.4")
+    with pytest.raises(ValueError):
+        unmap("example.com")
+
+
+def test_unmap_is_the_inverse_of_the_dual_stack_mapping():
+    """`UDPEndpoint` maps a v4 arrival up; this maps it back down."""
+    assert str(unmap("::ffff:127.0.0.1")) == "127.0.0.1"
+
+
+# --------------------------------------------------------------------------- #
+# is_wildcard                                                                 #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("", True),
+        (None, True),
+        ("0.0.0.0", True),
+        ("::", True),
+        ("::0", True),
+        ("0000:0000:0000:0000:0000:0000:0000:0000", True),
+        ("0.0.0.0%eth0", True),
+        ("127.0.0.1", False),
+        ("::1", False),
+        ("10.0.0.5", False),
+    ],
+)
+def test_is_wildcard(value, expected):
+    assert is_wildcard(value) is expected
+
+
+def test_is_wildcard_accepts_parsed_addresses():
+    assert is_wildcard(ipaddress.IPv4Address("0.0.0.0")) is True
+    assert is_wildcard(ipaddress.IPv6Address("::")) is True
+    assert is_wildcard(ipaddress.IPv4Address("1.2.3.4")) is False
+
+
+def test_is_wildcard_raises_for_text_that_is_no_address():
+    for junk in ("example.com", "garbage", "...", "999.999.999.999", "[::1", "a b c"):
+        with pytest.raises(netimps.NetimpsValueError):
+            is_wildcard(junk)
+
+
+def test_is_wildcard_agrees_with_what_bind_treats_as_the_wildcard():
+    """`bind("")` is documented as the wildcard, so `is_wildcard("")` must agree."""
+    sock = bind("", 0)
+    try:
+        assert is_wildcard("")
+        assert is_wildcard(sock.getsockname()[0])
+    finally:
+        sock.close()

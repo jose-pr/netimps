@@ -14,6 +14,8 @@ import sys
 import pytest
 
 import netimps
+
+# Private: platform constants for the pktinfo options; no decision is read from it.
 from netimps import _pktinfo
 
 IS_WINDOWS = os.name == "nt"
@@ -216,6 +218,7 @@ def test_a_tiny_control_buffer_truncates_instead_of_reading_out_of_bounds():
     # CPython 3.12, so probing it here skipped this test on 3.9 -- the same blind
     # spot that let the constant bug reach main in the first place. The literal
     # table in `_pktinfo` is the platform fact; `socket` is just one source for it.
+    # Private: platform constants for the pktinfo options; no decision is read from it.
     from netimps import _pktinfo
 
     ip_pktinfo = _pktinfo._IP_PKTINFO
@@ -395,6 +398,7 @@ def test_the_patch_never_replaces_a_native_name():
     """
     import os as _os
 
+    # Private: the socket patch and control-message sizing are not public.
     from netimps import _msg
     from netimps._msg import _patch, _sysconf
 
@@ -429,6 +433,7 @@ def test_opt_out_is_readable_from_the_environment(monkeypatch):
     Unset or empty: patch (True). "1", "true", "yes", "on": patch (True).
     "0", "false", "no", "off": do not patch (False). Anything else: ValueError.
     """
+    # Private: the socket patch and control-message sizing are not public.
     from netimps._msg._patch import _patch_requested
 
     monkeypatch.delenv("NETIMPS_SOCKET_PATCH", raising=False)
@@ -472,6 +477,7 @@ def test_winsock_alignment_and_header_size():
     Worth pinning because the Linux value a reader might assume happens to work
     on 32-bit and silently misparses everything on 64-bit.
     """
+    # Private: the Windows ctypes layouts are private and checked by size off Windows.
     from netimps import _winsock
     from netimps._winsock import _abi, _cmsg
 
@@ -495,6 +501,7 @@ def test_winsock_control_parser_stops_at_the_buffer_end():
     and the parser is the last line of defence against indexing past the
     allocation.
     """
+    # Private: the Windows ctypes layouts are private and checked by size off Windows.
     from netimps import _winsock
     from netimps._winsock import _abi, _cmsg
 
@@ -766,6 +773,8 @@ def test_sysconf_is_installed_and_removed_with_the_socket_names():
     if not IS_WINDOWS:
         pytest.skip("nothing to install where the platform has both")
     import os as _os
+
+    # Private: the socket patch and control-message sizing are not public.
     from netimps._msg import _patch
 
     assert "os.sysconf" in _patch._installed
@@ -811,6 +820,7 @@ def _recv_both_ways(dest="127.0.0.1", bind_to="0.0.0.0"):
     """One datagram, captured through netimps.recvmsg and through sock.recvmsg."""
     import select
 
+    # Private: platform constants for the pktinfo options; no decision is read from it.
     from netimps import _pktinfo
 
     option = _pktinfo._IP_PKTINFO
@@ -923,6 +933,7 @@ def test_netimps_recvmsg_always_reports_the_platforms_own_bytes():
     said; only the impersonation reshapes. `UDPEndpoint` depends on this, since
     it calls `_msg` directly and carries its own per-platform layout table.
     """
+    # Private: platform constants for the pktinfo options; no decision is read from it.
     from netimps import _pktinfo
 
     captured = _recv_both_ways()
@@ -945,6 +956,7 @@ def test_on_posix_the_two_paths_are_identical():
 @pytest.mark.skipif(not IS_WINDOWS, reason="only Windows accepts two layouts")
 def test_the_patched_sendmsg_accepts_either_layout():
     """So a caller can round-trip what the patched recvmsg handed it."""
+    # Private: platform constants for the pktinfo options; no decision is read from it.
     from netimps import _pktinfo
 
     option = _pktinfo._IP_PKTINFO
@@ -980,6 +992,7 @@ def test_the_patched_sendmsg_accepts_either_layout():
 @pytest.mark.skipif(not IS_WINDOWS, reason="only Windows reshapes")
 def test_a_round_trip_through_the_patched_methods():
     """Receive through the patched method, send the same cmsg straight back."""
+    # Private: platform constants for the pktinfo options; no decision is read from it.
     from netimps import _pktinfo
 
     option = _pktinfo._IP_PKTINFO

@@ -1,8 +1,10 @@
 import operator
+import os
 import typing
 
 import pytest
 
+import netimps
 from netimps import MACAddress, MACAddressLike
 
 
@@ -376,3 +378,82 @@ def test_classmethod_validators_bind_to_subclass():
     assert isinstance(parsed, Vendor)
     assert Vendor.is_valid("aa:bb:cc:dd:ee:ff")
     assert not Vendor.is_valid("nope")
+
+
+IS_WINDOWS = os.name == "nt"
+
+
+# --------------------------------------------------------------------------- #
+# MACAddress subclassing -- a documented guarantee                            #
+# --------------------------------------------------------------------------- #
+
+
+class _WireMAC(netimps.MACAddress):
+    """A subclass overriding only __str__, as a caller would."""
+
+    def __str__(self):
+        return self.format("-", upper=True)
+
+    def hex(self, *args):
+        return self.packed.hex(*args)
+
+
+def test_mac_subclass_can_change_str_only():
+    mac = _WireMAC("aa:bb:cc:dd:ee:ff")
+    assert str(mac) == "AA-BB-CC-DD-EE-FF"
+    # Everything else is inherited unchanged.
+    assert mac.packed == bytes.fromhex("aabbccddeeff")
+    assert mac.format() == "aa:bb:cc:dd:ee:ff"
+    assert mac.oui == b"\xaa\xbb\xcc"
+
+
+def test_mac_subclass_keeps_equality_and_hashing():
+    """A subclass must interoperate with the base type, or dicts break."""
+    base = netimps.MACAddress("aa:bb:cc:dd:ee:ff")
+    sub = _WireMAC("AA-BB-CC-DD-EE-FF")
+    assert sub == base and base == sub
+    assert hash(sub) == hash(base)
+    # The pair must collapse to one key, not two.
+    assert len({base, sub}) == 1
+    assert {base: "x"}[sub] == "x"
+
+
+def test_mac_subclass_keeps_ordering_and_validation():
+    low = _WireMAC("00:00:00:00:00:01")
+    high = _WireMAC("ff:ff:ff:ff:ff:ff")
+    assert low < high
+    assert sorted([high, low]) == [low, high]
+    with pytest.raises(ValueError):
+        _WireMAC("00-11-22")  # too short
+
+
+def test_mac_subclass_classmethods_bind_to_the_subclass():
+    parsed = _WireMAC.try_parse("aa:bb:cc:dd:ee:ff")
+    assert isinstance(parsed, _WireMAC)
+    assert str(parsed) == "AA-BB-CC-DD-EE-FF"
+    assert _WireMAC.is_valid("aa:bb:cc:dd:ee:ff")
+    assert not _WireMAC.is_valid("nope")
+
+
+def test_mac_subclass_hex_passthrough():
+    """.hex() is the one bytes method a caller may need to re-add."""
+    assert _WireMAC("aa:bb:cc:dd:ee:ff").hex("-").upper() == "AA-BB-CC-DD-EE-FF"
+
+
+# --------------------------------------------------------------------------- #
+# MACAddress.hex                                                              #
+# --------------------------------------------------------------------------- #
+
+
+def test_mac_hex_matches_bytes_hex():
+    """A pure passthrough -- the reason callers subclassed this type."""
+    mac = MACAddress("aa:bb:cc:dd:ee:ff")
+    assert mac.hex() == "aabbccddeeff" == mac.packed.hex()
+    assert mac.hex(":") == mac.packed.hex(":") == "aa:bb:cc:dd:ee:ff"
+    assert mac.hex("-", 2) == mac.packed.hex("-", 2) == "aabb-ccdd-eeff"
+
+
+def test_mac_hex_is_lowercase_like_str_and_unlike_format_upper():
+    mac = MACAddress("AA:BB:CC:DD:EE:FF")
+    assert mac.hex(":") == "aa:bb:cc:dd:ee:ff"
+    assert mac.format(":", upper=True) == "AA:BB:CC:DD:EE:FF"

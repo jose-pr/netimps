@@ -16,6 +16,8 @@ import sys
 import pytest
 
 from netimps import Interface, UDPEndpoint, bind, has_pktinfo
+
+# Private: the receive path's private seams.
 from netimps._udp import _endpoint, _freebsd
 
 ON_FREEBSD = sys.platform.startswith("freebsd")

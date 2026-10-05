@@ -11,6 +11,8 @@ import pytest
 
 import netimps
 from netimps import PORT_RANGES, IPv4Interface, is_multicast, scan_hosts, scan_ports
+
+# Private: the native walks, caches and sockaddr decoders are tested apart from the live host.
 from netimps._ifaddrs import _lookup, _spec
 
 
@@ -73,6 +75,7 @@ def test_scan_ports_unknown_named_range():
 
 def test_ports_accept_scheme_names():
     """A scheme name resolves through get_default_port."""
+    # Private: the scan's private helpers hold the port and probe edge cases.
     from netimps._scan import _resolve_ports
 
     assert _resolve_ports("https") == (443,)
@@ -84,6 +87,7 @@ def test_ports_accept_scheme_names():
 
 def test_range_name_wins_over_scheme_name():
     """A caller writing 'common' means the set, not some scheme."""
+    # Private: the scan's private helpers hold the port and probe edge cases.
     from netimps._scan import _resolve_ports
 
     assert len(_resolve_ports("common")) > 1
@@ -91,6 +95,7 @@ def test_range_name_wins_over_scheme_name():
 
 
 def test_unresolvable_port_in_list_raises():
+    # Private: the scan's private helpers hold the port and probe edge cases.
     from netimps._scan import _resolve_ports
 
     with pytest.raises(ValueError, match="cannot resolve"):
@@ -184,6 +189,7 @@ def test_out_of_range_port_raises_instead_of_wrapping(listener):
 @pytest.mark.parametrize("port", [-1, 65536, 100000])
 def test_resolve_ports_rejects_out_of_range(port):
     """Every spelling of a port spec goes through the same gate."""
+    # Private: the scan's private helpers hold the port and probe edge cases.
     from netimps._scan import _resolve_ports
 
     for spec in (port, [port], str(port)):
@@ -192,6 +198,7 @@ def test_resolve_ports_rejects_out_of_range(port):
 
 
 def test_coerce_port_accepts_the_whole_range_and_nothing_else():
+    # Private: the scheme registry's private helpers.
     from netimps._scheme import coerce_port
 
     assert coerce_port(0) == 0
@@ -214,6 +221,7 @@ def test_unicode_digit_falls_through_to_scheme_lookup():
     old numeric test crashed inside the conversion instead of trying the value
     as a scheme name and reporting it unresolvable.
     """
+    # Private: the scan's private helpers hold the port and probe edge cases.
     from netimps._scan import _port_number, _resolve_ports
 
     assert "²".isdigit()  # the premise, pinned
@@ -243,6 +251,7 @@ def test_zero_timeout_still_finds_an_open_port(listener):
 
 
 def test_checked_timeout_passes_zero_on_and_rejects_negative():
+    # Private: the scan's private helpers hold the port and probe edge cases.
     from netimps._scan import _checked_timeout
 
     assert _checked_timeout(0) == 0
@@ -330,6 +339,7 @@ def test_probe_tries_every_resolved_address(monkeypatch):
     ``create_connection`` looped over every address inside each probe, so a
     dual-stack name still has to report a port open on either family.
     """
+    # Private: the scan's private helpers hold the port and probe edge cases.
     from netimps._scan import _probe
 
     tried = []
@@ -355,6 +365,7 @@ def test_an_unresolvable_host_scans_as_nothing_open(monkeypatch):
 
 
 def test_an_address_literal_is_never_sent_to_the_resolver(monkeypatch):
+    # Private: the scan's private helpers hold the port and probe edge cases.
     from netimps._scan import _probe_addresses
 
     def refuse(*args, **kwargs):  # pragma: no cover - must never be called
@@ -400,6 +411,7 @@ def test_scan_hosts_with_an_empty_ports_list_probes_nothing(monkeypatch):
 @pytest.fixture
 def clean_ports():
     """Snapshot/restore the port tables -- registration mutates module state."""
+    # Private: the scheme registry's private helpers.
     from netimps import _scheme
 
     ports = dict(_scheme._DEFAULT_PORTS)
@@ -452,6 +464,7 @@ def test_services_lookup_names_the_protocol(monkeypatch):
     TCP is asked first so the answer is the same everywhere, then UDP so a
     UDP-only service is still found.
     """
+    # Private: the scheme registry's private helpers.
     from netimps import _scheme
 
     asked = []
@@ -470,6 +483,7 @@ def test_services_lookup_names_the_protocol(monkeypatch):
 
 def test_services_reverse_lookup_names_the_protocol(monkeypatch):
     """Port 514 is shell/cmd over TCP and syslog over UDP -- TCP wins."""
+    # Private: the scheme registry's private helpers.
     from netimps import _scheme
 
     asked = []
@@ -746,6 +760,7 @@ def test_ipv6_membership_without_an_interface_is_still_kernel_choice(
     """
     import struct
 
+    # Private: the membership request layout is private.
     from netimps import _multicast
 
     monkeypatch.setattr(_multicast, "_NEEDS_EXPLICIT_V6_SCOPE", False)
@@ -863,6 +878,7 @@ def test_explicit_interface_still_wins_over_the_default_scope():
     if chosen is None:
         pytest.skip("no non-loopback interface with an index on this host")
 
+    # Private: the membership request layout is private.
     from netimps._multicast import _membership_request
 
     request = _membership_request("ff02::fb", chosen, ipv6=True)
@@ -907,6 +923,7 @@ def test_only_unroutable_scopes_get_a_default_index(group, needs_scope, monkeypa
     Faking the platform flag is what lets this run anywhere: the behaviour is
     macOS-only, and CI is the only macOS available.
     """
+    # Private: the membership request layout is private.
     from netimps import _multicast
 
     monkeypatch.setattr(_multicast, "_NEEDS_EXPLICIT_V6_SCOPE", True)
@@ -923,6 +940,7 @@ def test_no_default_index_where_the_kernel_chooses(monkeypatch):
     Index 0 means "kernel's choice" and is the right default -- this fallback
     exists only for the platforms that refuse to make that choice.
     """
+    # Private: the membership request layout is private.
     from netimps import _multicast
 
     monkeypatch.setattr(_multicast, "_NEEDS_EXPLICIT_V6_SCOPE", False)
@@ -972,6 +990,7 @@ def test_scan_hosts_memory_does_not_grow_with_the_work(monkeypatch):
     """
     import tracemalloc
 
+    # Private: the scan's private helpers hold the port and probe edge cases.
     from netimps import _scan
 
     calls = []
@@ -989,6 +1008,7 @@ def test_scan_hosts_memory_does_not_grow_with_the_work(monkeypatch):
 
 
 def test_scan_hosts_bounds_hosts_times_ports_before_any_probe(monkeypatch):
+    # Private: the scan's private helpers hold the port and probe edge cases.
     from netimps import _scan
 
     calls = []
@@ -1002,6 +1022,7 @@ def test_scan_hosts_bounds_hosts_times_ports_before_any_probe(monkeypatch):
 
 
 def test_scan_hosts_bound_still_admits_a_sixteen_with_the_common_ports():
+    # Private: the scan's private helpers hold the port and probe edge cases.
     from netimps import _scan
 
     assert 65536 * len(netimps.PORT_RANGES["common"]) <= _scan._MAX_PROBES
@@ -1010,6 +1031,7 @@ def test_scan_hosts_bound_still_admits_a_sixteen_with_the_common_ports():
 
 def test_scan_hosts_keeps_the_results_of_a_lazily_fed_pool(monkeypatch):
     """A window of work in flight still reports every open port, in order."""
+    # Private: the scan's private helpers hold the port and probe edge cases.
     from netimps import _scan
 
     def probe(addresses, port, timeout):
@@ -1026,6 +1048,7 @@ def test_scan_hosts_keeps_the_results_of_a_lazily_fed_pool(monkeypatch):
 def test_scan_ports_all_ports_is_fed_lazily(monkeypatch):
     import tracemalloc
 
+    # Private: the scan's private helpers hold the port and probe edge cases.
     from netimps import _scan
 
     monkeypatch.setattr(
@@ -1051,6 +1074,7 @@ def test_a_comma_list_scans_each_item(listener):
 
 
 def test_a_comma_list_takes_numbers_schemes_and_range_names():
+    # Private: the scan's private helpers hold the port and probe edge cases.
     from netimps._scan import _resolve_ports
 
     assert _resolve_ports("22,https, 8000") == (22, 443, 8000)

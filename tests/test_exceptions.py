@@ -13,6 +13,8 @@ from pathlib import Path
 import pytest
 
 import netimps
+
+# Private: the resolver package: its seams are patched where they are read and its search orders pinned.
 from netimps import (
     AddressInUseError,
     DNSDecodeError,
@@ -23,6 +25,8 @@ from netimps import (
     ResolutionTimeoutError,
     _dns,
 )
+
+# Private: the name codec under test.
 from netimps._fqdn import _wire as _namewire
 
 #: Each class with its direct bases, in declaration order.

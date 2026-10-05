@@ -7,6 +7,7 @@ at all. The three orders are observable, so they are pinned here.
 
 import pytest
 
+# Private: the resolver package: its seams are patched where they are read and its search orders pinned.
 from netimps import ResolutionError, _dns
 from netimps._dns import _dnswire
 

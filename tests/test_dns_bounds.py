@@ -18,8 +18,12 @@ import pytest
 import netimps
 from fakedns import reply_for
 from netimps import DNSDecodeError, ResolutionError, ResolutionTimeoutError
+
+# Private: the resolver package: its seams are patched where they are read and its search orders pinned.
 from netimps import _dns
 from netimps._dns import _dnswire
+
+# Private: the name codec under test.
 from netimps._fqdn import _wire as _namewire
 
 

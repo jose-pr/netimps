@@ -18,6 +18,8 @@ import sys
 import pytest
 
 import netimps
+
+# Private: the resolver package: its seams are patched where they are read and its search orders pinned.
 from netimps import (
     IPv4Address,
     ResolutionError,

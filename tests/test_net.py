@@ -7,6 +7,8 @@ import pytest
 from dns.rdatatype import UnknownRdatatype as _UnknownRdatatype
 
 import netimps
+
+# Private: the resolver package: its seams are patched where they are read and its search orders pinned.
 from netimps import _dns, _ip, _ping, _proc
 from netimps import ping, resolve
 from netimps import resolve_dnspython, resolve_nslookup, resolve_system
@@ -1591,6 +1593,7 @@ def test_ping_never_inherits_the_callers_stdin(fake_program, monkeypatch):
 @pytest.fixture
 def clean_ports():
     """Snapshot/restore the port tables -- registration mutates module state."""
+    # Private: the scheme registry's private helpers.
     from netimps import _scheme
 
     ports = dict(_scheme._DEFAULT_PORTS)

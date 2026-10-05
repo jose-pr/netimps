@@ -9,6 +9,7 @@ survives an error.
 
 import asyncio
 import ipaddress
+import os
 import select
 import socket
 import sys
@@ -453,3 +454,74 @@ def test_a_pinned_send_to_a_host_name_resolves_it():
             peer.close()
     assert [data for data, _ in got] == [b"a", b"b"]
     assert got[1][1][0] == "127.0.0.1"
+
+
+IS_WINDOWS = os.name == "nt"
+
+
+# --------------------------------------------------------------------------- #
+# Datagram.truncated                                                          #
+# --------------------------------------------------------------------------- #
+
+
+def test_a_short_bufsize_reports_truncation_rather_than_losing_it_silently():
+    """A datagram larger than ``bufsize`` must say so.
+
+    The consequence of not reporting it, measured: with
+    ``max_packet_size=576`` a 1102-octet datagram arrived cut to 576 and the
+    decoder was handed a message whose option stream stops mid-option. The
+    flag was always there in ``msg_flags``; it was simply dropped.
+    """
+    with UDPEndpoint(bind("127.0.0.1", 0)) as endpoint:
+        endpoint.socket.settimeout(5.0)
+        port = endpoint.socket.getsockname()[1]
+        sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sender.sendto(b"x" * 1102, ("127.0.0.1", port))
+            packet = endpoint.recv(576)
+        finally:
+            sender.close()
+        assert len(packet.data) == 576
+        assert packet.truncated is True, "MSG_TRUNC must reach the caller"
+        # The two truncation flags answer different questions.
+        assert packet.control_truncated is False
+
+
+def test_a_datagram_that_fits_is_not_marked_truncated():
+    with UDPEndpoint(bind("127.0.0.1", 0)) as endpoint:
+        endpoint.socket.settimeout(5.0)
+        port = endpoint.socket.getsockname()[1]
+        sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sender.sendto(b"fits", ("127.0.0.1", port))
+            packet = endpoint.recv(1500)
+        finally:
+            sender.close()
+        assert packet.data == b"fits"
+        assert packet.truncated is False
+
+
+def test_a_truncation_is_reported_even_without_pktinfo():
+    """Losing the interface must not also lose the truncation signal.
+
+    The degraded path goes through ``recvmsg`` with a zero-length control
+    buffer rather than ``recvfrom``, precisely because ``recvfrom`` cannot
+    report ``MSG_TRUNC`` and silent data loss is worse than a missing
+    interface.
+    """
+    with UDPEndpoint(bind("127.0.0.1", 0), pktinfo=False) as endpoint:
+        assert not endpoint.has_pktinfo
+        endpoint.socket.settimeout(5.0)
+        port = endpoint.socket.getsockname()[1]
+        sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sender.sendto(b"y" * 900, ("127.0.0.1", port))
+            packet = endpoint.recv(300)
+        finally:
+            sender.close()
+        assert len(packet.data) == 300
+        if not netimps.has_recvmsg():  # pragma: no cover - no such platform now
+            pytest.skip("no recvmsg here, so recvfrom cannot report truncation")
+        assert packet.truncated is True
+        # Still no interface information -- that part is the documented degrade.
+        assert packet.interface_index == 0 and packet.interface is None

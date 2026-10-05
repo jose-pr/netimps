@@ -3,7 +3,9 @@
 The ctypes paths cannot be asserted against fixed values -- the host's adapters
 are whatever they are -- so these check *invariants* (shapes, types, internal
 consistency) rather than specific addresses, plus the pure helpers and the
-fallback path, which are testable exactly.
+fallback path, which are testable exactly. The interface lookups
+(``get_interface``, ``is_local_address``, ``iter_addresses``, ``is_broadcast``)
+and the facts the operating system fixes are here too.
 """
 
 import collections.abc
@@ -17,17 +19,26 @@ import uuid
 import pytest
 
 import netimps
-from netimps import Interface, MACAddress, get_interfaces, iter_addresses
-from netimps import _ifaddrs
-from netimps._ifaddrs import (
-    _cache,
-    _fallback,
-    _lookup,
-    _model,
-    _posix,
-    _spec,
-    _windows,
+
+# Private: the native walks, caches and sockaddr decoders are tested apart from the live host.
+from netimps import (
+    Interface,
+    MACAddress,
+    UDPEndpoint,
+    _ifaddrs,
+    bind,
+    get_interface,
+    get_interfaces,
+    is_broadcast,
+    is_local_address,
+    iter_addresses,
+    iter_interfaces,
+    parse,
 )
+
+# Private: the native walks, caches and sockaddr decoders are tested apart from the live host.
+from netimps._ifaddrs import _cache, _fallback, _lookup, _model, _posix, _spec, _windows
+from netimps import Datagram
 
 # --------------------------------------------------------------------------- #
 # Pure helpers                                                                 #
@@ -536,6 +547,7 @@ def _fake_sockaddr_dl(name, mac=_VRRP_MAC, sdl_len=None):
     way the kernel sizes it (header + name + address), which is the whole
     point: it is usually *smaller* than ``sizeof(_SockaddrDl)``.
     """
+    # Private: the native walks, caches and sockaddr decoders are tested apart from the live host.
     from netimps._ifaddrs._posix import _SockaddrDl
 
     offset = _SockaddrDl.sdl_data.offset
@@ -559,6 +571,7 @@ def test_sockaddr_dl_matches_the_c_struct():
     extracted MAC was right, but it was undefined behaviour one page boundary
     away from a crash.
     """
+    # Private: the native walks, caches and sockaddr decoders are tested apart from the live host.
     from netimps._ifaddrs._posix import _SockaddrDl
 
     assert ctypes.sizeof(_SockaddrDl) == 20
@@ -608,6 +621,7 @@ def test_sockaddr_dl_without_a_six_byte_address():
 
 def test_sockaddr_dl_data_is_not_addressable_directly():
     """Pins *why* the offset arithmetic is needed, so it is not 'simplified'."""
+    # Private: the native walks, caches and sockaddr decoders are tested apart from the live host.
     from netimps._ifaddrs._posix import _SockaddrDl
 
     sdl = _SockaddrDl()
@@ -838,6 +852,7 @@ def test_the_ttl_expires(monkeypatch):
     A real sleep would make this test slow *and* flaky; the TTL is a comparison
     against `time.monotonic`, so moving that is the honest way to test it.
     """
+    # Private: the native walks, caches and sockaddr decoders are tested apart from the live host.
     from netimps import _ifaddrs
 
     calls = _counting_enumerator(monkeypatch)
@@ -877,6 +892,7 @@ def test_cache_one_is_a_one_second_ttl_not_the_default(monkeypatch):
     `INTERFACE_CACHE_TTL` at 1.0 they happen to coincide today, so this asserts
     the discrimination directly rather than through observable timing.
     """
+    # Private: the native walks, caches and sockaddr decoders are tested apart from the live host.
     from netimps import _ifaddrs
 
     monkeypatch.setattr(_cache, "INTERFACE_CACHE_TTL", 999.0)
@@ -896,6 +912,7 @@ def test_infinite_ttl_never_expires_and_clear_is_the_invalidation(monkeypatch):
     A TTL is a guess; an event is not. This is the shape a DHCP server arrived
     at independently -- cache indefinitely, clear on `bind()`.
     """
+    # Private: the native walks, caches and sockaddr decoders are tested apart from the live host.
     from netimps import _ifaddrs
 
     calls = _counting_enumerator(monkeypatch)
@@ -1000,7 +1017,7 @@ def test_interface_for_still_answers_the_same_with_and_without_the_cache():
 
 def test_the_endpoint_cache_uses_the_one_shared_ttl():
     """Two caches of the same fact must not disagree about how stale is stale."""
-    from netimps._udp import UDPEndpoint
+    from netimps import UDPEndpoint
 
     assert UDPEndpoint._IFACE_CACHE_TTL == netimps.INTERFACE_CACHE_TTL
 
@@ -1024,6 +1041,7 @@ def test_the_uncached_path_passes_no_keyword_to_get_interfaces(monkeypatch):
     keeps its original call shape, which is cheap to preserve and silent to
     break.
     """
+    # Private: the native walks, caches and sockaddr decoders are tested apart from the live host.
     from netimps import _ifaddrs
 
     seen = []
@@ -1093,7 +1111,7 @@ def test_reply_socket_does_not_enumerate_per_datagram(monkeypatch):
     lookup already did.
     """
     from netimps import UDPEndpoint, bind
-    from netimps._udp import Datagram
+    from netimps import Datagram
 
     calls = _counting_enumerator(monkeypatch)
     netimps.clear_interface_cache()
@@ -1708,3 +1726,368 @@ def test_bind_and_get_free_port_take_the_short_family():
             assert v6.family == socket.AF_INET6
         finally:
             v6.close()
+
+
+IS_WINDOWS = os.name == "nt"
+
+
+# --------------------------------------------------------------------------- #
+# get_interface                                                               #
+# --------------------------------------------------------------------------- #
+
+
+def _lookup_fixtures():
+    shared_mac = MACAddress("02:00:00:00:00:01")
+    first = Interface(
+        "first",
+        mac=shared_mac,
+        ips=[
+            ipaddress.ip_interface("10.0.0.1/24"),
+            ipaddress.ip_interface("10.0.0.10/24"),
+            ipaddress.ip_interface("2001:db8:1::1/64"),
+            ipaddress.ip_interface("fe80::1/64"),
+        ],
+    )
+    second = Interface(
+        "second",
+        mac=shared_mac,
+        ips=[
+            ipaddress.ip_interface("10.0.0.2/24"),
+            ipaddress.ip_interface("2001:db8:2::1/64"),
+        ],
+    )
+    duplicate_address = Interface(
+        "duplicate-address",
+        mac=MACAddress("02:00:00:00:00:03"),
+        ips=[ipaddress.ip_interface("10.0.0.1/32")],
+    )
+    return first, second, duplicate_address
+
+
+def _mock_lookup_interfaces(monkeypatch):
+    interfaces = list(_lookup_fixtures())
+    calls = []
+
+    def enumerate_interfaces():
+        calls.append(True)
+        return interfaces
+
+    monkeypatch.setattr(_lookup, "get_interfaces", enumerate_interfaces)
+    return interfaces, calls
+
+
+def test_interfaces_for_interface_does_not_enumerate(monkeypatch):
+    iface = Interface("already-resolved")
+
+    def fail_enumeration():
+        raise AssertionError("Interface lookup must not enumerate")
+
+    monkeypatch.setattr(_lookup, "get_interfaces", fail_enumeration)
+    assert list(iter_interfaces(iface)) == [iface]
+    assert get_interface(iface) is iface
+
+
+def test_interfaces_for_exact_address_and_duplicate_order(monkeypatch):
+    interfaces, calls = _mock_lookup_interfaces(monkeypatch)
+    first, _, duplicate = interfaces
+
+    assert list(iter_interfaces("10.0.0.1")) == [first, duplicate]
+    assert calls == [True]
+    calls.clear()
+    assert get_interface(ipaddress.ip_address("10.0.0.1")) is first
+    assert calls == [True]
+
+
+def test_interfaces_for_ip_interface_matches_exact_ip_not_subnet(monkeypatch):
+    interfaces, _ = _mock_lookup_interfaces(monkeypatch)
+    assert list(iter_interfaces(ipaddress.ip_interface("10.0.0.2/8"))) == [
+        interfaces[1]
+    ]
+    assert list(iter_interfaces(ipaddress.ip_interface("10.0.0.99/24"))) == []
+
+
+def test_interfaces_for_ipv4_network_deduplicates_and_preserves_order(monkeypatch):
+    interfaces, calls = _mock_lookup_interfaces(monkeypatch)
+    assert list(iter_interfaces(ipaddress.ip_network("10.0.0.0/24"))) == interfaces
+    assert calls == [True]
+
+    calls.clear()
+    assert list(iter_interfaces("10.0.0.0/24")) == interfaces
+    assert calls == [True]
+
+
+def test_interfaces_for_ipv6_networks(monkeypatch):
+    interfaces, _ = _mock_lookup_interfaces(monkeypatch)
+    assert list(iter_interfaces(ipaddress.ip_network("2001:db8:1::/64"))) == [
+        interfaces[0]
+    ]
+    assert list(iter_interfaces("2001:db8::/32")) == interfaces[:2]
+
+
+def test_interfaces_for_mac_forms_and_duplicates(monkeypatch):
+    interfaces, _ = _mock_lookup_interfaces(monkeypatch)
+    shared = MACAddress("02:00:00:00:00:01")
+    assert list(iter_interfaces(shared)) == interfaces[:2]
+    assert list(iter_interfaces(str(shared))) == interfaces[:2]
+    assert list(iter_interfaces(shared.packed)) == interfaces[:2]
+
+
+def test_interfaces_for_integer_remains_an_ip_query(monkeypatch):
+    _, calls = _mock_lookup_interfaces(monkeypatch)
+    shared = MACAddress("02:00:00:00:00:01")
+    assert list(iter_interfaces(int(shared))) == []
+    assert calls == [True]
+
+
+def test_interfaces_for_invalid_and_no_match(monkeypatch):
+    _, calls = _mock_lookup_interfaces(monkeypatch)
+    assert list(iter_interfaces(None)) == []
+    assert calls == [], "an invalid query enumerates nothing"
+    # Text that is no address, network or MAC is an adapter name: one
+    # enumeration finds no adapter called that.
+    assert list(iter_interfaces("not-an-address")) == []
+    assert list(iter_interfaces(ipaddress.ip_network("192.0.2.0/24"))) == []
+    assert calls == [True, True]
+
+
+def test_interface_for_unknown_is_none_when_strict(monkeypatch):
+    _mock_lookup_interfaces(monkeypatch)
+    assert get_interface("192.0.2.99") is None
+
+
+def test_interface_for_unknown_synthesizes_address_and_interface(monkeypatch):
+    _mock_lookup_interfaces(monkeypatch)
+    iface = get_interface("192.0.2.99", strict=False)
+    assert iface is not None
+    assert iface.name == "<unknown>"
+    # A host route, matching how degraded enumeration reports itself.
+    assert iface.ips[0].network.prefixlen == iface.ips[0].max_prefixlen
+    assert iface.ips[0].ip == ipaddress.ip_address("192.0.2.99")
+
+    from_interface = get_interface(
+        ipaddress.ip_interface("192.0.2.100/24"), strict=False
+    )
+    assert from_interface is not None
+    assert from_interface.ips[0].ip == ipaddress.ip_address("192.0.2.100")
+
+
+def test_interface_for_does_not_synthesize_network_or_mac(monkeypatch):
+    _mock_lookup_interfaces(monkeypatch)
+    assert get_interface(ipaddress.ip_network("192.0.2.0/24"), strict=False) is None
+    assert get_interface(MACAddress("02:00:00:00:00:99"), strict=False) is None
+
+
+def test_interface_for_garbage_is_none(monkeypatch):
+    _mock_lookup_interfaces(monkeypatch)
+    assert get_interface("not-an-address") is None
+    assert get_interface(None) is None
+
+
+# --------------------------------------------------------------------------- #
+# is_local_address                                                            #
+# --------------------------------------------------------------------------- #
+
+
+def test_is_local_address_loopback_does_not_enumerate(monkeypatch):
+    def fail_enumeration():
+        raise AssertionError("loopback must be answered before discovery")
+
+    monkeypatch.setattr(_lookup, "get_interfaces", fail_enumeration)
+    assert is_local_address("127.0.0.1")
+    assert is_local_address("::1")
+
+
+def test_is_local_address_requires_assignment_not_scope(monkeypatch):
+    _mock_lookup_interfaces(monkeypatch)
+    assert is_local_address("10.0.0.1")
+    assert not is_local_address("10.0.1.1")  # private alone is insufficient
+    assert is_local_address("fe80::1")
+    assert not is_local_address("fe80::2")  # link-local alone is insufficient
+    assert not is_local_address("2001:db8:ffff::1")
+
+
+def test_is_local_address_malformed_input_raises(monkeypatch):
+    _mock_lookup_interfaces(monkeypatch)
+    with pytest.raises(ValueError):
+        is_local_address("not-an-address")
+    with pytest.raises(TypeError):
+        is_local_address(None)
+
+
+# --------------------------------------------------------------------------- #
+# shared interface-spec resolution                                            #
+# --------------------------------------------------------------------------- #
+
+
+def test_interface_spec_none_is_none():
+    assert _spec.interface_address(None) is None
+
+
+def test_interface_spec_returns_parsed_addresses():
+    """Addresses come back parsed, not as strings -- the package-wide rule.
+
+    Uses loopback rather than an arbitrary literal: under ``strict=True`` a bare
+    address must now be one this host actually holds, matching the rule
+    ``interface_index`` has always applied. The point of this test is the return
+    *type*, so it just needs an address that passes that check.
+    """
+    result = _spec.interface_address("127.0.0.1")
+    assert result == netimps.parse("127.0.0.1")
+    assert not isinstance(result, str)
+
+
+def test_interface_spec_rejects_an_address_no_interface_holds():
+    """``strict=True`` means "resolve this to one of mine", for every spec form.
+
+    ``interface_address`` used to accept a foreign address while
+    ``interface_index`` rejected it, so the same spec resolved differently
+    depending on which family the caller happened to be using.
+    """
+    with pytest.raises(ValueError, match="no local interface holds address"):
+        _spec.interface_address("10.0.0.5", strict=True)
+    # strict=False still passes it through: ping(src=) and UDPEndpoint.send()
+    # both rely on that, and the OS gives the real error when the bind fails.
+    assert _spec.interface_address("10.0.0.5", strict=False) == netimps.parse(
+        "10.0.0.5"
+    )
+
+
+def test_interface_spec_rejects_a_non_address_string():
+    with pytest.raises(ValueError):
+        _spec.interface_address("definitely not an address")
+
+
+def test_interface_spec_strict_raises_loose_returns_none():
+    """The two original callers disagreed; both behaviours are preserved."""
+    with pytest.raises(ValueError, match="no interface named"):
+        _spec.interface_address("no-such-nic", strict=True)
+    assert _spec.interface_address("no-such-nic", strict=False) is None
+
+    unknown_mac = netimps.MACAddress("02:00:00:00:00:99")
+    with pytest.raises(ValueError, match="no interface with MAC"):
+        _spec.interface_address(unknown_mac, strict=True)
+    assert _spec.interface_address(unknown_mac, strict=False) is None
+
+
+def test_interface_spec_resolves_interface_object():
+    loopback = next((i for i in netimps.get_interfaces() if i.is_loopback), None)
+    if loopback is None:  # pragma: no cover - host without a loopback entry
+        pytest.skip("no loopback interface enumerated on this host")
+    resolved = _spec.interface_address(loopback)
+    assert resolved.is_loopback
+
+
+# --------------------------------------------------------------------------- #
+# iter_addresses                                                              #
+# --------------------------------------------------------------------------- #
+
+
+def test_iter_addresses_flattens_without_losing_the_interface():
+    pairs = list(netimps.iter_addresses())
+    interfaces = netimps.get_interfaces()
+    assert len(pairs) == sum(len(i.ips) for i in interfaces)
+    for iface, entry in pairs:
+        # The full Interface stays reachable -- the flattening loses nothing.
+        assert entry in iface.ips
+        assert isinstance(iface.name, str)
+
+
+def test_iter_addresses_family_filter():
+    v4 = list(netimps.iter_addresses(family=4))
+    v6 = list(netimps.iter_addresses(family=6))
+    assert all(entry.version == 4 for _, entry in v4)
+    assert all(entry.version == 6 for _, entry in v6)
+    assert len(v4) + len(v6) == len(list(netimps.iter_addresses()))
+
+
+def test_iter_addresses_accepts_a_prepared_enumeration():
+    """Callers in a loop should not have to re-enumerate each time."""
+    interfaces = netimps.get_interfaces()
+    assert list(netimps.iter_addresses(interfaces)) == list(
+        netimps.iter_addresses(interfaces)
+    )
+
+
+def test_iter_addresses_rejects_a_bad_family():
+    with pytest.raises(ValueError, match="family must be 4, 6"):
+        list(netimps.iter_addresses(family=5))
+
+
+# --------------------------------------------------------------------------- #
+# is_broadcast                                                                #
+# --------------------------------------------------------------------------- #
+
+
+def test_the_limited_broadcast_needs_no_interface_context():
+    assert is_broadcast("255.255.255.255")
+    assert is_broadcast(parse("255.255.255.255"))
+
+
+def test_a_v4_mapped_broadcast_is_unmapped_first():
+    """A dual-stack listener reports a v4 arrival mapped; the question is about
+    the address inside."""
+    assert is_broadcast("::ffff:255.255.255.255")
+
+
+def test_ipv6_has_no_broadcast():
+    """It uses multicast instead, so a genuine v6 address is never a broadcast."""
+    assert not is_broadcast("ff02::1")
+    assert not is_broadcast("2001:db8::1")
+    assert not is_broadcast("::1")
+
+
+def test_unicast_addresses_are_not_broadcasts():
+    for value in ("127.0.0.1", "10.0.0.5"):
+        assert not is_broadcast(value)
+
+
+def test_text_that_is_no_address_is_not_a_broadcast_question():
+    for value in ("nonsense", "", "a.b.c.d"):
+        with pytest.raises(netimps.NetimpsValueError):
+            is_broadcast(value)
+
+
+def test_a_subnet_broadcast_needs_prefixes_and_is_found_with_them():
+    """`10.0.0.255` is only a broadcast if some interface carries `10.0.0.0/24`.
+
+    Which is why this consults interface prefixes rather than the address alone,
+    and why it lives beside interface enumeration.
+    """
+    for interface in netimps.get_interfaces():
+        for bound in interface.ips:
+            if bound.ip.version != 4 or bound.network.prefixlen >= 31:
+                continue
+            broadcast = bound.network.broadcast_address
+            assert is_broadcast(
+                broadcast
+            ), "%s is the broadcast of %s and was not recognised" % (
+                broadcast,
+                bound.network,
+            )
+            # And scoped to the owning interface, which is the cheap path.
+            assert is_broadcast(broadcast, interface)
+            return
+    pytest.skip("no interface with a v4 prefix shorter than /31")
+
+
+def test_a_host_address_is_not_its_networks_broadcast():
+    for interface in netimps.get_interfaces():
+        for bound in interface.ips:
+            if bound.ip.version != 4 or bound.network.prefixlen >= 31:
+                continue
+            if bound.ip != bound.network.broadcast_address:
+                assert not is_broadcast(bound.ip, interface)
+                return
+    pytest.skip("no suitable interface address")
+
+
+def test_is_broadcast_pairs_with_is_multicast_rather_than_absorbing_it():
+    """Kept separate so a caller can tell which one matched.
+
+    "Do not answer this" is usually the `or` of the two; one name meaning both
+    would hide the distinction DHCP and TFTP actually care about.
+    """
+    assert netimps.is_multicast("239.1.2.3")
+    assert not is_broadcast("239.1.2.3")
+    assert is_broadcast("255.255.255.255")
+    assert not netimps.is_multicast("255.255.255.255")

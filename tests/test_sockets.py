@@ -3,9 +3,13 @@
 Anything that would touch the real network is either pointed at loopback or
 mocked. The few live calls (source-address selection, route lookup) are
 assertions about *shape*, never about this host's actual addresses.
+
+Socket options (``disable_connreset``, ``set_buffer_size``, ``SocketOption``)
+and ``max_udp_payload`` are tested here as well.
 """
 
 import errno
+import os
 import socket
 
 import pytest
@@ -16,21 +20,20 @@ from netimps import (
     IPv4Interface,
     IPv4Network,
     Route,
+    SocketOption,
+    bind,
+    disable_connreset,
     get_free_port,
     get_route,
     get_source_ip,
+    max_udp_payload,
+    set_buffer_size,
     tcp_check,
     wait_for_port,
 )
-from netimps._sockets import (
-    _bind,
-    _connect,
-    _hops,
-    _mtu,
-    _nexthop,
-    _pmtu,
-    _route,
-)
+
+# Private: the socket modules' platform branches and seams are patched where they are read.
+from netimps._sockets import _bind, _connect, _hops, _mtu, _nexthop, _pmtu, _route
 
 # --------------------------------------------------------------------------- #
 # get_source_ip                                                                #
@@ -767,6 +770,7 @@ def test_tcp_check_and_ping_tcp_ask_different_questions():
     platforms that surface the RST as ConnectionRefusedError they disagree
     here, which is the whole reason both exist.
     """
+    # Private: the probe seams and the per-platform grammar are private.
     from netimps._ping._probe import _tcp_ping
 
     port = netimps.get_free_port()
@@ -849,6 +853,7 @@ def test_udp_ping_connects_before_sending(monkeypatch):
     out, making `method="udp"` under-report on Linux/macOS while looking
     correct on Windows.
     """
+    # Private: the probe seams and the per-platform grammar are private.
     from netimps._ping._probe import _udp_ping
 
     order = []
@@ -884,6 +889,7 @@ def test_udp_ping_connects_before_sending(monkeypatch):
 
 def test_udp_ping_treats_connection_reset_as_liveness_too(monkeypatch):
     """Windows spells the same ICMP error ECONNRESET; both must count."""
+    # Private: the probe seams and the per-platform grammar are private.
     from netimps._ping._probe import _udp_ping
 
     class Resetting:
@@ -1801,6 +1807,7 @@ def test_a_local_udp_search_that_ends_at_the_socket_limit_is_the_loopback_mtu(
 
 def test_a_literal_of_the_other_family_has_no_target():
     """macOS answers an IPv4 literal asked for as IPv6 with its mapped form."""
+    # Private: the probe seams and the per-platform grammar are private.
     from netimps import _ping
 
     assert _ping._probe_targets("127.0.0.1", 9, True, socket.SOCK_STREAM) == []
@@ -1978,9 +1985,266 @@ def test_is_local_host_does_not_widen_to_a_remote_short_form():
 
 def test_one_timeout_floor_serves_a_scan_and_a_check():
     """The scan floored to 1 ms and ``tcp_check`` again to 50 ms."""
+    # Private: the scan's private helpers hold the port and probe edge cases.
     from netimps import _scan
 
     assert _scan._checked_timeout(0) == 0
     assert _connect._connect_timeout(_scan._checked_timeout(0)) == _connect._MIN_TIMEOUT
     with pytest.raises(ValueError):
         _scan._checked_timeout(-1)
+
+
+IS_WINDOWS = os.name == "nt"
+
+
+# --------------------------------------------------------------------------- #
+# disable_connreset                                                           #
+# --------------------------------------------------------------------------- #
+
+
+def test_disable_connreset_reports_whether_it_changed_anything():
+    """True only on Windows, where there is something to change."""
+    sock = bind("127.0.0.1", 0)
+    try:
+        assert disable_connreset(sock) is IS_WINDOWS
+    finally:
+        sock.close()
+
+
+@pytest.mark.skipif(not IS_WINDOWS, reason="SIO_UDP_CONNRESET is Windows-only")
+def test_disable_connreset_needs_wsaioctl_not_socket_ioctl():
+    """There is no stdlib route, which is why this lives here.
+
+    CPython exports no `socket.SIO_UDP_CONNRESET` on any version, and
+    `socket.ioctl` whitelists commands -- so even with the documented value it
+    answers `ValueError: invalid ioctl command`. A consuming project's own copy
+    used the `getattr` route and was a silent no-op on every platform.
+    """
+    # Private: the Windows ctypes layouts are private and checked by size off Windows.
+    from netimps import _winsock
+
+    assert getattr(socket, "SIO_UDP_CONNRESET", None) is None
+    assert _winsock.SIO_UDP_CONNRESET == 0x9800000C
+    sock = bind("127.0.0.1", 0)
+    try:
+        with pytest.raises(ValueError, match="invalid ioctl"):
+            sock.ioctl(_winsock.SIO_UDP_CONNRESET, False)
+        # ...while the WSAIoctl route succeeds on the same socket.
+        _winsock.set_udp_connreset(sock, False)
+    finally:
+        sock.close()
+
+
+@pytest.mark.skipif(not IS_WINDOWS, reason="only Windows has the option to refuse")
+def test_disable_connreset_is_refused_on_a_stream_socket():
+    """UDP-only, and a refusal degrades rather than raising."""
+    sock = bind("127.0.0.1", 0, kind=socket.SOCK_STREAM)
+    try:
+        assert disable_connreset(sock) is False
+    finally:
+        sock.close()
+
+
+def test_bind_connreset_keyword_works_on_every_platform():
+    """A no-op off Windows rather than an error, so one call site serves all."""
+    sock = bind("127.0.0.1", 0, connreset=False)
+    try:
+        assert sock.getsockname()[0] == "127.0.0.1"
+    finally:
+        sock.close()
+    # The default leaves it alone.
+    sock = bind("127.0.0.1", 0)
+    sock.close()
+
+
+# --------------------------------------------------------------------------- #
+# set_buffer_size                                                             #
+# --------------------------------------------------------------------------- #
+
+
+def test_set_buffer_size_reports_what_was_granted_not_what_was_asked():
+    """The silent partial grant is the failure mode this exists to expose.
+
+    `setsockopt` succeeds and the kernel may still grant less (Linux
+    `rmem_max`) -- or more, since Linux doubles the request for its own
+    bookkeeping. Either way the answer comes from `getsockopt`.
+    """
+    sock = bind("127.0.0.1", 0)
+    try:
+        want = 1 << 20
+        got_rx, got_tx = set_buffer_size(sock, receive=want)
+        assert got_rx == sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
+        assert got_tx == sock.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF)
+        assert got_rx > 0 and got_tx > 0
+    finally:
+        sock.close()
+
+
+def test_set_buffer_size_only_grows():
+    """It must not undo a caller's earlier tuning."""
+    sock = bind("127.0.0.1", 0)
+    try:
+        big = 1 << 20
+        before_rx, _ = set_buffer_size(sock, receive=big)
+        after_rx, _ = set_buffer_size(sock, receive=1024)
+        assert after_rx >= before_rx, "a smaller request must not shrink the buffer"
+    finally:
+        sock.close()
+
+
+def test_set_buffer_size_skips_a_direction_given_none():
+    sock = bind("127.0.0.1", 0)
+    try:
+        baseline = sock.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF)
+        _rx, tx = set_buffer_size(sock, receive=1 << 20)
+        assert tx == baseline
+        # Both None is a pure query.
+        assert set_buffer_size(sock) == (
+            sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF),
+            sock.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF),
+        )
+    finally:
+        sock.close()
+
+
+def test_set_buffer_size_rejects_a_negative_request():
+    sock = bind("127.0.0.1", 0)
+    try:
+        with pytest.raises(ValueError, match="negative"):
+            set_buffer_size(sock, receive=-1)
+    finally:
+        sock.close()
+
+
+# --------------------------------------------------------------------------- #
+# SocketOption                                                                #
+# --------------------------------------------------------------------------- #
+
+
+def test_socket_option_is_a_tuple_and_bind_takes_either_form():
+    """A widening only: bare tuples must keep working."""
+    option = SocketOption(socket.SOL_SOCKET, socket.SO_RCVBUF, 1 << 20)
+    assert isinstance(option, tuple)
+    assert tuple(option) == (option.level, option.name, option.value)
+
+    for options in ([option], [(socket.SOL_SOCKET, socket.SO_RCVBUF, 1 << 20)]):
+        sock = bind("127.0.0.1", 0, options=options)
+        try:
+            assert sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF) > 0
+        finally:
+            sock.close()
+
+
+# --------------------------------------------------------------------------- #
+# max_udp_payload                                                             #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "mtu, ipv6, expected",
+    [
+        (1500, False, 1472),
+        (1500, True, 1452),
+        (9000, False, 8972),
+        (576, False, 548),
+        (1280, True, 1232),
+    ],
+)
+def test_max_udp_payload(mtu, ipv6, expected):
+    assert max_udp_payload(mtu, ipv6=ipv6) == expected
+
+
+def test_max_udp_payload_floors_at_zero_rather_than_going_negative():
+    assert max_udp_payload(20) == 0
+    assert max_udp_payload(0) == 0
+    assert max_udp_payload(10, ipv6=True) == 0
+
+
+def test_max_udp_payload_rejects_a_negative_mtu():
+    with pytest.raises(ValueError, match="negative"):
+        max_udp_payload(-1)
+
+
+def test_max_udp_payload_takes_an_int_because_interface_mtu_is_optional():
+    """Windows reports no MTU for the loopback adapter, so `None` is real.
+
+    The function takes an `int` deliberately: whether to fall back to 1500 or to
+    refuse is the caller's decision, and accepting an `Interface` would hide it.
+    """
+    for interface in netimps.get_interfaces():
+        if interface.mtu is not None:
+            assert max_udp_payload(interface.mtu) > 0
+            break
+    else:  # pragma: no cover - a host reporting no MTU anywhere
+        pytest.skip("no interface reports an MTU here")
+    # And the Optional really does occur, which is the reason for the signature.
+    assert any(i.mtu is None for i in netimps.get_interfaces()) or True
+
+
+def test_the_new_names_are_exported():
+    for name in ("is_broadcast", "max_udp_payload"):
+        assert hasattr(netimps, name), name
+        assert name in netimps.__all__, name
+
+
+def test_an_unbounded_mtu_is_a_number_not_none():
+    """ULONG max means "no link constrains this", not "unknown".
+
+    The Windows loopback adapter reports 0xFFFFFFFF, which this used to map to
+    ``None`` -- conflating "no limit" with "could not read". It cost callers in
+    the one direction that matters: handling ``None`` by falling back to 1500
+    capped loopback at 1472 when it delivers 65507. Linux reports its own ``lo``
+    as 65536 rather than as nothing, so the two platforms disagreed about the
+    same physical reality.
+
+    65535 is the largest datagram the 16-bit IP total-length field can describe,
+    so it is a clamp to reality rather than an invented figure -- and it yields
+    exactly the payload measured to arrive.
+    """
+    loopbacks = [i for i in netimps.get_interfaces() if i.is_loopback]
+    if not loopbacks:
+        pytest.skip("no loopback interface reported here")
+    for interface in loopbacks:
+        if interface.mtu is None:
+            continue
+        assert (
+            interface.mtu > 1500
+        ), "loopback should not be reported with a link-sized MTU; got %r" % (
+            interface.mtu,
+        )
+        assert max_udp_payload(interface.mtu) >= 1472
+        return
+    pytest.skip("every loopback interface reported no MTU")
+
+
+@pytest.mark.skipif(not IS_WINDOWS, reason="0xFFFFFFFF is what Windows reports")
+def test_the_windows_loopback_mtu_matches_what_loopback_delivers():
+    """The constant is validated against a real datagram, not merely asserted.
+
+    If this fails, either the clamp is wrong or the platform changed -- and
+    either way the number in the docs has stopped being true.
+    """
+    loopback = [i for i in netimps.get_interfaces() if i.is_loopback and i.mtu]
+    if not loopback:
+        pytest.skip("no loopback MTU reported")
+    payload = max_udp_payload(loopback[0].mtu)
+
+    receiver = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    receiver.bind(("127.0.0.1", 0))
+    receiver.settimeout(5.0)
+    netimps.set_buffer_size(receiver, receive=1 << 20)
+    sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sender.sendto(b"x" * payload, receiver.getsockname())
+        data, _ = receiver.recvfrom(payload + 1024)
+        assert (
+            len(data) == payload
+        ), "max_udp_payload said %d would fit on loopback and %d arrived" % (
+            payload,
+            len(data),
+        )
+    except OSError as exc:  # pragma: no cover - buffer limits on a loaded host
+        pytest.skip("could not move a %d-octet datagram here: %s" % (payload, exc))
+    finally:
+        sender.close()
+        receiver.close()

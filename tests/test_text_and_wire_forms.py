@@ -201,6 +201,7 @@ def test_to_unicode_and_fully_qualified_are_methods():
 def test_the_codec_in_resolve_wire_reads_names_through_the_same_reader():
     """`_dnswire` and `FQDN.decode_at` share one reader, so a pointer loop is
     refused identically in a resolver reply."""
+    # Private: the resolver package: its seams are patched where they are read and its search orders pinned.
     from netimps._dns import _dnswire
 
     with pytest.raises(DNSDecodeError):

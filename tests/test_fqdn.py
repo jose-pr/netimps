@@ -744,6 +744,7 @@ def test_common_ancestor_is_symmetric_in_labels():
 
 def test_wire_encoding_delegates_to_the_packages_own_encoder():
     """So it cannot drift from what ``resolve_wire`` actually sends."""
+    # Private: the name codec under test.
     from netimps._fqdn import _wire as _namewire
 
     assert FQDN("www.example.com").encode() == b"\x03www\x07example\x03com\x00"

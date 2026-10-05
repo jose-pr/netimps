@@ -11,6 +11,7 @@ import time
 
 import pytest
 
+# Private: the runner every platform binary goes through.
 from netimps import _proc
 
 
@@ -165,6 +166,8 @@ def test_ping_finds_and_runs_a_fake_ping_with_the_argv_it_built(fake_program):
     `_ping_command` builds for the same arguments.
     """
     import netimps
+
+    # Private: the probe seams and the per-platform grammar are private.
     from netimps import _ping
 
     fake = fake_program(

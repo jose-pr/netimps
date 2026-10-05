@@ -3,8 +3,12 @@
 Each test pins the difference from the hand-rolled version: stripping brackets
 and ``%zone`` before ``try_parse``, a ``(host, port)`` pair with a default port,
 and "does this host string name this machine" with a ``localhost`` shortcut.
+``join_host`` and the input types ``split_host`` takes are tested here too.
 """
 
+import ipaddress as _ipaddress
+import ipaddress
+import os
 import socket
 
 import pytest
@@ -16,6 +20,7 @@ from netimps import (
     IPv6Address,
     MACAddress,
     is_local_host,
+    join_host,
     split_host,
     split_zone,
     try_parse,
@@ -203,13 +208,6 @@ def test_the_mac_pattern_is_not_reachable_from_the_class():
     assert MACAddress.is_valid("aa:bb:cc:dd:ee:ff")
 
 
-# --------------------------------------------------------------------------- #
-# One host rule and one port rule for split_host and join_host                 #
-# --------------------------------------------------------------------------- #
-
-import ipaddress as _ipaddress
-
-
 @pytest.mark.parametrize(
     "value",
     [None, 5, 5.5, b"h", ["h"], object()],
@@ -324,3 +322,163 @@ def test_split_inverts_join(host, port):
     ):
         text = netimps.join_host(given, port)
         assert split_host(text)[1] == port
+
+
+IS_WINDOWS = os.name == "nt"
+
+
+# --------------------------------------------------------------------------- #
+# join_host, the inverse of split_host                                        #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "host, port, expected",
+    [
+        ("example.com", 8080, "example.com:8080"),
+        ("10.0.0.5", 8080, "10.0.0.5:8080"),
+        ("::1", 8080, "[::1]:8080"),
+        ("fe80::1%eth0", 80, "[fe80::1%eth0]:80"),
+        ("2001:db8::1", 53, "[2001:db8::1]:53"),
+        ("::1", None, "::1"),
+        ("example.com", None, "example.com"),
+        ("10.0.0.5", None, "10.0.0.5"),
+        ("[::1]", 443, "[::1]:443"),
+        ("0.0.0.0", 0, "0.0.0.0:0"),
+    ],
+)
+def test_join_host_brackets_only_an_ipv6_literal(host, port, expected):
+    assert join_host(host, port) == expected
+
+
+@pytest.mark.parametrize(
+    "host, port",
+    [
+        ("example.com", 8080),
+        ("10.0.0.5", 8080),
+        ("::1", 8080),
+        ("fe80::1%eth0", 80),
+        ("2001:db8::1", 53),
+        ("::1", None),
+        ("example.com", None),
+        ("0.0.0.0", 0),
+    ],
+)
+def test_join_host_round_trips_through_normalize_host(host, port):
+    """The law that makes the pair trustworthy, in both directions.
+
+    This is why a port-less IPv6 comes back *unbracketed*: with no port there
+    is nothing to disambiguate, and `split_host` returns the bare form.
+    """
+    assert split_host(join_host(host, port)) == (host, port)
+
+
+def test_join_host_accepts_the_types_a_caller_already_has():
+    assert join_host(ipaddress.IPv4Address("1.2.3.4"), 53) == "1.2.3.4:53"
+    assert join_host(ipaddress.IPv6Address("2001:db8::1"), 53) == "[2001:db8::1]:53"
+    assert join_host(FQDN("www.example.com"), 443) == "www.example.com:443"
+    # An interface carries a prefix; a socket address wants only the address.
+    assert join_host(ipaddress.IPv4Interface("10.0.0.5/24"), 69) == "10.0.0.5:69"
+    assert (
+        join_host(ipaddress.IPv6Interface("2001:db8::1/64"), 69) == "[2001:db8::1]:69"
+    )
+
+
+def test_join_host_never_brackets_a_name():
+    """Brackets in a URI authority mean "the inside is an address".
+
+    Bracketing a hostname would produce something no resolver accepts, however
+    many colons someone has managed to put in it.
+    """
+    assert join_host("example.com", 80) == "example.com:80"
+    assert "[" not in join_host(FQDN("a.b.c.example.com"), 80)
+
+
+@pytest.mark.parametrize(
+    "host, port, match",
+    [
+        ("", 80, "must not be empty"),
+        ("example.com", 99999, "0-65535"),
+        ("example.com", -1, "0-65535"),
+        ("[::1", 80, "mismatched brackets"),
+        ("::1]", 80, "mismatched brackets"),
+        ("[notanaddress]", 80, "not an IPv6 address"),
+    ],
+)
+def test_join_host_rejects_bad_input(host, port, match):
+    """A mismatched bracket must raise, not fall through.
+
+    `"[::1"` is not an IPv6 literal, so without the check it would emerge
+    unbracketed as `"[::1:80"` -- garbage the caller cannot detect.
+    `split_host` rejects the same input, and the pair has to agree.
+    """
+    with pytest.raises(ValueError, match=match):
+        join_host(host, port)
+
+
+def test_join_host_rejects_none():
+    with pytest.raises(TypeError):
+        join_host(None, 80)
+
+
+# --------------------------------------------------------------------------- #
+# split_host() takes the package's usual loose union                          #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "label, value, expected",
+    [
+        ("str", "example.com:80", ("example.com", 80)),
+        ("IPv4Address", ipaddress.IPv4Address("1.2.3.4"), ("1.2.3.4", None)),
+        ("IPv6Address", ipaddress.IPv6Address("::1"), ("::1", None)),
+        ("IPv4Interface", ipaddress.IPv4Interface("10.0.0.5/24"), ("10.0.0.5", None)),
+    ],
+)
+def test_normalize_host_accepts_more_than_a_string(label, value, expected):
+    """`join_host`, its inverse, already did -- this rejected the values a caller
+    holding "the host" most often has."""
+    assert netimps.split_host(value) == expected
+
+
+def test_normalize_host_accepts_host_and_fqdn():
+    assert netimps.split_host(netimps.Host("example.com")) == ("example.com", None)
+    # An FQDN keeps its trailing dot, which is identity-bearing for a name.
+    assert netimps.split_host(netimps.FQDN("b.com.")) == ("b.com.", None)
+
+
+@pytest.mark.parametrize("bad", [None, 42, [], b"x", object()])
+def test_normalize_host_uses_an_allowlist_not_a_str_fallback(bad):
+    """`str(None)` is the hostname "None" -- a plausible answer that is wrong.
+
+    An earlier version of this widening fell back to `str()` for anything
+    unrecognised, which accepted `None`, an int and a list and turned each into a
+    hostname a caller could not detect as bogus. The allowlist is the point.
+    """
+    with pytest.raises((ValueError, TypeError)):
+        netimps.split_host(bad)
+
+
+def test_normalize_host_still_refuses_a_network_and_an_empty_string():
+    with pytest.raises(TypeError, match="not a network"):
+        netimps.split_host(ipaddress.ip_network("10.0.0.0/24"))
+    with pytest.raises(ValueError):
+        netimps.split_host("")
+
+
+@pytest.mark.parametrize(
+    "host, port",
+    [
+        (ipaddress.IPv6Address("::1"), 69),
+        (ipaddress.IPv4Address("10.0.0.1"), 80),
+        ("example.com", 443),
+    ],
+)
+def test_the_round_trip_law_survives_the_widening(host, port):
+    """`split_host(join_host(h, p))` must still come back equal.
+
+    The pair are inverses, and widening one input must not break that -- which is
+    why this is asserted against the *parsed* forms the widening added, not only
+    against strings.
+    """
+    assert netimps.split_host(netimps.join_host(host, port)) == (str(host), port)

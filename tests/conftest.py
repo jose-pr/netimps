@@ -28,6 +28,8 @@ import urllib.request
 import pytest
 
 from fakedns import PortPairUnavailable, make_nameserver
+
+# Private: the runner every platform binary goes through.
 from netimps import _proc
 
 #: Directories holding a fake program from :func:`fake_program`. A fake called

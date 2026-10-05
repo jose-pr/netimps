@@ -5,6 +5,10 @@ so the surface never moves by accident. The list is sorted the way ``sorted``
 sorts it.
 """
 
+import inspect
+import os
+import typing
+
 import netimps
 
 EXPECTED = [
@@ -160,11 +164,6 @@ def test_importing_netimps_does_not_ask_for_the_host_name():
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "imported"
 
-
-# --- signatures ---------------------------------------------------------------
-
-import inspect
-import typing
 
 # How many arguments each callable accepts positionally; every other option is
 # keyword-only. A callable absent from this table accepts at most
@@ -358,3 +357,21 @@ def test_udp_endpoint_names_its_destination_dst():
     for method in ("send", "asend"):
         names = list(inspect.signature(getattr(netimps.UDPEndpoint, method)).parameters)
         assert names[:4] == ["self", "data", "dst", "port"], (method, names)
+
+
+# --------------------------------------------------------------------------- #
+# Socket and host helpers                                                     #
+# --------------------------------------------------------------------------- #
+
+
+def test_the_new_names_are_all_exported():
+    for name in (
+        "join_host",
+        "unmap",
+        "is_wildcard",
+        "SocketOption",
+        "disable_connreset",
+        "set_buffer_size",
+    ):
+        assert hasattr(netimps, name), name
+        assert name in netimps.__all__, name

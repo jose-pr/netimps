@@ -183,6 +183,7 @@ def test_copy_and_pickle_keep_the_subclass(kind, roundtrip):
 def test_an_fqdn_pickled_before_the_class_was_recorded_still_loads():
     """The unpickle function keeps its two-argument form, so a pickle written
     without the class loads as an `FQDN`."""
+    # Private: the pickle restore hook is not public.
     from netimps._fqdn import _rebuild_fqdn
 
     assert _rebuild_fqdn(("a", "b"), True) == FQDN("a.b.")
