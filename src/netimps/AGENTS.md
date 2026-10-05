@@ -2272,8 +2272,10 @@ Aliases: `resolve|dns`, `check|tcp`, `addr|parse`, `source|src`.
     `{scheme, port}` for a name; the missing half is `null`.
   - `split`: `{host, port}`; `port` is `null` without one.
 - **`netimps port <unknown>` exits 1**: a lookup that found no mapping is an
-  *answer*, the way an empty `resolve` is, and `netimps port 9999` (a valid
-  port with no registered scheme) is no caller mistake. A port outside
+  *answer*, the way an empty `resolve` is, and a valid port with no
+  registered scheme is no caller mistake. Which ports have one depends on the
+  host's services database: `9999` has none on Linux and Windows and is
+  `distinct` on macOS. A port outside
   `0-65535` exits 2. `netimps check <host> <unknown-scheme>` exits 2, because
   there is then no port to connect to and nothing was tested.
 - `netimps route` prints an `on-link  <True|False|unknown>` line and renders a

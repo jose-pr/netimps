@@ -394,9 +394,23 @@ def test_port_status_found(capsys):
     assert 1 <= free <= 65535
 
 
+def _port_without_a_service():
+    """A port number the services database has no name for, asked of the
+    platform: macOS names 9999 (``distinct``) where Linux and Windows do not."""
+    import socket
+
+    for port in range(65000, 60000, -1):
+        try:
+            socket.getservbyport(port)
+        except OSError:
+            if netimps.get_default_scheme(port) is None:
+                return str(port)
+    pytest.skip("every port from 60001 to 65000 has a service name here")
+
+
 def test_port_status_no(capsys):
     assert _run(capsys, "port", "definitely-not-a-scheme")[0] == 1
-    assert _run(capsys, "port", "9999")[0] == 1
+    assert _run(capsys, "port", _port_without_a_service())[0] == 1
 
 
 def test_port_status_bad_input(capsys):
