@@ -9,16 +9,7 @@ installed package and must stay self-contained.
 
 | Header | Covers |
 | --- | --- |
-| `src/netimps/AGENTS.md` | the top API header: every public name with its signature, the conventions, the exceptions, the command line's contract, the environment variables |
-| `src/netimps/_dns/AGENTS.md` | `resolve` and its backends, the answer cache |
-| `src/netimps/_ping/AGENTS.md` | `ping` and `PingResult` |
-| `src/netimps/_sockets/AGENTS.md` | `bind`, socket options, TCP checks, routing, hops, path MTU, payload sizing |
-| `src/netimps/_ifaddrs/AGENTS.md` | `Interface`, `get_interfaces` and its cache, lookups, broadcast and unicast tests |
-| `src/netimps/_ip/AGENTS.md` | address and network helpers, host and zone splitting, `Host` |
-| `src/netimps/_fqdn/AGENTS.md` | `FQDN` |
-| `src/netimps/_msg/AGENTS.md` | `recvmsg` and `sendmsg` on every platform, the `socket` patch |
-| `src/netimps/_udp/AGENTS.md` | `UDPEndpoint`, `Datagram`, arrival interface, reply sockets |
-| `src/netimps/cli/AGENTS.md` | the commands, their JSON shapes and diagnostics |
+| `src/netimps/AGENTS.md` | the top API header: every public name with its signature, the conventions, the exceptions, the command line's contract, the environment variables. It lists the per-package headers beside it (`src/netimps/*/AGENTS.md`), which hold the detail of each large topic |
 | `tests/AGENTS.md` | running and writing the tests: the network guard, the fakes, the typing check, every test file |
 
 A public API change updates its shipped header in the same commit; the table of

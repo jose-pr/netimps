@@ -12,7 +12,7 @@ import inspect
 import re
 import socket
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -95,12 +95,27 @@ def _committed_headers():
     return [p for p in out.split() if p != "AGENTS.md"]
 
 
-def test_the_root_file_names_every_committed_header():
+def _nearest_parent_header(path, headers):
+    """The ``AGENTS.md`` of the closest directory above *path* that has one."""
+    directory = PurePosixPath(path).parent
+    for ancestor in directory.parents:
+        candidate = (ancestor / "AGENTS.md").as_posix()
+        if candidate == "AGENTS.md" or candidate in headers:
+            return candidate
+    return "AGENTS.md"
+
+
+def test_the_root_file_names_the_headers_directly_below_it():
+    """A parent indexes its own children and no deeper: the per-package
+    headers are listed by the top header, which the root file names."""
     root = _ROOT / "AGENTS.md"
     if not root.exists():
         pytest.skip("the root AGENTS.md is not part of this tree")
     text = root.read_text(encoding="utf-8")
-    missing = [p for p in _committed_headers() if p not in text]
+    headers = _committed_headers()
+    children = [p for p in headers if _nearest_parent_header(p, headers) == "AGENTS.md"]
+    assert "src/netimps/AGENTS.md" in children and "tests/AGENTS.md" in children
+    missing = [p for p in children if p not in text]
     assert not missing, "the root AGENTS.md does not name: %s" % ", ".join(missing)
 
 

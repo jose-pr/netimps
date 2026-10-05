@@ -33,7 +33,7 @@ signal, not noise.
 | `test_network_guard.py` | the guard itself: every road to a name server or an off-host destination is refused, and the explicit ways through |
 | `test_fakedns.py` | the fake name server's port-pair search and what it reports when the host refuses a pair |
 | `test_surface.py` | exactly what `netimps.__all__` exports, and the positional arguments of each callable |
-| `test_shipped_headers.py` | the shipped `AGENTS.md` headers: every export is in the top header, every header is listed in its table and in the root `AGENTS.md`, none is over its line limit, every printed signature is the live one |
+| `test_shipped_headers.py` | the shipped `AGENTS.md` headers: every export is in the top header, every header is listed by the `AGENTS.md` nearest above it (the top header's table, or the root file), none is over its line limit, every printed signature is the live one |
 | `test_exceptions.py` | the exception hierarchy and the one place each class is defined |
 | `test_import_structure.py` | import direction: no name taken from the root, no module over 500 lines and no function-local sibling import without a recorded reason |
 | `test_comments.py` | the shipped source and every shipped header describe the code as it is |
