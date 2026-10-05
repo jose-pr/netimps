@@ -73,7 +73,7 @@ src/netimps/
 ├── _parse.py      # private: the generic parse/try_parse/is_valid, above _ip, _fqdn and _mac
 ├── _mac.py        # private: MACAddress value type
 ├── _scheme.py     # private: scheme <-> port registry, shared port coercion
-├── cli.py         # public: duho-backed CLI (needs the `cli` extra)
+├── cli/           # public package: the duho-backed command line (needs the `cli` extra)
 ├── __main__.py    # `python -m netimps`
 ├── _scan.py       # private: concurrent port/host scanning
 ├── _multicast.py  # private: group membership and socket setup
@@ -152,10 +152,10 @@ published site, `benchmarks/` (run on demand, never in CI) and `examples/`
 `netimps`, and the `_`-prefixed modules are implementation detail. Do not
 import them directly from outside the package.
 
-`__init__` imports the submodules **last**, because several of them call back
-into it (`parse`, `try_parse`, `MACAddress`); those back-references are
-function-local imports for the same reason. Everything importable from
-`netimps` is declared in `__all__` at the top of `__init__.py`.
+Everything importable from `netimps` is declared in `__all__` in
+`__init__.py`, which imports each private module or package once. No private
+module imports a name from the root: it takes the name from the module that
+owns it (`tests/test_import_structure.py`).
 
 ## Entry points
 
@@ -256,9 +256,9 @@ map:
 - The ctypes paths can't be asserted against fixed values, so
   `tests/test_interfaces.py` checks invariants plus the pure helpers and the
   fallback, which *are* exactly testable.
-- **`duho` is a CLI-only dependency.** `cli.py` and `__main__.py` may import it;
-  nothing else may, and `cli.py` imports it inside `run()` so that a
-  no-extra install gets a message rather than an `ImportError` traceback.
+- **`duho` is a CLI-only dependency.** Only modules under `cli/` import it, and
+  `cli.main()` imports it inside the function, so that a no-extra install gets
+  a message rather than an `ImportError` traceback.
   `tests/test_cli.py` skips itself when the extra is absent, and asserts the
   library still imports with duho blocked.
 - **Tests must never hit the network, and `tests/conftest.py` enforces
@@ -291,9 +291,6 @@ map:
   stands in a fake (`fake_program`) rather than patching `subprocess`.
   `socket.sendmsg` is not hooked, because a test pins that the library's own
   stays installed.
-- **`_ip` is imported *before* the definitions** in `__init__`, unlike the other
-  submodules which are imported last. `parse()` uses `IPAddress` as a default
-  argument, and defaults evaluate at definition time.
 - **Windows `ping` exits 0 for "TTL expired in transit."** Anything inferring
   success from the exit code alone is wrong; match the reply address instead,
   never the localised prose. Windows `ping -?` also exits 0, so `ping("-?")`

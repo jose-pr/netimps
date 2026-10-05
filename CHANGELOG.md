@@ -50,8 +50,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - **`Host.resolve()` and `FQDN.resolve()` return the pair `(fqdn, ip)`**, and
   `Host.ip()`, `Host.fqdn()` and `FQDN.ip()` take the resolver options
-  (`ns`, `timeout`, `port`, `tcp`, `search`, `backends`, `source`), `ipv6=` and
-  `check=`. `check=True` raises `ResolutionError` where `None` would be
+  (`ns`, `timeout`, `port`, `tcp`, `search`, `backends`, `source`) and
+  `check=`; `Host.ip()` and `FQDN.ip()` also take `ipv6=`, `Host.fqdn()` does
+  not. `check=True` raises `ResolutionError` where `None` would be
   returned: an empty answer, an outage or an empty host. `ip()` of a name looks
   it up and of an address does not; `fqdn()` of an address looks it up and of a
   name does not. With none of `ns`, `port`, `tcp`, `source` or `backends` the OS
