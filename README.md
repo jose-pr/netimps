@@ -69,30 +69,6 @@ pip install netimps[cli]     # plus the `netimps` command
 Requires Python 3.9+. Both extras are additive and independent; importing the
 library never requires either.
 
-## Command line
-
-```bash
-netimps interfaces                       # names, MACs, MTU, addresses
-netimps ping 8.8.8.8 -m tcp -p 443       # icmp | tcp | udp
-netimps resolve example.com aaaa
-netimps resolve 8.8.8.8                  # no rdtype -> auto ptr -> dns.google
-netimps check example.com https          # port number or scheme name
-netimps mtu 8.8.8.8                      # measured, not guessed
-netimps scan 192.0.2.0/29 -p common
-netimps addr 00:00:5e:00:53:01           # address, network or MAC
-netimps split '[::1]:8080'               # -> ::1  8080
-```
-
-Every command takes `--json`. Exit statuses, one meaning each (as `grep`): `0`
-found or yes, `1` nothing found or the answer was no, `2` an error. `-q` prints
-no result line and answers by the status alone, for scripts (`--json` is not
-affected):
-
-```bash
-netimps check example.com https -q && echo reachable
-netimps scan 192.0.2.0/29 -p 22 -q || echo nothing answers on 22
-```
-
 ## Quick start
 
 ```python
@@ -164,6 +140,30 @@ endpoint = netimps.UDPEndpoint(server)
 
 # Retry with backoff and jitter
 netimps.retry(lambda: netimps.tcp_check("example.com", 443), attempts=3)
+```
+
+## Command line
+
+```bash
+netimps interfaces                       # names, MACs, MTU, addresses
+netimps ping 8.8.8.8 -m tcp -p 443       # icmp | tcp | udp
+netimps resolve example.com aaaa
+netimps resolve 8.8.8.8                  # no rdtype -> auto ptr -> dns.google
+netimps check example.com https          # port number or scheme name
+netimps mtu 8.8.8.8                      # measured, not guessed
+netimps scan 192.0.2.0/29 -p common
+netimps addr 00:00:5e:00:53:01           # address, network or MAC
+netimps split '[::1]:8080'               # -> ::1  8080
+```
+
+Every command takes `--json`. Exit statuses, one meaning each (as `grep`): `0`
+found or yes, `1` nothing found or the answer was no, `2` an error. `-q` prints
+no result line and answers by the status alone, for scripts (`--json` is not
+affected):
+
+```bash
+netimps check example.com https -q && echo reachable
+netimps scan 192.0.2.0/29 -p 22 -q || echo nothing answers on 22
 ```
 
 ## API overview
