@@ -361,7 +361,12 @@ class _Endpoint(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/dns-message")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except OSError:
+            # The resolver stops reading at its size limit and hangs up, so
+            # the rest of an oversized body has nowhere to go.
+            pass
 
     def log_message(self, *args):
         pass
