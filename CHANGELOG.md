@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`classify(text)`** reads text as a `MACAddress`, an `IPNetwork`, an
+  `IPInterface` or an `IPAddress`, in that order of preference (a `/` makes it
+  a network, or an interface when host bits are set), and raises
+  `NetimpsValueError` for anything else. It never asks a resolver.
+  **`PortsLike` accepts a comma-separated string** (`scan_ports(host,
+  "22,https,8000")`; an empty item raises), and **`get_default_port` accepts a
+  port number as text** and returns it as an `int` (outside `0-65535` raises
+  `NetimpsValueError`). The command line used to do each of these itself.
+
 - **`get_interface` and `iter_interfaces` look an interface up by name and by
   index**: `get_interface("eth0")` for text that is no address, network or MAC,
   and `get_interface(index=3)` (a keyword, since an `int` query is an address).

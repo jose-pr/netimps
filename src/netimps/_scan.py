@@ -39,6 +39,7 @@ from typing import (
     cast as _cast,
 )
 
+from ._exceptions import NetimpsValueError
 from ._ip import HostLike, IPAddress, IPNetwork, IPNetworkLike, _dst_argument
 from ._parse import parse, try_parse
 from ._scheme import coerce_port, get_default_port
@@ -47,7 +48,8 @@ from ._sockets import tcp_check
 __all__ = ["scan_ports", "scan_hosts", "PORT_RANGES"]
 
 #: A :data:`PORT_RANGES` name, a scheme name (:func:`get_default_port`), a
-#: port number, a numeric string, or any iterable mixing those.
+#: port number, a numeric string, a comma-separated string of those, or any
+#: iterable mixing them.
 PortsLike = Union[str, int, Iterable[Union[str, int]]]
 
 #: Handy port sets for the common cases, so callers need not spell them out.
@@ -203,10 +205,11 @@ def _resolve_ports(ports) -> "Sequence[int]":
 
     Accepts a :data:`PORT_RANGES` name, a **scheme name** (``"https"`` ->
     443, via :func:`netimps.get_default_port`), a single int, a numeric string,
-    or any iterable mixing those::
+    a **comma-separated string** of those, or any iterable mixing them::
 
         _resolve_ports("common")            # the named set
         _resolve_ports("https")             # (443,)
+        _resolve_ports("22,https,8000")     # (22, 443, 8000)
         _resolve_ports(["ssh", 8080])       # (22, 8080)
 
     Range names win over scheme names where they collide, since a caller
@@ -216,49 +219,65 @@ def _resolve_ports(ports) -> "Sequence[int]":
     so an out-of-range port raises here rather than reaching the socket layer,
     which would mask it to 16 bits and scan a different port. An empty
     iterable stays empty -- it means "nothing to scan", never "the default
-    set".
+    set". An empty item of a comma list (``"22,,80"``, ``"22,"``) is junk and
+    raises, since it is more likely a slip than a request for nothing.
     """
 
     if isinstance(ports, str):
-        if ports in PORT_RANGES:
-            return PORT_RANGES[ports]
-        resolved = _port_number(ports, get_default_port)
-        if resolved is not None:
-            return (coerce_port(resolved),)
-        raise ValueError(
-            "unknown port range or scheme %r (ranges: %s)"
-            % (ports, ", ".join(sorted(PORT_RANGES)))
-        )
+        if "," in ports:
+            return _comma_list(ports)
+        return _one_spec(ports)
     if isinstance(ports, int):
         return (coerce_port(ports),)
 
-    out = []
+    out: "List[int]" = []
     for entry in ports:
         if isinstance(entry, int):
             out.append(coerce_port(entry))
             continue
-        resolved = _port_number(entry, get_default_port)
+        resolved = _port_number(entry)
         if resolved is None:
-            raise ValueError("cannot resolve %r to a port number" % (entry,))
+            raise NetimpsValueError("cannot resolve %r to a port number" % (entry,))
         out.append(coerce_port(resolved))
     return tuple(out)
 
 
-def _port_number(value, get_default_port) -> "Optional[int]":
+def _one_spec(text: str) -> "Sequence[int]":
+    """One string spec: a range name, a scheme name or a number."""
+    if text in PORT_RANGES:
+        return PORT_RANGES[text]
+    resolved = _port_number(text)
+    if resolved is not None:
+        return (coerce_port(resolved),)
+    raise NetimpsValueError(
+        "unknown port range or scheme %r (ranges: %s)"
+        % (text, ", ".join(sorted(PORT_RANGES)))
+    )
+
+
+def _comma_list(text: str) -> "Sequence[int]":
+    """``"22, https,common"``: each item resolved alone, first appearance kept."""
+    out: "List[int]" = []
+    for item in text.split(","):
+        item = item.strip()
+        if not item:
+            raise NetimpsValueError("empty item in the port list %r" % (text,))
+        for number in _one_spec(item):
+            if number not in out:
+                out.append(number)
+    return tuple(out)
+
+
+def _port_number(value) -> "Optional[int]":
     """A single port spec to a number: ``"443"``, ``"https"``, or ``None``.
 
-    The numeric test is ``int()`` itself, not :meth:`str.isdigit`: that
-    answers ``True`` for characters ``int()`` then rejects -- superscripts and
-    other Unicode digits -- so the intended fall-through to the scheme table
-    became a :class:`ValueError` from inside the conversion instead.
+    The text goes through :func:`netimps.get_default_port`, which tells a
+    number from a scheme name with ``str.isdecimal`` and never lets a
+    superscript or a sign reach ``int()``.
     """
     if isinstance(value, int):
         return value
-    text = str(value).strip()
-    try:
-        return int(text)
-    except ValueError:
-        return get_default_port(text)
+    return get_default_port(str(value))
 
 
 def scan_ports(
@@ -278,15 +297,18 @@ def scan_ports(
         scan_ports("10.0.0.5", [22, 80, 443])
         scan_ports("10.0.0.5", "https")              # scheme name -> 443
         scan_ports("10.0.0.5", ["ssh", "https"])     # -> 22, 443
+        scan_ports("10.0.0.5", "22,https,8000")      # a comma list -> 22, 443, 8000
 
     ``host`` also accepts an address object or an :class:`IPv4Interface`/
     :class:`IPv6Interface` (its ``.ip`` is used), same as :func:`tcp_check`.
 
     :param ports: a :data:`PORT_RANGES` name (``"common"``, ``"well-known"``,
         ``"all"``), a scheme name resolved via :func:`get_default_port`, a port
-        number, or any iterable mixing those. A range name wins over a scheme
-        name where the two collide. Each port must be in ``0-65535``; an empty
-        iterable means "nothing to scan" and returns ``[]``.
+        number, a comma-separated string of those (``"22,80,https"``; spaces
+        around an item are ignored, an empty item raises), or any iterable
+        mixing them. A range name wins over a scheme name where the two
+        collide. Each port must be in ``0-65535``; an empty iterable means
+        "nothing to scan" and returns ``[]``.
     :param timeout: per-port connect timeout. This bounds the whole scan
         (``timeout`` x rounds), so keep it small on a large range -- but not so
         small that a slow host reads as closed. Floored to 50 ms, as in
@@ -304,8 +326,9 @@ def scan_ports(
     healthy, and not that a filtered port is distinguishable from a closed one
     (both simply fail to connect).
 
-    Raises :class:`ValueError` for a port outside ``0-65535``, an unknown
-    scheme or range name, or a negative ``timeout``.
+    Raises :class:`NetimpsValueError` for an unknown scheme or range name or an
+    empty item in a comma list, and :class:`ValueError` for a port outside
+    ``0-65535`` or a negative ``timeout``.
     """
     targets = _resolve_ports(ports)
     if not targets:

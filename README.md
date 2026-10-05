@@ -168,6 +168,7 @@ netimps.retry(lambda: netimps.tcp_check("example.com", 443), attempts=3)
 | `HostLike` | accepted-input union for a single destination (hostname, address, or `IPv4Interface`/`IPv6Interface` — its `.ip` is used) |
 | `IPv4Address`, `IPv4Interface`, ... | stdlib concrete-type re-exports |
 | `parse`, `try_parse`, `is_valid` | build a type from a value (raising / `None` / `bool`) |
+| `classify` | read text as a MAC, network, interface or address, whichever it is |
 | `MACAddress` | parse / classify / render MAC addresses |
 | `get_interfaces`, `Interface`, `iter_addresses` | native cross-platform NIC discovery |
 | `is_link_scoped` | scope classification |

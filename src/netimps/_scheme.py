@@ -19,6 +19,8 @@ from __future__ import annotations
 import socket as _socket
 from typing import Dict, Optional
 
+from ._exceptions import NetimpsValueError
+
 __all__ = ["get_default_port", "get_default_scheme", "register_port"]
 
 #: Conventional scheme -> port mappings, consulted before the system services
@@ -219,15 +221,33 @@ def get_default_port(scheme: str) -> Optional[int]:
 
         get_default_port("https")    # 443
         get_default_port("socks5")   # 1080  (absent from /etc/services)
+        get_default_port("443")      # 443   (a port number as text)
         get_default_port("nope")     # None
 
     The database is asked for **TCP first, then UDP**, so a name carrying both
     answers with its TCP port on every platform rather than with whichever
     entry that host's database lists first.
 
+    Text that is a whole number is a port, not a scheme: it comes back as an
+    ``int``, so a command line or a config file can hand over either spelling.
+    A number outside ``0-65535`` raises :class:`NetimpsValueError`; it is
+    neither a port nor a scheme.
+
     Case-insensitive. Extend the table with :func:`register_port`.
     """
-    scheme = scheme.lower()
+    scheme = scheme.strip().lower()
+    # The conversion is the test: str.isdigit() passes superscripts that
+    # int() then rejects.
+    try:
+        number = int(scheme)
+    except ValueError:
+        pass
+    else:
+        if not MIN_PORT <= number <= MAX_PORT:
+            raise NetimpsValueError(
+                "port out of range: %r (must be %d-%d)" % (scheme, MIN_PORT, MAX_PORT)
+            )
+        return number
     if scheme in _DEFAULT_PORTS:
         return _DEFAULT_PORTS[scheme]
     return _service_port(scheme)

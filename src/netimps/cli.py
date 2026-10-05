@@ -70,7 +70,12 @@ from ._exceptions import ResolutionError
 from . import (
     Host,
     IPNetwork,
+    IPv4Interface,
+    IPv4Network,
+    IPv6Interface,
+    IPv6Network,
     MACAddress,
+    classify,
     discover_mtu,
     get_default_port,
     get_default_scheme,
@@ -345,8 +350,11 @@ class Check(_Base):
     ("--wait", "-w")
 
     def __call__(self) -> "int | None":
-        number = _as_int(self.port)
-        port = number if number is not None else get_default_port(self.port)
+        try:
+            port = get_default_port(self.port)
+        except ValueError as exc:
+            _error("error: %s" % exc)
+            return 2
         if port is None:
             # A port the command cannot derive is a caller error (exit 2), not
             # a closed port (exit 1): nothing was tested.
@@ -497,10 +505,6 @@ class Scan(_Base):
     ("--workers", "-w")
 
     def __call__(self) -> "int | None":
-        spec: _ty.Any = self.ports
-        if "," in self.ports:
-            spec = [p.strip() for p in self.ports.split(",") if p.strip()]
-
         network = try_parse(self.target, IPNetwork)
         # A bare address parses as a /32, which is a host scan, not a sweep.
         is_network = network is not None and "/" in self.target
@@ -516,7 +520,7 @@ class Scan(_Base):
             if is_network:
                 found = scan_hosts(
                     self.target,
-                    ports=spec,
+                    ports=self.ports,
                     timeout=self.timeout,
                     workers=self.workers,
                 )
@@ -531,7 +535,7 @@ class Scan(_Base):
             else:
                 open_ports = scan_ports(
                     self.target,
-                    ports=spec,
+                    ports=self.ports,
                     timeout=self.timeout,
                     workers=self.workers,
                 )
@@ -562,59 +566,68 @@ class Addr(_Base):
     ("value",)
 
     def __call__(self) -> "int | None":
-        mac = try_parse(self.value, MACAddress)
-        if mac is not None:
-            _emit(
-                {
-                    "kind": "mac",
-                    "value": str(mac),
-                    "oui": mac.oui.hex(":"),
-                    "is_multicast": mac.is_multicast,
-                    "is_local": mac.is_local,
-                },
-                self.json_out,
-                plain="\n".join(
-                    [
-                        "mac          %s" % mac,
-                        "oui          %s" % mac.oui.hex(":"),
-                        "multicast    %s" % mac.is_multicast,
-                        "administered %s"
-                        % ("locally" if mac.is_local else "universally"),
-                    ]
-                ),
-            )
-            return None
-
-        network = try_parse(self.value, IPNetwork)
-        if network is not None and "/" in self.value:
-            _emit(
-                {
-                    "kind": "network",
-                    "value": str(network),
-                    "network_address": str(network.network_address),
-                    "netmask": str(network.netmask),
-                    "num_addresses": network.num_addresses,
-                    "version": network.version,
-                },
-                self.json_out,
-                plain="\n".join(
-                    [
-                        "network   %s" % network,
-                        "netmask   %s" % network.netmask,
-                        "addresses %d" % network.num_addresses,
-                    ]
-                ),
-            )
-            return None
-
-        address = Host(self.value).ip()
-        if address is None:
+        try:
+            found: _ty.Any = classify(self.value)
+        except ValueError:
+            # Not a literal: a name, which only a resolver can read.
+            found = Host(self.value).ip()
+        if found is None:
             _error(
                 "error: %r is not an address, network, MAC or resolvable name"
                 % self.value
             )
             return 2
+        if isinstance(found, MACAddress):
+            self._mac(found)
+        elif isinstance(found, (IPv4Network, IPv6Network)):
+            self._network(found)
+        elif isinstance(found, (IPv4Interface, IPv6Interface)):
+            self._network(found.network)
+        else:
+            self._address(found)
+        return None
 
+    def _mac(self, mac: MACAddress) -> None:
+        _emit(
+            {
+                "kind": "mac",
+                "value": str(mac),
+                "oui": mac.oui.hex(":"),
+                "is_multicast": mac.is_multicast,
+                "is_local": mac.is_local,
+            },
+            self.json_out,
+            plain="\n".join(
+                [
+                    "mac          %s" % mac,
+                    "oui          %s" % mac.oui.hex(":"),
+                    "multicast    %s" % mac.is_multicast,
+                    "administered %s" % ("locally" if mac.is_local else "universally"),
+                ]
+            ),
+        )
+
+    def _network(self, network: _ty.Any) -> None:
+        _emit(
+            {
+                "kind": "network",
+                "value": str(network),
+                "network_address": str(network.network_address),
+                "netmask": str(network.netmask),
+                "num_addresses": network.num_addresses,
+                "version": network.version,
+            },
+            self.json_out,
+            plain="\n".join(
+                [
+                    "network   %s" % network,
+                    "netmask   %s" % network.netmask,
+                    "addresses %d" % network.num_addresses,
+                ]
+            ),
+        )
+
+    def _address(self, address: _ty.Any) -> None:
         _emit(
             {
                 "kind": "address",
@@ -639,7 +652,6 @@ class Addr(_Base):
                 ]
             ),
         )
-        return None
 
 
 class Source(_Base):

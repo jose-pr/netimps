@@ -75,6 +75,9 @@ from netimps import (
     LOOPBACK_V6,
     is_local_address,
     is_valid,
+    classify,
+    get_default_port,
+    scan_ports,
     is_wildcard,
     clear_resolution_cache,
     is_local_host,
@@ -199,6 +202,12 @@ assert_type(is_valid("127.0.0.1", IPv4Address), bool)
 assert_type(is_valid("02:00:00:00:00:01", MACAddress), bool)
 assert_type(is_valid("value", Built, enabled=True), bool)
 assert_type(MACAddress.is_valid("02:00:00:00:00:01"), bool)
+assert_type(
+    classify("127.0.0.1"),
+    Union[MACAddress, IPNetwork, IPInterface, IPAddress],
+)
+assert_type(get_default_port("443"), Optional[int])
+assert_type(scan_ports("127.0.0.1", "22,80"), List[int])
 assert_type(MACAddress.try_parse("02:00:00:00:00:01"), Optional[MACAddress])
 assert_type(MACAddress.parse("02:00:00:00:00:01"), MACAddress)
 assert_type(MACAddress("02:00:00:00:00:01").format("-", upper=True), str)

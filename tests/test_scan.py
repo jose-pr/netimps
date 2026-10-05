@@ -217,7 +217,7 @@ def test_unicode_digit_falls_through_to_scheme_lookup():
     from netimps._scan import _port_number, _resolve_ports
 
     assert "²".isdigit()  # the premise, pinned
-    assert _port_number("²", netimps.get_default_port) is None
+    assert _port_number("²") is None
     with pytest.raises(ValueError, match="unknown port range or scheme"):
         _resolve_ports("²")
     with pytest.raises(ValueError, match="cannot resolve"):
@@ -1033,3 +1033,32 @@ def test_scan_ports_all_ports_is_fed_lazily(monkeypatch):
         tracemalloc.stop()
     assert found == [10000, 20000, 30000, 40000, 50000, 60000]
     assert peak < 8 * 1024 * 1024, peak
+
+
+def test_a_comma_list_scans_each_item(listener):
+    """``"22,80"`` read as one scheme name, so the library raised where the
+    command line, which split it first, worked."""
+    other = netimps.get_free_port()
+    assert scan_ports("127.0.0.1", "%d, %d" % (other, listener), timeout=1) == [
+        listener
+    ]
+
+
+def test_a_comma_list_takes_numbers_schemes_and_range_names():
+    from netimps._scan import _resolve_ports
+
+    assert _resolve_ports("22,https, 8000") == (22, 443, 8000)
+    assert _resolve_ports("22,22,ssh") == (22,)
+    assert _resolve_ports("22,common")[0] == 22
+    assert set(PORT_RANGES["common"]) <= set(_resolve_ports("22,common"))
+
+
+@pytest.mark.parametrize("text", ["22,", ",22", "22,,80", "22, ,80", "22,not-a-port"])
+def test_a_comma_list_with_a_bad_item_raises(text):
+    with pytest.raises(netimps.NetimpsValueError):
+        scan_ports("127.0.0.1", text)
+
+
+def test_a_comma_list_item_out_of_range_raises():
+    with pytest.raises(ValueError, match="out of range"):
+        scan_ports("127.0.0.1", "22,99999")

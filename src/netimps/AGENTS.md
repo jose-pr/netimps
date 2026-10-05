@@ -113,7 +113,7 @@ too. The named networks `LOOPBACK_V4`, `LINK_LOCAL_V4` (`IPv4Network`) and
 | `HostLike` | `str \| IPv4Address \| IPv6Address \| IPv4Interface \| IPv6Interface \| Host \| FQDN` -- any `dst`-typed parameter |
 | `InterfaceLike` | `Interface \| MACAddress \| IPv4Address \| IPv6Address \| str \| None` -- names a local interface: `src=` and `interface=` parameters |
 | `InterfaceQuery` | `Interface \| IPAddressLike \| IPInterface \| IPNetwork \| MACAddress` (text that is none of those is an adapter name) -- what `get_interface` and `iter_interfaces` look up |
-| `PortsLike` | `str \| int \| Iterable[str \| int]` -- a port, a range name, a scheme name, or several: `scan_ports`, `scan_hosts` |
+| `PortsLike` | `str \| int \| Iterable[str \| int]` -- a port, a range name, a scheme name, a comma-separated string of those (`"22,https"`), or several: `scan_ports`, `scan_hosts` |
 | `SocketAddress` | `(host, port)` or `(host, port, flowinfo, scope_id)` -- a socket address tuple, as in `Datagram.sender` |
 | `MACAddressLike` | `str \| int \| bytes \| bytearray \| MACAddress` |
 
@@ -133,6 +133,14 @@ they describe what goes in, not what to build.
 - **`try_parse(value, type=IPAddress, *, default=None, strict=None, **options)`** — same, but
   returns `default` instead of raising.
 - **`is_valid(value, type=IPAddress, *, strict=None, **options)`** — same, returning `bool`.
+- **`classify(text) -> MACAddress | IPNetwork | IPInterface | IPAddress`** — read
+  text as whichever of those it spells. Order: a MAC (any accepted spelling);
+  text with a `/` is an `IPNetwork` when it has no host bits (`"10.0.0.0/24"`,
+  `"10.0.0.5/32"`) and an `IPInterface` otherwise (`"10.0.0.5/24"`); text
+  without one is an `IPAddress`. It reads the text alone and never asks a
+  resolver, so a name raises: resolve it with `Host(name).resolve()` first.
+  Raises `NetimpsValueError` for text that is none of them and `TypeError` for
+  a non-`str`.
 
 All three spell the second argument `type`, so it works positionally or by
 keyword. Key behaviours:
@@ -437,7 +445,9 @@ so nothing is lost. Pass an existing enumeration in a loop; it is a syscall.
 
 ## Scheme ↔ port registry
 
-- **`get_default_port(scheme) -> int | None`** — built-in table (35 entries,
+- **`get_default_port(scheme) -> int | None`** — text that is a whole number is
+  a port and comes back as an `int` (`"443"` → `443`; outside `0-65535` raises
+  `NetimpsValueError`). Otherwise the built-in table (35 entries,
   including the socks variants, the `ws`/`wss` websocket schemes and the
   WS-Management spellings `wsman`/`wsmans` (IANA), `winrm`/`winrms` and `psrp`
   — 5985 for the plain forms, 5986 for the `s` forms — all absent from
@@ -1319,14 +1329,16 @@ at least 3 there.
 
 `ports` accepts a **`PORT_RANGES` name** (`"common"`, `"well-known"`, `"all"`),
 a **scheme name** resolved via `get_default_port` (`"https"` → 443), a number, a
-numeric string, or any iterable mixing those. Range names win over scheme names
+numeric string, a **comma-separated string** of those (`"22,https,8000"`; spaces
+around an item are ignored, repeats are scanned once, an empty item raises
+`NetimpsValueError`), or any iterable mixing them. Range names win over scheme names
 where they collide. `scan_hosts(port=...)` is shorthand for `ports=[port]` and
 accepts a scheme name too; passing both raises `ValueError`.
 
 - **Every port is validated to `0-65535`** and raises `ValueError` otherwise,
   instead of being masked to 16 bits, which would make
   `scan_ports(host, [p + 65536])` answer about `p`. An unknown scheme or range
-  name raises `ValueError` too.
+  name raises `NetimpsValueError` (a `ValueError`).
 - **An explicitly empty `ports` means "nothing to scan"** and returns `[]`. It
   does **not** fall back to the 36-port `"common"` set, which would sweep a
   network the caller just said to probe on no ports; `scan_hosts`

@@ -79,7 +79,7 @@ from ._ip import (
     is_wildcard,
     subtract,
 )
-from ._parse import is_valid, parse, try_parse
+from ._parse import classify, is_valid, parse, try_parse
 
 # The public spellings of everything below; the _-prefixed modules are
 # implementation detail and must not be imported from outside the package.
@@ -172,6 +172,7 @@ __all__ = [
     "parse",
     "try_parse",
     "is_valid",
+    "classify",
     "Host",
     "is_link_scoped",
     "LINK_LOCAL_V4",

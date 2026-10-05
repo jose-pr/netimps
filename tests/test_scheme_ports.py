@@ -36,3 +36,23 @@ def test_the_ssh_and_http_canonical_names_are_unchanged():
     assert netimps.get_default_port("ssh") == 22
     assert netimps.get_default_scheme(80) == "http"
     assert netimps.get_default_scheme(443) == "https"
+
+
+@pytest.mark.parametrize("text, port", [("443", 443), (" 80 ", 80), ("0", 0)])
+def test_a_port_number_as_text_is_that_port(text, port):
+    assert netimps.get_default_port(text) == port
+    assert isinstance(netimps.get_default_port(text), int)
+
+
+@pytest.mark.parametrize("text", ["65536", "99999", "-1"])
+def test_a_port_number_out_of_range_raises(text):
+    with pytest.raises(netimps.NetimpsValueError, match="out of range"):
+        netimps.get_default_port(text)
+
+
+@pytest.mark.parametrize("text", ["4.5", "²", "0x50"])
+def test_text_int_rejects_is_a_scheme_lookup(text):
+    """``str.isdigit()`` is true for a superscript and ``int()`` then raises;
+    the conversion is the test, so these are scheme names, and none is
+    registered."""
+    assert netimps.get_default_port(text) is None

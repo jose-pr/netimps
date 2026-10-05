@@ -30,6 +30,8 @@ from ._ip._types import (
     _BUILDERS,
     _CONCRETE,
     IPAddress,
+    IPInterface,
+    IPNetwork,
 )
 from ._mac import MACAddress
 
@@ -39,7 +41,7 @@ if TYPE_CHECKING:
     # gains no typing_extensions dependency.
     from typing_extensions import TypeForm
 
-__all__ = ["parse", "try_parse", "is_valid"]
+__all__ = ["parse", "try_parse", "is_valid", "classify"]
 
 _ClassType = type  # ``parse`` and ``try_parse`` take a parameter named ``type``
 
@@ -410,4 +412,45 @@ def is_valid(  # type: ignore[no-redef]  # the overloads above are the signature
     return (
         try_parse(value, target, default=_MISSING, strict=strict, **options)
         is not _MISSING
+    )
+
+
+def classify(text: str) -> "Union[MACAddress, IPNetwork, IPInterface, IPAddress]":
+    """Read ``text`` as whichever of a MAC, a network, an interface or an
+    address it spells, and return that value.
+
+    The order, which decides text that could be read two ways:
+
+    1. a :class:`MACAddress` (any spelling it accepts);
+    2. text with a ``/`` prefix length: an :data:`IPNetwork` when it has no
+       host bits set (``"10.0.0.0/24"``, ``"10.0.0.5/32"``), otherwise an
+       :data:`IPInterface` (``"10.0.0.5/24"``);
+    3. an :data:`IPAddress` (``"10.0.0.5"``, ``"fe80::1%eth0"``).
+
+    So a bare address is never read as a ``/32`` network, and an address with a
+    prefix is never an address. A name is none of these: ``classify`` never
+    asks a resolver, so ``classify("example.com")`` raises. Resolve it with
+    :meth:`Host.resolve` first.
+
+    Raises :class:`NetimpsValueError` for text that is none of them, and
+    :class:`TypeError` for a non-``str``.
+    """
+    if not isinstance(text, str):
+        raise TypeError("text must be a str, got %r" % (type(text).__name__,))
+    mac = try_parse(text, MACAddress)
+    if mac is not None:
+        return mac
+    if "/" in text:
+        network = try_parse(text, IPNetwork, strict=True)
+        if network is not None:
+            return network
+        interface = try_parse(text, IPInterface)
+        if interface is not None:
+            return interface
+    else:
+        address = try_parse(text, IPAddress)
+        if address is not None:
+            return address
+    raise NetimpsValueError(
+        "%r is not a MAC address, network, interface or address" % (text,)
     )

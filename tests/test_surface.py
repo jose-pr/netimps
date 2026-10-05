@@ -56,6 +56,7 @@ EXPECTED = [
     "backoff_delays",
     "bind",
     "bind_error_hint",
+    "classify",
     "clear_interface_cache",
     "clear_resolution_cache",
     "collapse",
