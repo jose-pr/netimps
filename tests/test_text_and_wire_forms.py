@@ -263,3 +263,31 @@ def test_whatever_the_constructor_accepts_the_wire_entry_accepts():
         assert FQDN.decode(v.fully_qualified().encode()) == v.fully_qualified()
         assert FQDN.parse(str(v)) == v
     assert accepted > 50
+
+
+def test_parse_of_the_text_form_gives_back_the_value_over_the_wider_corpus():
+    """`FQDN.parse(str(v)) == v` for mixed case, derived, non-ASCII and rooted
+    names, and the text keeps the root dot that tells `example.com` from
+    `example.com.`: a `str` that dropped it parsed back to the relative twin."""
+    for name in _wider_corpus():
+        again = FQDN.parse(str(name))
+        assert again == name, str(name)
+        assert again.is_fully_qualified() == name.is_fully_qualified(), str(name)
+        assert str(again) == str(name)
+
+
+def test_a_name_and_its_rooted_twin_order_by_one_rule_over_the_wider_corpus():
+    """Equality, the four operators and the hash agree for every name against
+    its relative and rooted spellings and against its neighbour in the corpus."""
+    names = list(_wider_corpus())
+    pairs = [(n, n.fully_qualified()) for n in names]
+    pairs += [(n, FQDN(str(n).rstrip("."))) for n in names]
+    pairs += list(zip(names, names[1:]))
+    for x, y in pairs:
+        lt, gt, le, ge = x < y, x > y, x <= y, x >= y
+        assert (x == y) == (not lt and not gt), (str(x), str(y))
+        assert not (lt and gt), (str(x), str(y))
+        assert le == (lt or x == y) and ge == (gt or x == y), (str(x), str(y))
+        assert (y < x) == gt and (y > x) == lt, (str(x), str(y))
+        if x == y:
+            assert hash(x) == hash(y), (str(x), str(y))

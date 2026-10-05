@@ -502,6 +502,52 @@ def _loopback_endpoint(family, host):
     return endpoint
 
 
+def _platform_delivers_pktinfo(family, host):
+    """Whether the platform hands a plain socket a pktinfo control message.
+
+    Ground truth comes from the kernel: every pktinfo receive option the module
+    names for this family is set on a plain socket, a datagram is sent to it,
+    and the *raw* level of the control message that arrives is read. Only constants are
+    taken from `_pktinfo`; whether a message arrived is never decided by its
+    decoder, so a regression in the decoder cannot turn this into a skip.
+    ``None`` means the probe itself could not be made.
+    """
+    if not netimps.has_recvmsg():
+        return False
+    level = socket.IPPROTO_IPV6 if family == socket.AF_INET6 else socket.IPPROTO_IP
+    if family == socket.AF_INET6:
+        options = [
+            (socket.IPPROTO_IPV6, _pktinfo._IPV6_RECVPKTINFO),
+            (socket.IPPROTO_IPV6, _pktinfo._IPV6_PKTINFO),
+        ]
+    else:
+        options = [(socket.IPPROTO_IP, _pktinfo._IP_PKTINFO)]
+    try:
+        probe = bind(host, 0, family=family)
+    except OSError:
+        return None
+    peer = socket.socket(family, socket.SOCK_DGRAM)
+    try:
+        for option_level, option in options:
+            if option is None:
+                continue
+            try:
+                probe.setsockopt(option_level, option, 1)
+            except OSError:
+                continue
+        peer.sendto(b"ground-truth", (host, probe.getsockname()[1]))
+        probe.settimeout(5.0)
+        _data, ancdata, _flags, _sender = netimps.recvmsg(
+            probe, 512, netimps.CMSG_SPACE(256)
+        )
+    except OSError:
+        return None
+    finally:
+        peer.close()
+        probe.close()
+    return any(received == level for received, _type, _cdata in ancdata)
+
+
 @pytest.mark.parametrize("family, host", _LOOPBACKS)
 def test_udp_endpoint_round_trip(family, host):
     """The flag and the data must agree, for both address families.
@@ -525,9 +571,10 @@ def test_udp_endpoint_round_trip(family, host):
     assert packet.control_truncated is False
 
     # Degrading to False is honest, but it must not become the escape hatch:
-    # where the kernel exports this family's option, it has to be used.
-    receive_option = _pktinfo._pktinfo_options(family)[1]
-    if receive_option is not None and hasattr(socket.socket, "recvmsg"):
+    # where the platform delivers the control message to a plain socket, the
+    # endpoint has to claim it. The platform is asked, not the module's own
+    # option table.
+    if _platform_delivers_pktinfo(family, host):
         assert endpoint.has_pktinfo
     if sys.platform.startswith("freebsd") and family == socket.AF_INET:
         # FreeBSD's IPv4 carrier is not IP_PKTINFO, so the option table above
@@ -603,6 +650,77 @@ def test_udp_endpoint_pins_the_source_it_is_given(family, host):
     assert packet.data == b"pinned"
 
 
+def _addresses_of_this_host(family):
+    """The loopback address and every routable address an interface holds."""
+    version = 4 if family == socket.AF_INET else 6
+    found = ["127.0.0.1" if version == 4 else "::1"]
+    for iface in netimps.get_interfaces():
+        for ip in iface.ips:
+            if (
+                ip.version == version
+                and not ip.ip.is_loopback
+                and not ip.ip.is_link_local
+            ):
+                found.append(str(ip.ip))
+    return found
+
+
+@pytest.mark.parametrize("family, host", _LOOPBACKS)
+def test_a_pinned_source_is_the_address_the_receiver_observes(family, host):
+    """A datagram sent with ``src=`` arrives *from* that address.
+
+    `test_udp_endpoint_pins_the_source_it_is_given` binds the sender to the
+    pinned address, so it passes whether or not the control message is sent.
+    Here the sender is bound to the wildcard, the receiver is a plain socket,
+    and a (destination, source) pair of this host's own addresses is chosen
+    where an unpinned datagram arrives from a *different* address: only a pin
+    that reached the kernel changes what the receiver sees. Which pairs a
+    kernel accepts is the kernel's to say (Windows refuses a source that is not
+    the destination's own interface), so the pairs are tried and the test skips
+    when none is accepted.
+    """
+    addresses = _addresses_of_this_host(family)
+    wildcard = "0.0.0.0" if family == socket.AF_INET else "::"
+    try:
+        sender = UDPEndpoint(bind(wildcard, 0, family=family))
+        plain = bind(wildcard, 0, family=family)
+    except OSError as exc:
+        pytest.skip("cannot bind %s: %s" % (wildcard, exc))
+    with sender, plain:
+        if not sender.has_src_pinning:
+            pytest.skip("this platform cannot pin a source")
+        for destination in addresses:
+            receiver = socket.socket(family, socket.SOCK_DGRAM)
+            try:
+                receiver.bind((destination, 0))
+                receiver.settimeout(0.5)
+                port = receiver.getsockname()[1]
+                plain.sendto(b"unpinned", (destination, port))
+                unpinned = ipaddress.ip_address(receiver.recvfrom(64)[1][0])
+                for source in addresses:
+                    if ipaddress.ip_address(source) == unpinned:
+                        continue
+                    try:
+                        sender.send(b"pinned", destination, port, src=source)
+                        data, peer = receiver.recvfrom(64)
+                    except OSError:
+                        continue  # the kernel refuses this pair
+                    assert data == b"pinned"
+                    assert ipaddress.ip_address(peer[0]) == ipaddress.ip_address(
+                        source
+                    ), "pinned %s, the receiver saw %s (unpinned: %s)" % (
+                        source,
+                        peer[0],
+                        unpinned,
+                    )
+                    return
+            except OSError:
+                continue
+            finally:
+                receiver.close()
+    pytest.skip("no pair of this host's addresses lets a pinned source be observed")
+
+
 def test_udp_endpoint_send_rejects_a_source_of_the_wrong_family():
     """Linux *accepts* an IPv6 cmsg on an AF_INET socket and ignores it.
 
@@ -674,66 +792,18 @@ def test_udp_endpoint_repr_and_close():
 def test_udp_endpoint_claims_pktinfo_whenever_the_platform_delivers_it(family, host):
     """If a raw socket can get a pktinfo cmsg, the endpoint must not say it cannot.
 
-    This asks the **platform**, not the library. `test_udp_endpoint_round_trip`
-    has a guard for the same thing, but it reads
-    `_pktinfo._pktinfo_options(family)[1]` -- the function under test -- so when that
-    returned None for IPv6 on Windows, the guard switched itself off and the
-    round trip passed through its own degraded branch. Measured on a CI runner:
-    `UDPEndpoint(bind("::", 0)).has_pktinfo` was False while a raw
-    `recvmsg` on the very same socket delivered the cmsg.
-
-    So: establish the ground truth by hand first, then hold the endpoint to it.
+    This asks the **platform**, not the library: a guard that read the module's
+    own option table switched itself off when that table returned None for IPv6
+    on Windows, and the round trip passed through its degraded branch. Measured
+    on a CI runner: `UDPEndpoint(bind("::", 0)).has_pktinfo` was False while a
+    raw `recvmsg` on the very same socket delivered the cmsg. The verdict is the
+    raw level of that control message, never what the module's
+    decoder makes of it, so a decoder regression is not read as "the platform
+    does not deliver".
     """
-    if not netimps.has_recvmsg():
-        pytest.skip("no recvmsg on this platform at all")
-
-    # Ground truth: set every pktinfo option this platform exports for the
-    # family and see whether a cmsg actually arrives.
-    try:
-        probe = bind(host, 0, family=family)
-    except OSError as exc:
-        pytest.skip("cannot bind %s: %s" % (host, exc))
-    delivered = False
-    try:
-        # The *constants* come from `_pktinfo`, the *decision* does not -- that
-        # distinction is the whole design of this test. Reading them from
-        # `socket` instead gave this check the same blind spot as the code it
-        # was meant to police: `socket.IP_PKTINFO` only exists from CPython
-        # 3.12, so on 3.9-3.11 it found None, enabled nothing, saw no cmsg and
-        # skipped -- passing while v4 pktinfo was broken on every platform.
-        if family == socket.AF_INET6:
-            candidates = [
-                (socket.IPPROTO_IPV6, _pktinfo._IPV6_RECVPKTINFO),
-                (socket.IPPROTO_IPV6, _pktinfo._IPV6_PKTINFO),
-            ]
-        else:
-            candidates = [(socket.IPPROTO_IP, _pktinfo._IP_PKTINFO)]
-        for level, option in candidates:
-            if option is None:
-                continue
-            try:
-                probe.setsockopt(level, option, 1)
-            except OSError:
-                continue
-        port = probe.getsockname()[1]
-        peer = socket.socket(family, socket.SOCK_DGRAM)
-        try:
-            peer.sendto(b"ground-truth", (host, port))
-            probe.settimeout(5.0)
-            _data, ancdata, _flags, _sender = netimps.recvmsg(
-                probe, 512, netimps.CMSG_SPACE(256)
-            )
-        finally:
-            peer.close()
-        delivered = any(
-            _pktinfo._unpack_pktinfo(lvl, ctype, cdata) is not None
-            for lvl, ctype, cdata in ancdata
-        )
-    except OSError as exc:  # pragma: no cover - a stack without this loopback
-        pytest.skip("ground-truth probe failed: %s" % (exc,))
-    finally:
-        probe.close()
-
+    delivered = _platform_delivers_pktinfo(family, host)
+    if delivered is None:
+        pytest.skip("the ground-truth probe could not be made on %s" % (host,))
     if not delivered:
         pytest.skip("platform delivers no pktinfo cmsg for family %s" % (family,))
 

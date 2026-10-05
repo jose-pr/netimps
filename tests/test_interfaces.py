@@ -10,7 +10,9 @@ import collections.abc
 import ctypes
 import ipaddress
 import math
+import os
 import socket
+import uuid
 
 import pytest
 
@@ -279,6 +281,147 @@ def test_raw_is_opt_in():
 def test_enumeration_is_stable():
     """Two consecutive calls agree -- no leaked state between invocations."""
     assert get_interfaces() == get_interfaces()
+
+
+# --------------------------------------------------------------------------- #
+# Facts the operating system fixes                                             #
+# --------------------------------------------------------------------------- #
+#
+# The live tests above check shapes, which a wrong prefix, a missing MAC or a
+# shifted index all satisfy. These compare the enumeration with what the OS
+# itself says: the loopback addresses it always has, its own list of interface
+# indices, and on Linux the kernel's per-interface files.
+
+
+def _can_bind(family, address):
+    probe = socket.socket(family, socket.SOCK_DGRAM)
+    try:
+        probe.bind((address, 0))
+    except OSError:
+        return False
+    finally:
+        probe.close()
+    return True
+
+
+def test_the_loopback_interface_holds_the_loopback_addresses_with_their_prefixes():
+    """Every host's loopback is `127.0.0.1/8`, and `::1/128` where it has IPv6.
+
+    A prefix read from the wrong field, or defaulted, reports another length
+    and every shape check still passes: the loopback prefix is the one length
+    the OS fixes. The interface holds *more* on some hosts (WSL2 binds a
+    routable `10.255.255.254/32` to `lo`), so the assertion is that these are
+    held, not that nothing else is.
+    """
+    loopbacks = [i for i in get_interfaces() if i.is_loopback]
+    assert loopbacks, "no interface carries the OS's loopback flag"
+    held = {ip for i in loopbacks for ip in i.ips}
+    assert ipaddress.IPv4Interface("127.0.0.1/8") in held, sorted(map(str, held))
+    if _can_bind(socket.AF_INET6, "::1"):
+        assert ipaddress.IPv6Interface("::1/128") in held, sorted(map(str, held))
+
+
+def test_every_interface_index_is_one_the_os_lists():
+    """Each reported index is in `socket.if_nameindex()`, and where the OS's
+    names are the library's names, the index belongs to that name.
+
+    Windows lists far more adapters than carry an address (the library names
+    them by friendly name, `if_nameindex` by type and number), so the name
+    comparison is made only where the two agree on some name.
+    """
+    if not hasattr(socket, "if_nameindex"):
+        pytest.skip("this platform has no socket.if_nameindex")
+    os_names = dict(socket.if_nameindex())
+    ifaces = get_interfaces()
+    for iface in ifaces:
+        assert iface.index in os_names, (iface.name, iface.index, os_names)
+    if any(iface.name in os_names.values() for iface in ifaces):
+        for iface in ifaces:
+            name = os_names[iface.index]
+            assert iface.name == name or iface.name.startswith(name + ":"), (
+                iface.index,
+                iface.name,
+                name,
+            )
+
+
+@pytest.mark.skipif(
+    not os.path.isdir("/sys/class/net"),
+    reason="the kernel's own interface listing is /sys/class/net",
+)
+def test_on_linux_the_enumeration_lists_every_kernel_interface():
+    """Every name under `/sys/class/net` is an interface the library reports.
+
+    An enumerator that drops an interface without an address, or stops early,
+    leaves the shape checks green.
+    """
+    listed = {i.name.split(":")[0] for i in get_interfaces()}
+    assert set(os.listdir("/sys/class/net")) <= listed, sorted(listed)
+
+
+def test_a_host_with_a_hardware_address_reports_one():
+    """`uuid.getnode()` reads a real adapter's MAC from the OS and says when it
+    had to invent one (the multicast bit). Where it found one, some interface
+    carries a MAC; an enumeration that dropped every MAC passed every shape
+    check."""
+    node = uuid.getnode()
+    if node >> 40 & 1:
+        pytest.skip("the OS reported no hardware address (uuid.getnode invented one)")
+    assert any(i.mac is not None for i in get_interfaces())
+
+
+def _kernel_file(name, leaf):
+    with open("/sys/class/net/%s/%s" % (name, leaf)) as handle:
+        return handle.read().strip()
+
+
+@pytest.mark.skipif(
+    not os.path.isdir("/sys/class/net"),
+    reason="the kernel's own interface listing is /sys/class/net",
+)
+def test_on_linux_every_mac_and_mtu_is_the_kernels():
+    """The MAC and MTU of each interface equal `/sys/class/net/<name>/address`
+    and `/mtu`. An all-zero or non-6-byte address is reported as no MAC."""
+    for iface in get_interfaces():
+        kernel_name = socket.if_indextoname(iface.index)
+        text = _kernel_file(kernel_name, "address")
+        octets = text.split(":")
+        expected = None
+        if len(octets) == 6 and any(octet != "00" for octet in octets):
+            expected = int("".join(octets), 16)
+        actual = None if iface.mac is None else int(iface.mac)
+        assert actual == expected, (iface.name, text, iface.mac)
+        assert iface.mtu == int(_kernel_file(kernel_name, "mtu")), iface.name
+
+
+def test_an_interface_index_is_one_the_os_binds_its_link_local_address_under():
+    """Where there is no name to compare (Windows), the OS still says which
+    scope ids accept an interface's link-local IPv6 address: only that
+    interface's own. The reported index must be one of them."""
+    if not hasattr(socket, "if_nameindex") or not socket.has_ipv6:
+        pytest.skip("no IPv6 or no socket.if_nameindex")
+    checked = 0
+    scopes = [index for index, _name in socket.if_nameindex()]
+    for iface in get_interfaces():
+        for ip in iface.ips:
+            if ip.version != 6 or not ip.ip.is_link_local:
+                continue
+            accepted = []
+            for scope in scopes:
+                probe = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+                try:
+                    probe.bind((str(ip.ip), 0, 0, scope))
+                except OSError:
+                    continue
+                finally:
+                    probe.close()
+                accepted.append(scope)
+            if not accepted:
+                continue  # the OS binds this address under no scope: no ground truth
+            checked += 1
+            assert iface.index in accepted, (iface.name, iface.index, accepted)
+    if not checked:
+        pytest.skip("no link-local IPv6 address the OS will bind")
 
 
 # --------------------------------------------------------------------------- #
