@@ -1171,3 +1171,140 @@ def test_recvmsg_works_on_a_stream_socket():
     finally:
         a.close()
         b.close()
+
+
+# --------------------------------------------------------------------------- #
+# The receive buffer                                                          #
+# --------------------------------------------------------------------------- #
+
+
+def _datagram_pair():
+    server = netimps.bind("127.0.0.1", 0)
+    server.settimeout(5)
+    client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    client.connect(server.getsockname())
+    return server, client
+
+
+def test_successive_receives_each_return_their_own_bytes():
+    server, client = _datagram_pair()
+    try:
+        client.send(b"the-first-datagram")
+        first = netimps.recvmsg(server, 65536)[0]
+        client.send(b"second")
+        second = netimps.recvmsg(server, 65536)[0]
+        assert (first, second) == (b"the-first-datagram", b"second")
+    finally:
+        server.close()
+        client.close()
+
+
+def test_a_smaller_bufsize_after_a_larger_one_still_truncates():
+    server, client = _datagram_pair()
+    try:
+        client.send(b"x" * 200)
+        assert netimps.recvmsg(server, 65536)[0] == b"x" * 200
+        client.send(bytes(range(100)))
+        data, _anc, flags, _sender = netimps.recvmsg(server, 10)
+        assert data == bytes(range(10))
+        assert flags & getattr(socket, "MSG_TRUNC", 0)
+    finally:
+        server.close()
+        client.close()
+
+
+def test_threads_receiving_at_once_each_get_their_own_datagrams():
+    import threading
+
+    rounds = 200
+    failures = []
+
+    def receive(server, client, fill):
+        try:
+            for size in range(1, rounds + 1):
+                client.send(fill * size)
+                got = netimps.recvmsg(server, 65536)[0]
+                if got != fill * size:
+                    failures.append((fill, size, got[:16]))
+                    return
+        except Exception as exc:
+            failures.append((fill, repr(exc)))
+
+    pairs = [_datagram_pair() for _ in range(4)]
+    threads = [
+        threading.Thread(target=receive, args=(server, client, bytes([65 + n])))
+        for n, (server, client) in enumerate(pairs)
+    ]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(30)
+        assert not failures
+        assert not any(thread.is_alive() for thread in threads)
+    finally:
+        for server, client in pairs:
+            server.close()
+            client.close()
+
+
+@pytest.mark.skipif(not IS_WINDOWS, reason="_winsock is Windows-only by construction")
+def test_windows_receives_do_not_allocate_a_payload_buffer_each():
+    """A fresh 64 KiB buffer is faulted in page by page on every receive."""
+    import ctypes
+
+    # Private: the Windows receive path's allocation seam.
+    from netimps._winsock import _calls
+
+    allocated = []
+
+    class _Counting:
+        @staticmethod
+        def create_string_buffer(init, size=None):
+            allocated.append(init if size is None else size)
+            return ctypes.create_string_buffer(init, size)
+
+        def __getattr__(self, name):
+            return getattr(ctypes, name)
+
+    server, client = _datagram_pair()
+    real = _calls._ctypes
+    _calls._ctypes = _Counting()
+    try:
+        for _ in range(5):
+            client.send(b"datagram")
+            assert netimps.recvmsg(server, 65536)[0] == b"datagram"
+    finally:
+        _calls._ctypes = real
+        server.close()
+        client.close()
+    assert allocated.count(65536) <= 1
+
+
+@pytest.mark.skipif(not IS_WINDOWS, reason="_winsock is Windows-only by construction")
+def test_windows_receive_started_inside_another_takes_its_own_buffer():
+    """A signal handler or a finalizer can receive between the call and the copy."""
+    import ctypes
+
+    # Private: the Windows receive path's allocation seam.
+    from netimps._winsock import _calls
+
+    outer, outer_kept = _calls._take_buffer(1024)
+    try:
+        inner, inner_kept = _calls._take_buffer(1024)
+        assert outer_kept and not inner_kept
+        assert ctypes.addressof(outer) != ctypes.addressof(inner)
+    finally:
+        _calls._release_buffer(outer_kept)
+    again, again_kept = _calls._take_buffer(1024)
+    _calls._release_buffer(again_kept)
+    assert again_kept and ctypes.addressof(again) == ctypes.addressof(outer)
+
+
+@pytest.mark.skipif(not IS_WINDOWS, reason="_winsock is Windows-only by construction")
+def test_windows_receive_keeps_no_buffer_larger_than_a_datagram():
+    # Private: the Windows receive path's allocation seam.
+    from netimps._winsock import _calls
+
+    large, kept = _calls._take_buffer(_calls._KEPT_BUFFER_MAX + 1)
+    assert not kept and len(large) == _calls._KEPT_BUFFER_MAX + 1

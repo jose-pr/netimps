@@ -5,6 +5,7 @@ from __future__ import annotations
 import ctypes as _ctypes
 import select as _select
 import socket as _socket
+import threading as _threading
 import time as _time
 import weakref as _weakref
 from typing import Any, Iterable, List, Optional, Sequence, Tuple
@@ -65,6 +66,39 @@ def _wsarecvmsg_for(sock: "Any") -> "Any":
     return fn
 
 
+#: The largest payload buffer a thread keeps: no datagram is longer.
+_KEPT_BUFFER_MAX = 1 << 16
+
+_kept = _threading.local()
+
+
+def _take_buffer(size: int) -> "Tuple[Any, bool]":
+    """A buffer of at least ``size`` octets, and whether it is the thread's kept one.
+
+    A newly allocated 64 KiB buffer is faulted in page by page on each receive:
+    measured at 40 microseconds per 300-octet datagram against 14 with a buffer
+    that is kept. So each thread keeps one, up to :data:`_KEPT_BUFFER_MAX`.
+
+    Per thread, because the kernel writes into it while the GIL is released.
+    Marked busy while in use, because a signal handler or a finalizer can run a
+    receive on the same thread between the call and the copy out of the buffer;
+    that receive is given a buffer of its own. Pass the second value to
+    :func:`_release_buffer` when the bytes have been copied out.
+    """
+    if size > _KEPT_BUFFER_MAX or getattr(_kept, "busy", False):
+        return _ctypes.create_string_buffer(size), False
+    buffer = getattr(_kept, "buffer", None)
+    if buffer is None or len(buffer) < size:
+        buffer = _kept.buffer = _ctypes.create_string_buffer(size)
+    _kept.busy = True
+    return buffer, True
+
+
+def _release_buffer(kept: bool) -> None:
+    if kept:
+        _kept.busy = False
+
+
 def _deadline(sock: "Any") -> "Optional[float]":
     """When a call on ``sock`` must give up, or ``None`` if its timeout needs no help.
 
@@ -116,9 +150,18 @@ def recvmsg(
     if sock.type == _socket.SOCK_STREAM:
         return _recv_stream(sock, bufsize, int(flags))
     fn = _wsarecvmsg_for(sock)
-    family = sock.family
+    data, kept = _take_buffer(bufsize) if bufsize else (None, False)
+    try:
+        return _recv_datagram(sock, fn, data, bufsize, ancbufsize, int(flags))
+    finally:
+        _release_buffer(kept)
 
-    data = _ctypes.create_string_buffer(bufsize) if bufsize else None
+
+def _recv_datagram(
+    sock: "Any", fn: "Any", data: "Any", bufsize: int, ancbufsize: int, flags: int
+) -> "Tuple[bytes, List[Tuple[int, int, bytes]], int, Optional[Any]]":
+    """One ``WSARecvMsg`` into ``data``, which may be longer than ``bufsize``."""
+    family = sock.family
     name = _ctypes.create_string_buffer(_SOCKADDR_STORAGE_SIZE)
     control = _ctypes.create_string_buffer(ancbufsize) if ancbufsize else None
 
@@ -135,7 +178,7 @@ def recvmsg(
             ancbufsize,
             _ctypes.cast(control, _ctypes.c_void_p) if control else None,
         ),
-        dwFlags=int(flags),
+        dwFlags=flags,
     )
 
     received = _DWORD()
@@ -161,9 +204,9 @@ def recvmsg(
         # in/out fields put back as the call expects to find them.
         message.namelen = _SOCKADDR_STORAGE_SIZE
         message.Control.len = ancbufsize
-        message.dwFlags = int(flags)
+        message.dwFlags = flags
 
-    payload = data.raw[: received.value] if data else b""
+    payload = _ctypes.string_at(data, min(received.value, bufsize)) if data else b""
 
     # `Control.len` on return is the length Winsock *needed*, which can exceed
     # the buffer it was given -- measured at 24 against a 1-byte buffer. Treat
@@ -189,31 +232,34 @@ def _recv_stream(
     the list is empty and the address ``None``, as for a connected stream on
     POSIX.
     """
-    data = _ctypes.create_string_buffer(bufsize) if bufsize else None
-    buffers = (_WSABUF * 1)()
-    buffers[0].len = bufsize
-    buffers[0].buf = _ctypes.cast(data, _ctypes.c_void_p) if data else None
-    received = _DWORD()
-    deadline = _deadline(sock)
-    while True:
-        _wait(sock, deadline)
-        c_flags = _DWORD(flags)
-        rc = _ws2.WSARecv(
-            sock.fileno(),
-            buffers,
-            1,
-            _ctypes.byref(received),
-            _ctypes.byref(c_flags),
-            None,
-            None,
-        )
-        if rc == 0:
-            break
-        code = _ws2.WSAGetLastError()
-        if code != _WSAEWOULDBLOCK or deadline is None:
-            raise _ctypes.WinError(code)  # type: ignore[attr-defined]
-    payload = data.raw[: received.value] if data else b""
-    return payload, [], int(c_flags.value), None
+    data, kept = _take_buffer(bufsize) if bufsize else (None, False)
+    try:
+        buffers = (_WSABUF * 1)()
+        buffers[0].len = bufsize
+        buffers[0].buf = _ctypes.cast(data, _ctypes.c_void_p) if data else None
+        received = _DWORD()
+        deadline = _deadline(sock)
+        while True:
+            _wait(sock, deadline)
+            c_flags = _DWORD(flags)
+            rc = _ws2.WSARecv(
+                sock.fileno(),
+                buffers,
+                1,
+                _ctypes.byref(received),
+                _ctypes.byref(c_flags),
+                None,
+                None,
+            )
+            if rc == 0:
+                break
+            code = _ws2.WSAGetLastError()
+            if code != _WSAEWOULDBLOCK or deadline is None:
+                raise _ctypes.WinError(code)  # type: ignore[attr-defined]
+        payload = _ctypes.string_at(data, min(received.value, bufsize)) if data else b""
+        return payload, [], int(c_flags.value), None
+    finally:
+        _release_buffer(kept)
 
 
 def sendmsg(

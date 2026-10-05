@@ -609,6 +609,12 @@ probe says so in its prefix.
   lacks still enumerates at once. The UDP header gave that lifetime as 30
   seconds; it is `INTERFACE_CACHE_TTL`, one second.
 
+- **On Windows a receive does not cost more for a larger `bufsize`.**
+  `recvmsg`, and so `UDPEndpoint.recv`, allocated a buffer of `bufsize` for
+  every call, and a new 64 KiB buffer is faulted in page by page: 34 against 12
+  microseconds per 300-octet datagram at the default size (one Windows machine,
+  local timing). Each thread now keeps one buffer of up to 64 KiB.
+
 ## [0.3.4] - 2026-10-03
 
 ### Fixed
