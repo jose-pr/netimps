@@ -2235,22 +2235,54 @@ Aliases: `resolve|dns`, `check|tcp`, `addr|parse`, `source|src`.
   of its two), `mtu`, `scan`, `addr` and `split`, so `netimps ping` is not an
   answer about the empty string; a missing one is argparse's usage error on
   stderr with exit 2. `route` and `source` default to `8.8.8.8`.
-- **Exit codes are meaningful**: `0` success, `1` "the answer was no"
-  (unreachable, closed, no records), `2` a **caller** error — a bad argument, a
-  missing positional, `--method tcp` with no `--port`, or a scheme with no port
-  where a port was needed. A `ValueError` out of the library becomes
-  `error: <message>` on stderr with exit 2, never a traceback. `ping` mirrors
-  `ping(8)`.
-- **`netimps port <unknown>` exits 1, not 2.** A lookup that found no mapping
-  is an *answer* — "none" — the same way an empty `resolve` is, and
-  `netimps port 9999` (a valid port with no registered scheme) is not a caller
-  mistake. `netimps check <host> <unknown-scheme>` does exit 2, because there
-  is then no port to connect to and nothing was tested.
+- **Three exit statuses, one meaning each, as `grep`**: `0` found or yes,
+  `1` nothing found or the answer was no (unreachable, closed, no records, no
+  such interface, no route, no mapping, no open port or host), `2` an error:
+  bad input (a bad argument, a missing positional, `--method tcp` with no
+  `--port`, a scheme with no port, a port outside `0-65535`), a missing
+  program, an outage the command could not answer through. A `ValueError` or
+  `ResolutionError` out of the library becomes `error: <message>` on stderr
+  with status 2, never a traceback; a usage error from the parser is status 2
+  too. `route`, `addr` and `split` always answer or fail: they have no "no".
+- **`-q` is for scripts: no result line, the status alone**, as `grep -q`.
+  Errors (status 2) still go to stderr; the diagnostic that goes with a "no"
+  (`no interface named ...`, `no route to ...`) is dropped. `--json` output is
+  not affected by `-q`. `-q` also lowers the log level as `duho`'s `-q` does,
+  and `-v` still raises it; `-q` given at all is what silences the line.
+- **JSON shapes** (a contract; keys do not change):
+  - `interfaces`: a list of `{name, index, mac, mtu, is_loopback, addresses,
+    is_up, raw}` (`raw` is `null` without `--raw`).
+  - `ping`: `{ok, host, rtt_ms, ttl, attempts, method}`; `rtt_ms` is
+    milliseconds (the library's `PingResult.rtt` is seconds).
+  - `resolve`: a list of record strings.
+  - `check`: `{ok, host, port}`.
+  - `route`: `{dst, src, gateway, interface_index, on_link}` plus `hops` with
+    `--hops`; `on_link` is `true`, `false` or `null`.
+  - `mtu`: `{dst, mtu, method}` plus `mss` for `--method tcp`; `mtu` is `null`
+    for no answer.
+  - `scan`: a host target gives `{host, ports}`; a network target gives a list
+    of `{host, ports}`.
+  - `addr`: `{kind, value, ...}` with `kind` `mac` (`oui`, `is_multicast`,
+    `is_local`), `network` (`network_address`, `netmask`, `num_addresses`,
+    `version`; an address with a prefix is shown as its network) or `address`
+    (`version`, `is_private`, `is_global`, `is_loopback`, `is_multicast`,
+    `is_link_scoped`, `reverse_pointer`).
+  - `source`: `{dst, src}`.
+  - `port`: `{free_port}` with no argument, `{port, scheme}` for a number,
+    `{scheme, port}` for a name; the missing half is `null`.
+  - `split`: `{host, port}`; `port` is `null` without one.
+- **`netimps port <unknown>` exits 1**: a lookup that found no mapping is an
+  *answer*, the way an empty `resolve` is, and `netimps port 9999` (a valid
+  port with no registered scheme) is no caller mistake. A port outside
+  `0-65535` exits 2. `netimps check <host> <unknown-scheme>` exits 2, because
+  there is then no port to connect to and nothing was tested.
 - `netimps route` prints an `on-link  <True|False|unknown>` line and renders a
   missing next-hop lookup as `gateway  (unknown)` rather than
   `(on-link, no router)`; `--json` accordingly has `"on_link": null` as a third
   possible value.
-- `python -m netimps` is equivalent to the `netimps` console script.
+- The entry point is `netimps.cli.main(argv=None) -> int` (the console script
+  and `python -m netimps` call it; it never returns `None`). `netimps.cli` is
+  the one public submodule and is not part of the root `__all__`.
 
 ## Constants
 

@@ -125,6 +125,17 @@ probe says so in its prefix.
 
 ### Changed
 
+- **The command line is the `netimps.cli` package, and its entry point is
+  `netimps.cli:main(argv=None) -> int`.** `netimps.cli:run` is gone (it could
+  return `None`); the `netimps` console script and `python -m netimps` call
+  `main`.
+- **`netimps scan` exits 1 when nothing answered** (it exited 0), and
+  **`netimps port 99999` exits 2** (it exited 1): `0` found or yes, `1` nothing
+  found or the answer was no, `2` an error, for every command.
+- **`-q` prints no result line and answers by the exit status alone**, as
+  `grep -q`; it was only the log level. Errors still go to stderr and
+  `--json` is not affected.
+
 - **Method options are keyword-only, breaking.** `UDPEndpoint.recv`, `arecv`
   and `datagrams` take `bufsize` positionally and `resolve_interface` by name;
   `UDPEndpoint.send(data, dst, port, *, src=None)` names its destination `dst`

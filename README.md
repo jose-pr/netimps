@@ -83,8 +83,15 @@ netimps addr 00:00:5e:00:53:01           # address, network or MAC
 netimps split '[::1]:8080'               # -> ::1  8080
 ```
 
-Every command takes `--json`. Exit codes are meaningful: `0` success, `1` "the
-answer was no", `2` a caller error.
+Every command takes `--json`. Exit statuses, one meaning each (as `grep`): `0`
+found or yes, `1` nothing found or the answer was no, `2` an error. `-q` prints
+no result line and answers by the status alone, for scripts (`--json` is not
+affected):
+
+```bash
+netimps check example.com https -q && echo reachable
+netimps scan 192.0.2.0/29 -p 22 -q || echo nothing answers on 22
+```
 
 ## Quick start
 
