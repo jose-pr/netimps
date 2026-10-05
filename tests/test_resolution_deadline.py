@@ -23,21 +23,16 @@ from netimps import (
     resolve,
 )
 
-from fakedns import _PORT_ATTEMPTS, FakeNameserver
+from fakedns import PortPairUnavailable, make_nameserver
 
 
 @pytest.fixture
 def two_silent(server):
     """Two nameservers that never answer ``silent.test``."""
-    second = None
-    for _ in range(_PORT_ATTEMPTS):
-        try:
-            second = FakeNameserver()
-            break
-        except OSError:
-            continue
-    if second is None:  # pragma: no cover
-        pytest.skip("no second port free on both transports")
+    try:
+        second = make_nameserver()
+    except PortPairUnavailable as exc:  # pragma: no cover
+        pytest.skip(str(exc))
     yield [
         "127.0.0.1:%d" % server.port,
         "127.0.0.1:%d" % second.port,

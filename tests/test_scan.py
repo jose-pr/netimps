@@ -536,7 +536,7 @@ def test_is_multicast_accepts_the_same_forms_as_its_callers(address, expected):
     assert is_multicast(address) is expected
 
 
-def test_multicast_socket_round_trip():
+def test_multicast_socket_round_trip(allow_off_host_destination):
     """A datagram sent to the group comes back on the joined socket.
 
     Skipped rather than failed when nothing arrives: a host firewall dropping
@@ -544,6 +544,10 @@ def test_multicast_socket_round_trip():
     stdlib multicast fails identically), and that is an environment fact, not
     a defect in the socket setup. The configuration itself is asserted by the
     surrounding tests, which do not need traffic to flow.
+
+    The datagram goes to a multicast group this test has joined, which is not
+    this host's address; the fixture says so. Finding the source address
+    connects a UDP socket to a public address and sends nothing.
     """
     # A *free* port rather than a hardcoded one. WSAEACCES on a Windows bind also
     # means "inside an excluded port range", and those ranges are allocated
@@ -603,7 +607,7 @@ def test_multicast_socket_unknown_mac():
         )
 
 
-def test_multicast_send_only_socket_can_send():
+def test_multicast_send_only_socket_can_send(allow_off_host_destination):
     """bind=False is the send-side configuration: usable, but claims no port.
 
     Asserting on getsockname() would be wrong -- an unbound socket has no name
@@ -611,6 +615,8 @@ def test_multicast_send_only_socket_can_send():
     it can transmit. A host with no multicast route (macOS CI runners) raises
     ENETUNREACH on the send, which is an environment fact rather than a defect
     in the socket setup.
+
+    The datagram goes to a multicast group, which is not this host's address.
     """
     sock = netimps.multicast_socket(bind=False)
     try:

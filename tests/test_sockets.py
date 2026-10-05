@@ -5,6 +5,7 @@ mocked. The few live calls (source-address selection, route lookup) are
 assertions about *shape*, never about this host's actual addresses.
 """
 
+import errno
 import socket
 
 import pytest
@@ -43,7 +44,8 @@ def test_get_source_ip_for_loopback_is_loopback():
     assert source.is_loopback
 
 
-def test_get_source_ip_returns_an_address_object():
+def test_get_source_ip_returns_an_address_object(allow_off_host_destination):
+    # The UDP connect to a public address that learns the route sends nothing.
     source = get_source_ip()
     # None is legitimate on a host with no route at all.
     if source is not None:
@@ -228,7 +230,8 @@ def test_get_route_accepts_interface_object():
     assert route.gateway is None
 
 
-def test_route_shape():
+def test_route_shape(allow_off_host_destination):
+    # The route lookup connects a UDP socket to the destination and sends nothing.
     route = get_route("8.8.8.8")
     assert isinstance(route, Route)
     assert route.dst is not None
@@ -742,7 +745,17 @@ def test_ping_tcp_measures_a_real_handshake():
         server.close()
 
 
-def test_ping_tcp_unreachable_is_falsy():
+def test_ping_tcp_unreachable_is_falsy(monkeypatch):
+    """A handshake that ends in a network error is a failed ping, not a raise.
+
+    The error is injected at the one remote peer that cannot be run: a real
+    connect to an unroutable address would put a SYN on the network.
+    """
+
+    def unreachable(self, address):
+        raise OSError(errno.ENETUNREACH, "Network is unreachable")
+
+    monkeypatch.setattr(socket.socket, "connect", unreachable)
     result = netimps.ping("192.0.2.99", method="tcp", port=9, timeout=1.0)
     assert not result
 
@@ -1318,7 +1331,9 @@ def test_route_get_output_unmatched_is_unknown():
     )
 
 
-def test_route_reports_unknown_rather_than_on_link(monkeypatch):
+def test_route_reports_unknown_rather_than_on_link(
+    monkeypatch, allow_off_host_destination
+):
     """Where the lookup cannot be made, on_link is None -- not a cheerful True.
 
     This is the macOS case: no /proc, so nothing was read, and `gateway is
@@ -1334,7 +1349,9 @@ def test_route_reports_unknown_rather_than_on_link(monkeypatch):
     assert not route.on_link  # the safe branch still reads the same
 
 
-def test_route_v6_destination_reaches_the_next_hop_lookup(monkeypatch):
+def test_route_v6_destination_reaches_the_next_hop_lookup(
+    monkeypatch, allow_off_host_destination
+):
     """The `version == 4` gate made every v6 destination read as on-link."""
     seen = {}
 

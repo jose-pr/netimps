@@ -1,20 +1,17 @@
 """Suite-wide guards.
 
-The repo's ``AGENTS.md`` has always said "tests must never hit the network".
-That was aspirational: a review on 2026-09-20 measured eleven off-host
-lookups, including three for the developer's own hostname. None of them
-changed an assertion *on that machine* -- but simulating a wildcard resolver
-(the kind many ISP and corporate networks run, which answers every name)
-turned the suite red, because several tests assert that a name does **not**
+Tests never reach the network, and this module enforces it. Any test that
+reaches the resolver for a non-local name, connects or sends to an address that
+is not this host, or runs a real ``nslookup`` or probe program against anything
+else fails loudly, at the point of the call, naming itself. A suite that merely
+trusted its tests passes until it meets an unusual network: one whose resolver
+answers every name turns red wherever a test asserts that a name does *not*
 resolve.
 
-So the invariant is enforced here rather than trusted. Any test that reaches
-the resolver for a non-local name now fails loudly, at the point of the call,
-naming itself -- instead of passing until it meets an unusual network.
-
-A test that genuinely needs a resolution result fakes it, as the DNS tests
-already do. A test that needs the guard lifted asks for the ``allow_resolver``
-fixture, which documents itself in the test body.
+A test that needs a resolution result fakes it, as the DNS tests do. A test
+that needs the guard lifted asks for ``allow_resolver``, or, for the destination
+rule alone, ``allow_off_host_destination``; either documents itself in the
+test's signature.
 """
 
 from __future__ import annotations
@@ -30,7 +27,7 @@ import urllib.request
 
 import pytest
 
-from fakedns import _PORT_ATTEMPTS, FakeNameserver
+from fakedns import PortPairUnavailable, make_nameserver
 from netimps import _proc
 
 #: Directories holding a fake program from :func:`fake_program`. A fake called
@@ -88,14 +85,87 @@ def _stays_on_host(host: object) -> bool:
     return address.is_loopback or address.is_unspecified
 
 
-def _local_for(function: str, host: object) -> bool:
-    """Whether ``socket.<function>(host)`` can be answered without a name server.
+def _is_own_address(host: object) -> bool:
+    """True when ``host`` is an address configured on this machine.
+
+    Asked of the platform, not of the library: a UDP socket can be bound to an
+    address only if some interface of this host holds it. Traffic to such an
+    address is delivered locally, so a test that binds a listener on an
+    interface address and connects to it sends nothing off the host.
+    """
+    text = str(host)
+    try:
+        address = ipaddress.ip_address(text.split("%")[0])
+    except ValueError:
+        return False
+    family = socket.AF_INET6 if address.version == 6 else socket.AF_INET
+    probe = socket.socket(family, socket.SOCK_DGRAM)
+    try:
+        probe.bind((text, 0))
+    except OSError:
+        return False
+    finally:
+        probe.close()
+    return True
+
+
+def _destination_allowed(host: object) -> bool:
+    """True when a packet or connection addressed to ``host`` stays on this host.
+
+    A loopback or unspecified address, a name the hosts file answers, or an
+    address one of this machine's own interfaces holds. Any other name would be
+    resolved in C where no Python hook sees it, and any other address is
+    somebody else's machine, on whatever port.
+    """
+    return _stays_on_host(host) or _is_own_address(host)
+
+
+def _local_for(function: str, host: object, *args: object) -> bool:
+    """Whether ``socket.<function>(host, ...)`` can be answered without a name server.
 
     A reverse lookup of an address *is* a query -- the PTR record lives on
     somebody else's server -- so unlike the forward lookups it is local only
-    for a loopback address.
+    for a loopback address. ``getnameinfo`` asks nobody when its flags say the
+    host is to stay numeric.
     """
+    if function == "getnameinfo":
+        flags = args[0] if args else 0
+        if isinstance(flags, int) and flags & socket.NI_NUMERICHOST:
+            return True
+        return _stays_on_host(host)
     return _stays_on_host(host) if function == "gethostbyaddr" else _is_local(host)
+
+
+#: The lookups that reach the C resolver. ``getnameinfo`` takes a socket
+#: address, whose first item is the host.
+_LOOKUPS = (
+    "getaddrinfo",
+    "gethostbyname",
+    "gethostbyname_ex",
+    "gethostbyaddr",
+    "getnameinfo",
+)
+
+
+def _lookup_host(name: str, first: object) -> object:
+    if name == "getnameinfo" and isinstance(first, tuple) and first:
+        return first[0]
+    return first
+
+
+def _patch_lookups(monkeypatch, on_non_local) -> None:
+    """Wrap every lookup in :data:`_LOOKUPS`; ``on_non_local(name, real, host,
+    *args, **kwargs)`` answers a call whose host needs a name server."""
+    for name in _LOOKUPS:
+        real = getattr(socket, name)
+
+        def wrapper(first, *args, _name=name, _real=real, **kwargs):
+            host = _lookup_host(_name, first)
+            if _local_for(_name, host, *args):
+                return _real(first, *args, **kwargs)
+            return on_non_local(_name, host)
+
+        monkeypatch.setattr(socket, name, wrapper)
 
 
 class ResolverEscape(AssertionError):
@@ -107,11 +177,16 @@ class ResolverEscape(AssertionError):
     """
 
 
+#: Programs that resolve their destination themselves and send to it.
+_PROBE_PROGRAMS = frozenset(
+    {"ping", "ping6", "traceroute", "traceroute6", "tracert", "pathping"}
+)
+
 #: Ports a DNS query goes to: plain DNS, and DNS over TLS.
 _DNS_PORTS = frozenset({53, 853})
 
 
-def _install_query_guards(monkeypatch, refuse) -> None:
+def _install_query_guards(monkeypatch, refuse, off_host_destinations=False) -> None:
     """Refuse an off-host DNS query made without the OS resolver.
 
     ``getaddrinfo`` and its siblings are only one road to a name server.
@@ -133,20 +208,28 @@ def _install_query_guards(monkeypatch, refuse) -> None:
     would let the escape pass as an ordinary failure.
     """
 
-    def check_destination(method, address):
-        if (
-            isinstance(address, tuple)
-            and len(address) >= 2
-            and address[1] in _DNS_PORTS
-            and (method == "sendto" or not _stays_on_host(address[0]))
-        ):
+    def check_destination(sock, method, address):
+        if sock.family not in (socket.AF_INET, socket.AF_INET6):
+            return
+        if not (isinstance(address, tuple) and len(address) >= 2):
+            return
+        host, port = address[0], address[1]
+        if not (off_host_destinations or _destination_allowed(host)):
+            refuse("socket.%s(%r)" % (method, address))
+        # Connecting to a loopback DNS port sends nothing; sending to one is a
+        # query that a stub listening there forwards off the host.
+        if method == "sendto" and port in _DNS_PORTS:
             refuse("socket.%s(%r)" % (method, address))
 
+    # `sendmsg` is not hooked: the library installs its own on Windows and a
+    # test asserts that nothing displaces it.
     for method in ("connect", "connect_ex", "sendto"):
-        real_method = getattr(socket.socket, method)
+        real_method = getattr(socket.socket, method, None)
+        if real_method is None:
+            continue
 
         def wrapper(self, *args, _real=real_method, _name=method, **kwargs):
-            check_destination(_name, args[-1] if args else None)
+            check_destination(self, _name, args[-1] if args else None)
             return _real(self, *args, **kwargs)
 
         monkeypatch.setattr(socket.socket, method, wrapper)
@@ -210,17 +293,30 @@ def _install_query_guards(monkeypatch, refuse) -> None:
     def popen_init(self, args, *rest, **kwargs):
         argv = list(args) if isinstance(args, (list, tuple)) else [args]
         program = os.path.basename(str(argv[0])).lower()
+        if program.endswith(".exe"):
+            program = program[:-4]
         is_fake = os.path.normcase(os.path.dirname(str(argv[0]))) in _FAKE_DIRECTORIES
-        if (
-            program.startswith("nslookup")
-            and not is_fake
-            and not all(
-                _stays_on_host(arg)
-                for arg in map(str, argv[1:])
-                if not arg.startswith("-")
-            )
-        ):
-            refuse("subprocess.Popen(%r)" % (argv,))
+        if not is_fake and program == "nslookup":
+            # With no server argument nslookup asks the configured resolver
+            # whatever it was asked about, and a loopback server on the DNS
+            # port may be a forwarder. Only a server that stays on this host
+            # and a `-port=` outside the DNS ports is a query that stays here.
+            operands = [a for a in map(str, argv[1:]) if not a.startswith("-")]
+            ports = [a[6:] for a in map(str, argv[1:]) if a.startswith("-port=")]
+            server = operands[1] if len(operands) > 1 else None
+            if not (
+                server is not None
+                and _stays_on_host(server)
+                and ports
+                and ports[-1].isdigit()
+                and int(ports[-1]) not in _DNS_PORTS
+            ):
+                refuse("subprocess.Popen(%r)" % (argv,))
+        elif not is_fake and program in _PROBE_PROGRAMS:
+            # They resolve a name themselves, in C, and the destination is
+            # the last argument on every grammar the library emits.
+            if len(argv) < 2 or not _destination_allowed(argv[-1]):
+                refuse("subprocess.Popen(%r)" % (argv,))
         real_popen_init(self, args, *rest, **kwargs)
 
     monkeypatch.setattr(subprocess.Popen, "__init__", popen_init)
@@ -243,6 +339,8 @@ def _no_off_host_resolution(request, monkeypatch):
 
     test_id = request.node.nodeid
 
+    off_host_destinations = "allow_off_host_destination" in names
+
     def refuse(what):
         message = (
             "%s called %s; tests must never hit the network. Fake the lookup, "
@@ -252,37 +350,16 @@ def _no_off_host_resolution(request, monkeypatch):
         escapes.append(message)
         raise ResolverEscape(message)
 
-    _install_query_guards(monkeypatch, refuse)
+    _install_query_guards(monkeypatch, refuse, off_host_destinations)
     if "no_such_host" in names:
-        # `no_such_host` replaces the three lookups with deterministic misses.
+        # `no_such_host` replaces the lookups with deterministic misses.
         yield escapes
         if escapes:
             pytest.fail("; ".join(escapes), pytrace=False)
         return
 
-    real_getaddrinfo = socket.getaddrinfo
-    real_gethostbyname = socket.gethostbyname
-    real_gethostbyaddr = socket.gethostbyaddr
-
-    def guard(name, real, host, *args, **kwargs):
-        if not _local_for(name, host):
-            refuse("socket.%s(%r)" % (name, host))
-        return real(host, *args, **kwargs)
-
-    monkeypatch.setattr(
-        socket,
-        "getaddrinfo",
-        lambda host, *a, **k: guard("getaddrinfo", real_getaddrinfo, host, *a, **k),
-    )
-    monkeypatch.setattr(
-        socket,
-        "gethostbyname",
-        lambda host, *a, **k: guard("gethostbyname", real_gethostbyname, host, *a, **k),
-    )
-    monkeypatch.setattr(
-        socket,
-        "gethostbyaddr",
-        lambda host, *a, **k: guard("gethostbyaddr", real_gethostbyaddr, host, *a, **k),
+    _patch_lookups(
+        monkeypatch, lambda name, host: refuse("socket.%s(%r)" % (name, host))
     )
     yield escapes
     if escapes:
@@ -311,6 +388,19 @@ def allow_resolver():
 
 
 @pytest.fixture
+def allow_off_host_destination():
+    """Let one test address a destination that is not this host.
+
+    For a test whose subject needs one: a UDP ``connect`` to a public address
+    to learn the route (sends nothing), a multicast group the test has joined,
+    the limited broadcast. Requesting it is the documentation, and the test says
+    in its docstring why. It lifts the destination rule only: lookups, DNS
+    ports and programs stay guarded.
+    """
+    return True
+
+
+@pytest.fixture
 def no_such_host(monkeypatch):
     """Make every off-host name fail to resolve, deterministically.
 
@@ -325,30 +415,11 @@ def no_such_host(monkeypatch):
     Requesting this fixture says "the name not resolving is the precondition",
     and makes it true regardless of whose network the tests run on.
     """
-    real_getaddrinfo = socket.getaddrinfo
-    real_gethostbyname = socket.gethostbyname
-    real_gethostbyaddr = socket.gethostbyaddr
 
-    def fail(name, real, host, *args, **kwargs):
-        if _local_for(name, host):
-            return real(host, *args, **kwargs)
+    def fail(name, host):
         raise socket.gaierror(socket.EAI_NONAME, "Name or service not known")
 
-    monkeypatch.setattr(
-        socket,
-        "getaddrinfo",
-        lambda host, *a, **k: fail("getaddrinfo", real_getaddrinfo, host, *a, **k),
-    )
-    monkeypatch.setattr(
-        socket,
-        "gethostbyname",
-        lambda host, *a, **k: fail("gethostbyname", real_gethostbyname, host, *a, **k),
-    )
-    monkeypatch.setattr(
-        socket,
-        "gethostbyaddr",
-        lambda host, *a, **k: fail("gethostbyaddr", real_gethostbyaddr, host, *a, **k),
-    )
+    _patch_lookups(monkeypatch, fail)
     return True
 
 
@@ -512,15 +583,9 @@ def fake_program(tmp_path, monkeypatch):
 
 @pytest.fixture()
 def server():
-    for _ in range(_PORT_ATTEMPTS):
-        try:
-            fake = FakeNameserver()
-            break
-        except OSError:
-            continue
-    else:  # pragma: no cover - a host with essentially no free ports
-        pytest.skip(
-            "no port free on both UDP and TCP after %d attempts" % (_PORT_ATTEMPTS,)
-        )
+    try:
+        fake = make_nameserver()
+    except PortPairUnavailable as exc:  # pragma: no cover - a host with no free pair
+        pytest.skip(str(exc))
     yield fake
     fake.close()

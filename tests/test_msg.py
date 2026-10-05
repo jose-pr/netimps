@@ -893,7 +893,9 @@ def test_the_normalized_bytes_are_byte_identical_to_macos():
 
 
 @pytest.mark.skipif(not IS_WINDOWS, reason="only Windows has a layout to reshape")
-def test_spec_dst_is_zero_rather_than_a_copy_of_the_destination():
+def test_spec_dst_is_zero_rather_than_a_copy_of_the_destination(
+    allow_off_host_destination,
+):
     """Copying `ipi_addr` into `ipi_spec_dst` would be a plausible wrong address.
 
     Measured on Linux: for a broadcast the two fields genuinely differ --
@@ -901,6 +903,9 @@ def test_spec_dst_is_zero_rather_than_a_copy_of_the_destination():
     that reads spec_dst does so precisely to get the local address, so handing it
     the broadcast address would silently corrupt the one field it wanted. Zero is
     visibly wrong; 255.255.255.255 is not.
+
+    The destination has to be the limited broadcast for the kernel to report
+    it, so one datagram goes out on the local segment.
     """
     captured = _recv_both_ways(dest="255.255.255.255")
     patched = captured["patched"]

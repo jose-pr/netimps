@@ -220,8 +220,9 @@ def test_ping_status_found(capsys):
     assert _run(capsys, "ping", "127.0.0.1", "-t", "2")[0] == 0
 
 
-def test_ping_status_no(capsys):
+def test_ping_status_no(capsys, fake_program):
     """Follows ping(8): non-zero when it did not answer."""
+    fake_program("ping", returncode=1)
     assert _run(capsys, "ping", "192.0.2.99", "-t", "1")[0] == 1
 
 
@@ -471,7 +472,9 @@ def _quiet_cases():
 
 
 @pytest.mark.parametrize("argv, status", _quiet_cases())
-def test_q_prints_nothing_and_keeps_the_status(capsys, argv, status):
+def test_q_prints_nothing_and_keeps_the_status(capsys, fake_program, argv, status):
+    if argv[:2] == ["ping", "192.0.2.99"]:
+        fake_program("ping", returncode=1)  # no host answers; send nothing
     port = str(netimps.get_free_port())
     argv = [a.replace("%PORT%", port) for a in argv]
     loud = _run(capsys, *argv)
