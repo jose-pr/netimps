@@ -77,3 +77,11 @@ enable_incomplete_feature = ["TypeForm"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+# Warnings are errors. Each exception is as narrow as the warning's own text
+# and says why it is tolerated.
+filterwarnings = [
+    "error",
+    # resolve_doh turns an HTTP error status into a ResolutionError and leaves the
+    # HTTPError, an open response, to the garbage collector.
+    "ignore:Implicitly cleaning up <HTTPError:ResourceWarning",
+]
