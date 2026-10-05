@@ -3,13 +3,14 @@
 A comment or docstring that narrates what the code "used to" do is true only
 at one version and wrong for every reader after it; the changelog is where a
 change is recorded. This scans every ``.py`` under ``src/netimps`` (the private
-packages included) and ``src/netimps/AGENTS.md``
-for that wording and fails naming the file and line.
+packages included) and every shipped ``AGENTS.md`` below it, the top header
+and the per-package ones, for that wording and fails naming the file and line.
 
 A phrase that is a fact and not history goes in ``_ALLOWED`` with a reason.
 """
 
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -38,7 +39,7 @@ _ALLOWED = (
 
 
 def _sources():
-    return sorted(_PACKAGE.rglob("*.py")) + [_PACKAGE / "AGENTS.md"]
+    return sorted(_PACKAGE.rglob("*.py")) + sorted(_PACKAGE.rglob("AGENTS.md"))
 
 
 def _allowed(line):
@@ -65,6 +66,20 @@ def test_the_package_comments_narrate_no_history():
         "the property, or add a fact-not-history phrase to _ALLOWED:\n"
         + "\n".join(found)
     )
+
+
+def test_every_shipped_header_is_scanned():
+    names = {path.relative_to(_PACKAGE).as_posix() for path in _sources()}
+    assert "AGENTS.md" in names
+    assert any(name.endswith("/AGENTS.md") for name in names)
+
+
+def test_a_planted_history_phrase_in_a_sub_header_is_caught(tmp_path, monkeypatch):
+    sub = tmp_path / "_dns" / "AGENTS.md"
+    sub.parent.mkdir()
+    sub.write_text("# header\n\nThis used to raise ValueError.\n", encoding="utf-8")
+    monkeypatch.setattr(sys.modules[__name__], "_PACKAGE", tmp_path)
+    assert any(line.startswith("_dns/AGENTS.md:3:") for line in _offences())
 
 
 def test_the_pattern_catches_the_wording_it_is_for():
