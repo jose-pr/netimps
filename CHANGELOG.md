@@ -16,7 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   **`PortsLike` accepts a comma-separated string** (`scan_ports(host,
   "22,https,8000")`; an empty item raises), and **`get_default_port` accepts a
   port number as text** and returns it as an `int` (outside `0-65535` raises
-  `NetimpsValueError`). The command line used to do each of these itself.
+  `NetimpsValueError`); the text is ASCII digits and nothing else, and a
+  `scheme` that is not text raises `TypeError`. The command line used to do each of these itself.
 
 - **`get_interface` and `iter_interfaces` look an interface up by name and by
   index**: `get_interface("eth0")` for text that is no address, network or MAC,
@@ -52,8 +53,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `Host.ip()`, `Host.fqdn()` and `FQDN.ip()` take the resolver options
   (`ns`, `timeout`, `port`, `tcp`, `search`, `backends`, `source`) and
   `check=`; `Host.ip()` and `FQDN.ip()` also take `ipv6=`, `Host.fqdn()` does
-  not. `check=True` raises `ResolutionError` where `None` would be
-  returned: an empty answer, an outage or an empty host. `ip()` of a name looks
+  not. `check=True` raises where `None` would be returned: `NoAnswerError`
+  for an empty answer or an empty host, `ResolutionError` for an outage. `ip()` of a name looks
   it up and of an address does not; `fqdn()` of an address looks it up and of a
   name does not. With none of `ns`, `port`, `tcp`, `source` or `backends` the OS
   resolver alone answers, as `get_ip` did; naming one selects `resolve()`'s own
@@ -130,7 +131,7 @@ probe says so in its prefix.
 | `UDPEndpoint.recv/arecv/datagrams(bufsize, resolve_interface) positional` | `resolve_interface=` keyword-only |
 | `UDPEndpoint.reply_socket(datagram, port, connreset) positional` | `connreset=` keyword-only |
 | `Interface.primary_ip(ipv6, loopback_ok) positional` | `loopback_ok=` keyword-only |
-| `retry/backoff_delays/Backoff _sleep= and _random= parameters` | removed; patch `netimps._retry._sleep` and `netimps._retry._random` |
+| `retry/backoff_delays/Backoff _sleep= and _random= parameters` | removed; they were the package's own test hooks and have no replacement |
 | `PingResult.rtt_ms` (milliseconds) | `PingResult.rtt` (seconds) |
 | `PingResult.host`, `PingResult(host=)` | `PingResult.dst`, `PingResult(dst=)` |
 | `Datagram.local_address`, `Datagram(local_address=)` | `Datagram.destination`, `Datagram(destination=)` (the address the datagram was sent *to*) |
@@ -164,8 +165,8 @@ probe says so in its prefix.
   (it was `address`) and takes `src` by name; `reply_socket(datagram, port=0,
   *, connreset=False)`; `Interface.primary_ip(ipv6=False, *, loopback_ok=True)`.
   `retry`, `backoff_delays` and `Backoff` no longer take `_sleep` and `_random`
-  parameters; the test seams are the module-level `netimps._retry._sleep` and
-  `netimps._retry._random`. `UDPEndpoint.datagrams()` is typed
+  parameters: they were the package's own test hooks. `UDPEndpoint.datagrams()`
+  is typed
   `AsyncIterator[Datagram]`.
 
 - **`bind()` defaults, breaking.** `family=None` (was `AF_INET`) infers the
@@ -177,8 +178,8 @@ probe says so in its prefix.
   on a later receive after an ICMP port-unreachable. A failed `bind()` now
   carries the `bind_error_hint` text in the message of every failure that
   function recognises, keeping its `OSError` subclass and `errno`;
-  `set_buffer_size` logs one `WARNING` per socket when the kernel grants less
-  than was asked.
+  `set_buffer_size` logs a `WARNING` when the kernel grants less than was
+  asked, once per process for each distinct shortfall.
 - **`MACAddress._VALID_MAC` is gone.** It was a private class attribute the class docstring invited callers to read; screen text with `MACAddress.is_valid(text)`.
 - **`UDPEndpoint.send(src=<address>)` enumerates no interfaces.** An address `src` is used as given and the kernel picks the adapter (a `%zone` still names one); a MAC or an adapter name still resolves, and an `Interface` still pins the adapter as well.
 - **`Host`, `MACAddress`, `PingResult`, `Route` and `Interface` are read-only.**
@@ -321,10 +322,25 @@ probe says so in its prefix.
 
 - **`get_ip(address, ipv6=None)`.** `Host(x).ip()` is the same
   operation with the name kept, and `Host(x).ip(check=True)` raises
-  `ResolutionError` where `get_ip` returned `None`. `get_route` and the
+  `NoAnswerError` (a `ResolutionError`) where `get_ip` returned `None`. `get_route` and the
   `addr` command use it; `Host(x).resolve()` gives `(fqdn, ip)`.
 
 ### Fixed
+
+- **On Windows the `os.sysconf` stand-in answers `SC_OPEN_MAX`.** The socket
+  patch installs `os.sysconf` where the platform has none, and it answered
+  `SC_IOV_MAX` alone. A library that reads `SC_OPEN_MAX` behind
+  `hasattr(os, "sysconf")`, as an SFTP server does to size its handle limit,
+  got a `ValueError` on every session. It is 8192, the size of the C runtime's
+  descriptor table.
+
+- **A name the IDNA codec refuses no longer escapes as `UnicodeEncodeError`.**
+  An empty label (`a..b`) or a label over 63 octets is `False` from
+  `is_local_host(..., resolve=True)` and a `NetimpsValueError` from
+  `resolve_system`.
+
+- **`get_default_port(None)` and `get_default_port(22)` raise `TypeError`**,
+  where an `AttributeError` came out of the function.
 
 - **`resolve_doh` closes the response of an HTTP error status.** The error
   urllib raises is itself an open response; it was left for the garbage
@@ -554,11 +570,18 @@ probe says so in its prefix.
   `::ffff:0.0.0.0`); they unmap first. `is_link_scoped`, `is_wildcard`,
   `is_multicast`, `is_local_address`, `is_broadcast`, `is_unicast` and `unmap`
   take `IPAddressLike` (`is_link_scoped("127.0.0.1")` raised `AttributeError`,
-  `unmap(2130706433)` raised) and raise `NetimpsValueError` for text that is
-  no address, where `is_multicast`, `is_broadcast`, `is_unicast` and
-  `is_wildcard` answered `False`. A network or a value of another type is a
-  `TypeError` (`is_multicast(None)` was `False`). `join_group` and `leave_group`
-  still say "not a multicast group". `is_local_host` still never raises.
+  `unmap(2130706433)` raised). All but `is_wildcard` raise `NetimpsValueError`
+  for text that is no address, where `is_multicast`, `is_broadcast` and
+  `is_unicast` answered `False`. `is_wildcard` still answers `False` for a host
+  name: it is asked of a listen host, and `bind` takes a name there. A network
+  or a value of another type is a `TypeError` (`is_multicast(None)` was
+  `False`). `join_group` and `leave_group` still say "not a multicast group".
+  `is_local_host` still never raises.
+
+- **An empty query is refused by every resolver entry point.** `resolve("")`
+  and each backend raise `NetimpsValueError`; the OS resolver and dnspython
+  applied the search list to it and answered with the search domain's own
+  records, and `nslookup` refused it.
 
 - **`try_parse` and `is_valid` raise `TypeError` for an option the builder
   does not take.** `try_parse("10.0.0.5", IPAddress, strict=True)` answered

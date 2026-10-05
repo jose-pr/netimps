@@ -146,7 +146,7 @@ so nothing is lost. Pass an existing enumeration in a loop; it is a syscall.
 
   A **cached call returns the stored `Interface` objects in a fresh list.**
   An `Interface` cannot change after construction and `.ips` is a tuple, so
-  one caller cannot corrupt another's view. Only `.raw`, a dict, is copied.
+  one caller cannot corrupt another's view; `.raw` is a read-only mapping.
 
 - **`get_interface(query=None, *, index=None, strict=True, cache=False) -> Interface | None`** — first matching
   adapter in OS enumeration order. `query` accepts an `Interface`, exact

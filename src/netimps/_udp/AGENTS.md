@@ -97,9 +97,8 @@ wrapped socket expires, on every supported Python (before 3.10
   unpinned. Check the two flags rather than inferring from an empty result.
 - **`pktinfo=False` governs receiving only.** Sending needs no socket option,
   so `send(src=)` is still honoured on an endpoint built with it.
-- **`send(src=)` pins the interface index as well as the source address.** The
-  A fixed `ipi_ifindex=0` would only ever pin an address. It
-  raises `ValueError` for a `src` that names no local address or interface
+- **`send(src=)` pins the interface index as well as the source address.** A
+  fixed `ipi_ifindex=0` would only ever pin an address. It raises `ValueError` for a `src` that names no local address or interface
   (silently sending from another adapter is the failure mode `src` exists to
   prevent) and for an IPv6 `src` on an `AF_INET` endpoint — Linux *accepts and
   ignores* a v6 cmsg on a v4 socket, so there is no correct silent behaviour
