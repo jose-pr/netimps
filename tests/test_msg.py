@@ -737,9 +737,36 @@ def test_unknown_sysconf_names_raise_valueerror():
     assert netimps.is_socket_patched()
     assert _os.sysconf("SC_IOV_MAX") > 0
     with pytest.raises(ValueError):
-        _os.sysconf("SC_OPEN_MAX")
+        _os.sysconf("SC_NPROCESSORS_ONLN")
     with pytest.raises(ValueError):
         _os.sysconf("not-a-name")
+
+
+def test_sc_open_max_is_the_descriptor_table_the_platform_has():
+    """A library that reads ``SC_OPEN_MAX`` behind ``hasattr(os, "sysconf")``
+    got a ``ValueError`` and failed every session.
+
+    The number is measured, not taken from the module: descriptors are opened
+    until the C runtime refuses one.
+    """
+    if not IS_WINDOWS:
+        pytest.skip("the shim only installs where os.sysconf is absent")
+    import errno
+    import os as _os
+
+    assert netimps.is_socket_patched()
+    opened = []
+    try:
+        with pytest.raises(OSError) as refused:
+            while True:
+                opened.append(_os.open(_os.devnull, _os.O_RDONLY))
+        highest = max(opened)
+    finally:
+        for descriptor in opened:
+            _os.close(descriptor)
+    assert refused.value.errno == errno.EMFILE
+    assert _os.sysconf("SC_OPEN_MAX") == highest + 1
+    assert "SC_OPEN_MAX" in _os.sysconf_names
 
 
 def test_iov_max_is_reportable_and_tunable():

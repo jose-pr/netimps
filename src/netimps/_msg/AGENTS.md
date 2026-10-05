@@ -79,8 +79,16 @@ own, never as the platform's.
   `OSError`, `concurrent.futures` catches `(AttributeError, ValueError)`, and
   `multiprocessing` catches `Exception`. Measured — raising `OSError` for
   everything rescues asyncio and breaks `ProcessPoolExecutor`; raising
-  `ValueError` does the reverse. So `SC_IOV_MAX` returns a value and every other
-  name raises `ValueError`, which is what POSIX does for an unrecognised name.
+  `ValueError` does the reverse. So `SC_IOV_MAX` returns a value and a name the
+  shim does not answer raises `ValueError`, which is what POSIX does for an
+  unrecognised name.
+
+  `SC_OPEN_MAX` is answered as well: **8192**, the size of the C runtime's file
+  descriptor table (measured 2026-10-05 on Windows 11, CPython 3.9 and 3.14:
+  `os.open` hands out descriptors 0 to 8191 and then fails with `EMFILE`;
+  sockets are handles and are not counted). Code written for POSIX reads it
+  behind `hasattr(os, "sysconf")` with no guard, and a `ValueError` there fails
+  the caller. `SC_NPROCESSORS_ONLN`, `SC_PAGE_SIZE` and the rest still raise.
 
   `SC_IOV_MAX` is **1024** by default, tunable with
   `patch_socket_module(iov_max=...)`. It is a batch size, not a ceiling, and a

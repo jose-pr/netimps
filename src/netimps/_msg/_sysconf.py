@@ -22,11 +22,18 @@ from ._dispatch import _mark
 #: not a ceiling, and that is the whole reason it can be a constant.
 _IOV_MAX = 1024
 
-#: The only name the shim answers. Everything else raises, because inventing
-#: numbers for ``SC_OPEN_MAX`` or ``SC_NPROCESSORS_ONLN`` would be guessing at
-#: Windows limits that have different real answers and different right ways to
-#: ask for them.
-_SYSCONF_VALUES = {"SC_IOV_MAX": _IOV_MAX}
+#: What ``SC_OPEN_MAX`` is reported as: the size of the C runtime's file
+#: descriptor table. Measured 2026-10-05 on Windows 11, CPython 3.9 and 3.14:
+#: ``os.open`` hands out descriptors 0 to 8191 and then fails with ``EMFILE``
+#: ("Too many open files"). Sockets are handles, not descriptors, and are not
+#: counted against it (20000 were opened in one process).
+_OPEN_MAX = 8192
+
+#: The names the shim answers. Each has a value the platform fixes and that was
+#: measured; everything else raises, because a number for ``SC_NPROCESSORS_ONLN``
+#: or ``SC_PAGE_SIZE`` has a right way to be asked for on Windows that is not
+#: this function.
+_SYSCONF_VALUES = {"SC_IOV_MAX": _IOV_MAX, "SC_OPEN_MAX": _OPEN_MAX}
 
 
 @_mark
@@ -62,9 +69,14 @@ def _shim_sysconf(name: "Any") -> int:
     ``ProcessPoolExecutor``; raising ``ValueError`` or ``AttributeError`` for
     everything does the reverse. So ``SC_IOV_MAX`` returns a value -- which is
     honest, since :func:`sendmsg` works on a stream socket via ``WSASend`` --
-    and every other name raises :class:`ValueError`, which is both what POSIX
+    and an unanswered name raises :class:`ValueError`, which is both what POSIX
     ``sysconf`` does for an unrecognised name and what the other two callers
     already handle.
+
+    ``SC_OPEN_MAX`` is answered too. Code written for POSIX reads it behind
+    ``hasattr(os, "sysconf")`` with no guard, since every POSIX system has it:
+    an SFTP server library sizes its open-handle limit that way, and a
+    ``ValueError`` there fails every session.
 
     (``asyncio``'s guard is the outlier here. ``concurrent.futures`` catches
     ``AttributeError`` with the comment "sysconf not available or setting not
