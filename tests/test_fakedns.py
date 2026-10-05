@@ -14,11 +14,11 @@ def test_a_refused_pair_is_retried_on_a_fresh_port(monkeypatch):
     real_init = fakedns.FakeNameserver.__init__
     attempts = []
 
-    def refuse_twice(self, host="127.0.0.1"):
-        attempts.append(host)
+    def refuse_twice(self, host="127.0.0.1", port=0):
+        attempts.append(port)
         if len(attempts) <= 2:
             raise OSError(10013, "refused")
-        real_init(self, host)
+        real_init(self, host, port)
 
     monkeypatch.setattr(fakedns.FakeNameserver, "__init__", refuse_twice)
     fake = fakedns.make_nameserver()
@@ -30,7 +30,7 @@ def test_a_refused_pair_is_retried_on_a_fresh_port(monkeypatch):
 
 
 def test_giving_up_names_the_error_the_host_gave(monkeypatch):
-    def always_refuse(self, host="127.0.0.1"):
+    def always_refuse(self, host="127.0.0.1", port=0):
         raise OSError(10013, "an attempt to access a socket was forbidden")
 
     monkeypatch.setattr(fakedns.FakeNameserver, "__init__", always_refuse)
@@ -45,3 +45,19 @@ def test_the_pair_shares_one_number_on_both_transports():
         assert fake.udp.getsockname()[1] == fake.tcp.getsockname()[1] == fake.port
     finally:
         fake.close()
+
+
+def test_after_the_os_choices_a_number_of_the_dynamic_range_is_named(monkeypatch):
+    """A counter that walks into a one-transport block stays inside it, so once
+    the OS's own picks have failed the search names numbers itself."""
+    asked = []
+
+    def refuse(self, host="127.0.0.1", port=0):
+        asked.append(port)
+        raise OSError(10013, "refused")
+
+    monkeypatch.setattr(fakedns.FakeNameserver, "__init__", refuse)
+    with pytest.raises(fakedns.PortPairUnavailable, match="port [0-9]+: "):
+        fakedns.make_nameserver()
+    assert asked[: fakedns._OS_CHOSEN_ATTEMPTS] == [0] * fakedns._OS_CHOSEN_ATTEMPTS
+    assert all(49152 <= port <= 65535 for port in asked[fakedns._OS_CHOSEN_ATTEMPTS :])

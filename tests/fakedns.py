@@ -6,6 +6,7 @@ drop one record type. Nothing here leaves the machine.
 """
 
 import ipaddress
+import random
 import socket
 import struct
 import threading
@@ -63,17 +64,16 @@ def reply_for(query, tcp=False):
 
 
 class FakeNameserver(object):
-    def __init__(self, host="127.0.0.1"):
+    def __init__(self, host="127.0.0.1", port=0):
         # A port free for **both** UDP and TCP, because `resolve_wire` is given
         # one `ns=` address and reaches the same number by either transport.
         #
-        # UDP is bound FIRST, to an ephemeral port, and TCP is then asked for
-        # that number. The other order walks a TCP counter that Windows hands
-        # out almost sequentially into the 100 to 200 port blocks it reserves
-        # for UDP only, where every pair fails until the counter leaves them.
+        # UDP is bound FIRST and TCP is then asked for that number, since a
+        # UDP port is free the moment it is closed. ``port`` 0 lets the OS pick;
+        # a number is tried when the OS's pick has no TCP twin.
         self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
-            self.udp.bind((host, 0))
+            self.udp.bind((host, port))
             self.port = self.udp.getsockname()[1]
             self.tcp = socket.socket()
             try:
@@ -130,6 +130,11 @@ class FakeNameserver(object):
 #: ephemeral UDP port, so a refusal says nothing about the next attempt.
 _PORT_ATTEMPTS = 50
 
+#: Attempts that leave the number to the OS before a random one is named.
+_OS_CHOSEN_ATTEMPTS = 3
+
+_RANDOM = random.Random()
+
 
 class PortPairUnavailable(OSError):
     """No number could be bound on both UDP and TCP; says which and why."""
@@ -138,17 +143,24 @@ class PortPairUnavailable(OSError):
 def make_nameserver(host="127.0.0.1"):
     """A :class:`FakeNameserver`, retrying until a UDP and TCP pair binds.
 
-    Raises :class:`PortPairUnavailable` naming every port that was refused and
-    the error, so a skip or a failure says what the host did rather than that
+    The OS picks the first few numbers. Windows hands out ephemeral ports almost
+    sequentially and reserves blocks of 100 to 200 for one transport only, so a
+    pair refused once is refused for every number that follows until the counter
+    leaves the block; later attempts therefore name a random number of the
+    dynamic range instead.
+
+    Raises :class:`PortPairUnavailable` naming the port and error of every late
+    refusal, so a skip or a failure says what the host did rather than that
     something was busy.
     """
     refused = []
-    for _ in range(_PORT_ATTEMPTS):
+    for attempt in range(_PORT_ATTEMPTS):
+        port = 0 if attempt < _OS_CHOSEN_ATTEMPTS else _RANDOM.randint(49152, 65535)
         try:
-            return FakeNameserver(host)
+            return FakeNameserver(host, port)
         except OSError as exc:
-            refused.append(exc)
+            refused.append("port %s: %s" % (port or "(OS choice)", exc))
     raise PortPairUnavailable(
         "no port free on both UDP and TCP after %d attempts; last refusals: %s"
-        % (_PORT_ATTEMPTS, "; ".join(str(exc) for exc in refused[-3:]))
+        % (_PORT_ATTEMPTS, "; ".join(refused[-3:]))
     )
