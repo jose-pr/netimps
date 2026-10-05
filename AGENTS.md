@@ -1,521 +1,167 @@
 # netimps
 
-A **small, self-contained network-utilities library** — a thin, typed layer over
-the standard library's `ipaddress`, native cross-platform interface discovery,
-and a handful of host helpers (DNS lookup, ping). One flat import surface, no
-hard runtime dependencies (`resolve()` chains `dnspython`/OS-resolver/
-`nslookup` backends, using whichever is available -- `dnspython` is optional,
-via the `dns` extra), and behaviour that stays faithful to the stdlib.
+Contributor orientation for a checkout of `netimps`, a small, self-contained
+network-utilities library: a typed layer over `ipaddress`, native interface
+discovery, and the host helpers every network tool rewrites. This file is
+development documentation, so it does not ship in the wheel or the sdist; the
+library's own reference is the shipped headers below, which are inside the
+installed package and must stay self-contained.
 
-```python
-import netimps
-from netimps import IPNetwork, MACAddress, parse
-
-for iface in netimps.get_interfaces():
-    print(iface.name, iface.mac, iface.mtu, [str(ip) for ip in iface.ips])
-
-parse("10.0.0.5/24", IPNetwork)            # IPv4Network('10.0.0.0/24')
-netimps.get_source_ip("8.8.8.8")           # the address that actually reaches it
-netimps.tcp_check("example.com", 443)      # True
-netimps.resolve("example.com")             # [IPv4Address(...)]  ([] on failure)
-netimps.ping("8.8.8.8").rtt                # 0.009  (seconds)
-```
-
-- **Interface discovery, no dependencies** — `get_interfaces()` gives adapter
-  names, MACs, MTU and *real* prefix lengths on Linux, macOS/BSD and Windows,
-  via `ctypes` bindings to `getifaddrs(3)` / `GetAdaptersAddresses`. Results are
-  normalised across platforms; native leftovers are opt-in via `raw=True`.
-- **One parsing entry point** — `parse(value, type)`, plus non-raising
-  `try_parse` and boolean `is_valid`. `IPAddress`/`IPInterface`/`IPNetwork` are
-  the v4/v6 unions you annotate with *and* the types you parse into.
-- **`MACAddress`** — colon/hyphen/dot/bare plus `int`/`bytes`, hashable and
-  ordered, with `.packed`, `.oui`, `.is_multicast`, `.is_local`,
-  `.format(sep, upper=)` and `is_valid`/`try_parse` classmethods.
-- **Socket helpers** — `get_source_ip`, `get_free_port`, `tcp_check`,
-  `wait_for_port`: the four every network tool rewrites.
-- **Routing and MTU** — `get_route` (first hop, unprivileged), `count_hops`
-  (raw sockets or traceroute fallback), `discover_mtu` / `get_pmtu`, `Interface.mtu`.
-- **CIDR maths and host parsing** — `collapse`, `subtract` (absent from
-  `ipaddress`), and `split_host` with correct IPv6 bracket handling.
-- **Scanning** — concurrent `scan_ports` / `scan_hosts`, ports addressable by
-  scheme name.
-- **Multicast** — `multicast_socket`, `join_group`, `leave_group`, wrapping the
-  setup whose failure modes are silent.
-- **DNS and ping** — `resolve()` returning native types; `ping()` returning a
-  `PingResult` with RTT and TTL that stays truthy.
-
-## Install
-
-```bash
-pip install netimps          # no hard dependencies
-pip install netimps[dns]     # plus dnspython, for resolve()'s fullest backend
-```
-
-Requires Python 3.9+. No hard runtime dependencies.
-
-> **This file is development documentation** — layout, testing, CI, release.
-> It is deliberately **not shipped** in the wheel. The library-usage reference
-> is `src/netimps/AGENTS.md`, which *is* shipped and must stay self-contained
-> (no repo-relative links, since an installed consumer has no repo).
-
-## Code layout
-
-```
-src/netimps/
-├── __init__.py    # the public surface: every export is declared in __all__
-├── _exceptions.py # private: the exception hierarchy
-├── _ip/           # private package: IP types, CIDR maths, classification, Host
-│   ├── _types.py     # IP aliases, the builder tables, ip_literal
-│   ├── _host.py      # Host, HostLike, get_hostname, the loose host value
-│   ├── _hosttext.py  # split_host, split_zone, join_host
-│   ├── _cidr.py      # collapse, subtract
-│   └── _classify.py  # named networks, unmap, is_wildcard, is_link_scoped
-├── _parse.py      # private: the generic parse/try_parse/is_valid, above _ip, _fqdn and _mac
-├── _mac.py        # private: MACAddress value type
-├── _scheme.py     # private: scheme <-> port registry, shared port coercion
-├── cli/           # public package: the duho-backed command line (needs the `cli` extra)
-├── __main__.py    # `python -m netimps`
-├── _scan.py       # private: concurrent port/host scanning
-├── _multicast.py  # private: group membership and socket setup
-├── _ifaddrs/      # private package: interface discovery and lookup
-│   ├── _model.py     # Interface and the helpers every enumerator shares
-│   ├── _sockaddr.py  # sockaddr overlays in the host kernel's layout
-│   ├── _posix.py     # getifaddrs(3) bindings
-│   ├── _windows.py   # GetAdaptersAddresses bindings
-│   ├── _fallback.py  # last-resort enumeration through the host name
-│   ├── _cache.py     # enumerator choice, counter, TTL cache, get_interfaces
-│   ├── _addresses.py # is_broadcast, is_unicast, iter_addresses
-│   ├── _lookup.py    # get_interface, iter_interfaces, is_local_address, is_local_host
-│   └── _spec.py      # InterfaceLike and its coercion to an address or index
-├── _sockets/      # private package: socket helpers, route and MTU queries
-│   ├── _options.py   # disable_connreset, set_buffer_size
-│   ├── _hint.py      # bind_error_hint
-│   ├── _bind.py      # bind, SocketOption, get_free_port
-│   ├── _connect.py   # get_source_ip, tcp_check, wait_for_port
-│   ├── _nexthop.py   # first-hop readers per platform
-│   ├── _route.py     # get_route, Route
-│   ├── _hops.py      # count_hops
-│   ├── _pmtu.py      # get_pmtu, get_tcp_mss, the don't-fragment option
-│   └── _mtu.py       # discover_mtu, max_udp_payload
-├── _dns/          # private package: resolve() chaining the backends
-│   ├── _common.py    # deadline, record-type helpers, nameserver spellings, search_candidates
-│   ├── _dnspython.py # resolve_dnspython, has_dns
-│   ├── _system.py    # resolve_system and the bounded OS lookup
-│   ├── _nslookup.py  # resolve_nslookup and its output parser
-│   ├── _wire.py      # resolve_wire: the protocol over UDP/TCP
-│   ├── _doh.py       # resolve_doh
-│   ├── _cache.py     # the cache= answer cache
-│   ├── _chain.py     # resolve: the backend chain, deadline and cache
-│   ├── _lookup.py    # lookup_ip, lookup_fqdn, resolver_keywords: the Host and FQDN adapters
-│   └── _dnswire.py   # the DNS message codec (RFC 1035)
-├── _ping/         # private package: ping() over the platform binary
-│   ├── _result.py    # PingResult
-│   ├── _command.py   # the argv per platform grammar, supports_dont_fragment
-│   ├── _output.py    # reading RTT, TTL and the replying address
-│   ├── _probe.py     # name resolution, the TCP and UDP probes
-│   └── _run.py       # ping
-├── _proc.py       # private: the one runner every platform binary goes through
-├── _retry.py      # private: bounded retry with exponential backoff
-├── _pktinfo.py    # private: pktinfo constants, per-platform layouts, decoding (imports neither _udp nor _msg)
-├── _udp/          # private package: UDP receive with arrival interface (pktinfo)
-│   ├── _datagram.py  # Datagram
-│   ├── _endpoint.py  # UDPEndpoint: recv, the async variants, close
-│   ├── _send.py      # send and the cmsg that pins the source (mixin)
-│   ├── _reply.py     # reply_socket and the address policy (mixin)
-│   ├── _support.py   # has_pktinfo
-│   ├── _timeout.py   # socket.timeout -> TimeoutError on 3.9
-│   ├── _notifier.py  # add_reader polyfill, so arecv works on a Proactor loop
-│   └── _freebsd.py   # IPv4 arrival data and source pinning on FreeBSD
-├── _fqdn/         # private package: FQDN domain-name value type
-│   ├── _text.py      # label limits, IDNA, the label rule
-│   ├── _wire.py      # encode_name, read_labels: the name codec
-│   └── _name.py      # FQDN: the label algebra
-├── _msg/          # private package: cross-platform recvmsg/sendmsg + the socket patch
-│   ├── _dispatch.py  # recvmsg, sendmsg, CMSG_LEN/SPACE: native, or Winsock on Windows
-│   ├── _shape.py     # IPv4 pktinfo re-laid between the Windows and POSIX field orders
-│   ├── _sysconf.py   # the os.sysconf stand-in the patch installs
-│   └── _patch.py     # install/remove the socket patch (only the root imports it)
-├── _winsock/      # private package: ctypes WSARecvMsg/WSASendMsg (Windows only, never imported elsewhere)
-│   ├── _abi.py       # ws2_32, the structures, argtypes
-│   ├── _cmsg.py      # cmsg sizes, control-buffer walk and build
-│   ├── _sockaddr.py  # sockaddr <-> address tuple
-│   ├── _calls.py     # recvmsg, sendmsg
-│   └── _ioctl.py     # SIO_UDP_CONNRESET
-└── py.typed       # PEP 561 marker — the package ships inline type hints
-```
-
-Beside the package: `tests/` (see **Develop**), `docs/` + `mkdocs.yml` for the
-published site, `benchmarks/` (run on demand, never in CI) and `examples/`
-(two runnable scripts; local and read-only).
-
-**The import surface is still flat** — everything is re-exported from
-`netimps`, and the `_`-prefixed modules are implementation detail. Do not
-import them directly from outside the package.
-
-Everything importable from `netimps` is declared in `__all__` in
-`__init__.py`, which imports each private module or package once. No private
-module imports a name from the root: it takes the name from the module that
-owns it (`tests/test_import_structure.py`).
-
-## Entry points
-
-See **`src/netimps/AGENTS.md`** for the header-file-style public API (every
-export with its signature, arguments, return contract, and gotchas). Quick
-map:
-
-| Name | Purpose |
+| Header | Covers |
 | --- | --- |
-| `IPAddress`, `IPInterface`, `IPNetwork` | v4/v6 **union aliases** for annotations |
-| `IPAddressLike`, `IPInterfaceLike`, `IPNetworkLike`, `MACAddressLike` | accepted-input unions |
-| `HostLike` | accepted-input union for a single destination (hostname, address, or interface object) |
-| `IPv4Address`, `IPv4Interface`, `IPv4Network`, `IPv6Address`, `IPv6Interface`, `IPv6Network` | stdlib concrete-type re-exports |
-| `parse`, `try_parse`, `is_valid` | build a type from a value (raising / `None` / `bool`) |
-| `MACAddress` | parse / classify / render MAC addresses |
-| `get_interfaces`, `Interface`, `iter_addresses` | native cross-platform NIC discovery; `cache=`/`clear_interface_cache` make a per-packet lookup affordable (97x measured) |
-| `clear_interface_cache`, `INTERFACE_CACHE_TTL`, `interface_enumerations` | invalidate the shared enumeration cache, its default 1 s TTL, and a count of the enumerations actually performed |
-| `clear_resolution_cache`, `RESOLUTION_CACHE_TTL` | invalidate the `cache=` resolution cache (negative answers included), and its default 30 s TTL |
-| `is_broadcast` | is this an IPv4 broadcast, limited or subnet (needs interface prefixes) |
-| `is_unicast` | was this destination one host: not broadcast, multicast or the wildcard; `Datagram.is_unicast` asks it of `Datagram.destination` |
-| `is_link_scoped` | scope classification |
-| `collapse`, `subtract` | CIDR set maths |
-| `split_host`, `split_zone` | `host:port` (or `(host, port)`) splitting, IPv6-aware; the `%zone` of a scoped address |
-| `join_host`, `unmap`, `is_wildcard` | build `host:port` (IPv6-bracketed), collapse a v4-mapped address, test for the bind-anything form |
-| `get_default_port`, `get_default_scheme`, `register_port` | scheme ↔ port registry |
-| `resolve`, `resolve_dnspython`, `resolve_system`, `resolve_nslookup` | DNS lookup → native records; `resolve` chains the three backends, each independently callable, and returns `[]` only when every applicable backend answered empty |
-| `resolve_wire`, `resolve_doh` | DNS by **explicit transport** — UDP/TCP to a named server, or DNS-over-HTTPS — bypassing the backend chain when the caller needs to choose the resolver rather than inherit the host's |
-| `ResolutionError` | raised by the three resolvers when a backend could not even ask (missing binary, unreachable server, deadline) — as opposed to an empty answer |
-| `ping`, `PingResult` | reachability with RTT and TTL |
-| `bind`, `bind_error_hint`, `get_interface`, `iter_interfaces`, `is_local_address`, `is_local_host` | socket creation and local membership |
-| `get_source_ip`, `get_free_port`, `tcp_check`, `wait_for_port` | socket helpers |
-| `SocketOption`, `disable_connreset`, `set_buffer_size` | named option triple; the Windows `SIO_UDP_CONNRESET` switch (no stdlib route); buffer growth reporting what was *granted* |
-| `AddressInUseError` | one stable `OSError` subclass for "the address is taken", never a `PermissionError` |
-| `UDPEndpoint`, `Datagram` | UDP receive with arrival interface (`IP_PKTINFO` / `IPV6_RECVPKTINFO`, per family) |
-| `UDPEndpoint.reply_socket` | a socket bound to answer *from* the address the client addressed |
-| `has_pktinfo` | can this host report a datagram's arrival interface — ask before choosing a wildcard or per-address bind |
-| `Datagram.reply_address` | the sender in the family `reply_socket` chose — what to pass to `sendto`, since a dual-stack listener's v4 peer arrives as a v6 4-tuple |
-| `UDPEndpoint.arecv`, `.datagrams` | `recv` awaited / `async for`; pktinfo survives even on the Windows Proactor loop; `datagrams(on_error=)` carries on past a receive error the caller chooses to ignore |
-| `recvmsg`, `sendmsg`, `CMSG_LEN`, `CMSG_SPACE`, `has_recvmsg` | ancillary-data messaging on **every** platform, Windows included (via `WSARecvMsg`/`WSASendMsg`) |
-| `patch_socket_module`, `is_socket_patched` | install/remove the default-on `socket` patch that gives Windows the stdlib method names |
-| `Host` | hostname-or-address value type; `.fqdn()` narrows a name to `FQDN` |
-| `FQDN`, `FQDNLike` | domain name as a value type: labels, `.domain`, `.tld`, `/` prepends (**inverted from `pathlib`**), `.resolve()`/`.ping()` |
-| `retry`, `backoff_delays` | bounded retry with exponential backoff; `jitter_seconds=`/`symmetric=` give the symmetric jitter RFC 2131 and RFC 8415 specify |
-| `Backoff` | a retransmission **timer** — grows on loss, resets on progress; the stateful shape a one-shot schedule cannot express |
-| `LINK_LOCAL_V4`, `LOOPBACK_V4`, `LOOPBACK_V6`, `LINK_LOCAL_V6` | named networks |
-| `get_route`, `Route`, `count_hops` | routing and distance |
-| `discover_mtu`, `get_pmtu`, `get_tcp_mss` | path MTU by ICMP/UDP/TCP, the kernel's cached guess, or the negotiated MSS |
-| `max_udp_payload` | the largest UDP payload that fits an MTU unfragmented |
-| `scan_ports`, `scan_hosts`, `PORT_RANGES` | concurrent scanning |
-| `multicast_socket`, `join_group`, `leave_group`, `is_multicast` | multicast |
-| `get_hostname` | this machine's name (`platform.node()`), asked for when called; `fqdn=True` for `socket.getfqdn()` |
+| `src/netimps/AGENTS.md` | the top API header: every public name with its signature, the conventions, the exceptions, the command line's contract, the environment variables |
+| `src/netimps/_dns/AGENTS.md` | `resolve` and its backends, the answer cache |
+| `src/netimps/_ping/AGENTS.md` | `ping` and `PingResult` |
+| `src/netimps/_sockets/AGENTS.md` | `bind`, socket options, TCP checks, routing, hops, path MTU, payload sizing |
+| `src/netimps/_ifaddrs/AGENTS.md` | `Interface`, `get_interfaces` and its cache, lookups, broadcast and unicast tests |
+| `src/netimps/_ip/AGENTS.md` | address and network helpers, host and zone splitting, `Host` |
+| `src/netimps/_fqdn/AGENTS.md` | `FQDN` |
+| `src/netimps/_msg/AGENTS.md` | `recvmsg` and `sendmsg` on every platform, the `socket` patch |
+| `src/netimps/_udp/AGENTS.md` | `UDPEndpoint`, `Datagram`, arrival interface, reply sockets |
+| `src/netimps/cli/AGENTS.md` | the commands, their JSON shapes and diagnostics |
+| `tests/AGENTS.md` | running and writing the tests: the network guard, the fakes, the typing check, every test file |
 
-## Working here
+A public API change updates its shipped header in the same commit; the table of
+those headers lives in the top one.
 
-- **A green suite proves nothing about this package's platform behaviour.**
-  Nearly every test that touches `ping`, `traceroute` or `nslookup` puts a
-  fake program on `PATH` (the `fake_program` fixture) and then asserts the argv
-  the library *builds* — which can never catch a flag the platform does not
-  have: an argv test passes for `ping(ipv6=True)` putting `-6` in the argv
-  while macOS `ping` answers `invalid option -- 6` and exits 64.
-  `tests/integration/test_platform_smoke.py` is the one file that runs the real binaries,
-  loopback only, and **nothing in it may be mocked**. A claim about another
-  platform needs a measurement on that platform (a `ci-*` tag runs the matrix),
-  not a passing test here.
-- **A test patches the module whose globals the code reads.** A private
-  package re-exports names from its modules in its `__init__`, and that copy is
-  a different binding: `monkeypatch.setattr(netimps._dns, "resolve", ...)` leaves
-  `_dns._lookup.resolve` alone and the test passes without testing anything.
-  Patch `netimps._dns._lookup`, or `netimps._ping._probe._socket` for the
-  `socket` module as `_ping` sees it. `tests/test_import_structure.py` keeps a
-  function-local import from hiding such a binding.
-- **Don't collapse the per-platform `sockaddr` layouts** in `_ifaddrs/_sockaddr.py`.
-  macOS/BSD have a leading `sa_len` byte Linux lacks; using the Linux layout on
-  BSD decodes `AF_INET` as `512` and *silently* drops every address instead of
-  raising — a Linux-only CI stays green while Mac users lose data.
-- **`is_loopback` comes from the interface *flags*, never the name**, with the
-  address heuristic only as a fallback when the OS reported no flag.
-  `IFF_LOOPBACK` (POSIX) and `IfType == IF_TYPE_SOFTWARE_LOOPBACK` (Windows)
-  are read into `raw`. Names (`lo` / `lo0` / `Loopback
-  Pseudo-Interface 1`) share no spelling, and addresses are not authoritative
-  either: WSL2 binds a routable `10.255.255.254/32` to `lo`, so the address
-  heuristic finds **no** loopback interface at all there, and a test that
-  looks for one silently takes its skip branch.
-- **`_ping._command._PLATFORM` is a three-way split** — `windows` / `linux` / `bsd` —
-  not `os.name == "nt"`. Of the six flags the module emits, *five* mean
-  something different or nothing at all on BSD: `-W` is milliseconds rather
-  than seconds, `-t` is an overall deadline rather than the TTL (`-m` is the
-  TTL there, while Linux's `-m` is a firewall mark), `-I` is multicast-only and
-  is rejected for a unicast destination (`-S` is the source flag), and
-  `-4`/`-6` do not exist at all — IPv6 is a separate **`ping6`** binary with
-  its own grammar again (`-h` for the hop limit, no `-W`). Anything that is
-  neither Windows nor Linux is treated as BSD deliberately: a flag we fail to
-  emit is a missing feature, a flag that means something else is a wrong
-  answer.
-- **BSD `ping` has a DF flag: `-D`.** `ping6` is the one combination with no
-  verified flag, so
-  `dont_fragment=True` is rejected for it rather than silently sent without DF.
-- The ctypes paths can't be asserted against fixed values, so
-  `tests/test_interfaces.py` checks invariants plus the pure helpers and the
-  fallback, which *are* exactly testable.
-- **`duho` is a CLI-only dependency.** Only modules under `cli/` import it, and
-  `cli.main()` imports it inside the function, so that a no-extra install gets
-  a message rather than an `ImportError` traceback.
-  `tests/test_cli.py` skips itself when the extra is absent, and asserts the
-  library still imports with duho blocked.
-- **Tests must never hit the network, and `tests/conftest.py` enforces
-  it** rather than trusting it. An autouse fixture fails, at the point of the
-  call and naming the test, any off-host name resolution (`getaddrinfo`,
-  `gethostbyname[_ex]`, `gethostbyaddr`, `getnameinfo`), any `connect` or
-  `sendto` to an address that is not loopback, unspecified or held by one of
-  this machine's own interfaces (on every port; the platform decides "held" by
-  whether a UDP socket can bind it), any name the C resolver would answer
-  inside `connect`, any payload to a DNS port, a real `nslookup` (judged by the
-  server argument and `-port=`), and a real `ping`/`traceroute`/`tracert` of
-  anything but this host. A wildcard resolver (the kind many ISP and corporate
-  networks run) turns a suite red when it trusts the resolver, because several
-  tests assert that a name does *not* resolve. Three escape hatches, each
-  self-documenting in the test's signature:
-  - `no_such_host` — makes every off-host name fail deterministically. Use it
-    whenever the precondition is "given a name that does not resolve"; picking
-    something in `.invalid` and trusting the resolver is the flake itself.
-  - `allow_off_host_destination` — lifts the destination rule only, for a test
-    whose subject needs one: a UDP `connect` to a public address to learn the
-    route (sends nothing), a multicast group the test joined, the limited
-    broadcast. The test's docstring says which.
-  - `allow_resolver` — lifts the whole guard for one test, marking it as one
-    whose failures may be the network's fault.
+## Layout
 
-  The guard deliberately **allows address literals to be parsed**:
-  `getaddrinfo("1.1.1.1", ...)` parses four numbers and returns, no packet
-  leaves the machine, and blocking it would push tests into mocking things that
-  were never remote. Where a test needs a program that would reach out, it
-  stands in a fake (`fake_program`) rather than patching `subprocess`.
-  `socket.sendmsg` is not hooked, because a test pins that the library's own
-  stays installed.
-- **Windows `ping` exits 0 for "TTL expired in transit."** Anything inferring
-  success from the exit code alone is wrong; match the reply address instead,
-  never the localised prose. Windows `ping -?` also exits 0, so `ping("-?")`
-  would come back truthy for a host that was never contacted.
-- **Check for silent platform gaps before adding a socket option — and check
-  *every* platform, not just Windows.** Measured on Windows and Linux (3.9
-  through 3.14): `IP_MTU`, `IP_MTU_DISCOVER` and `IP_DONTFRAG` are exported by
-  CPython on **neither**, so a `getattr(socket, "IP_MTU", None)` guard disables
-  the code everywhere. `SO_REUSEPORT`, `IPV6_PATHMTU`, `IPV6_RECVPATHMTU`
-  and `IPV6_RECVPKTINFO` are missing on Windows but present on Linux; Windows
-  has `IPV6_DONTFRAG` (14) and no `IP_DONTFRAGMENT`. Binding a multicast socket
-  to the group address fails there too. Where the constant is documented and
-  stable, use the literal and let `OSError` from the `set`/`getsockopt` be the
-  "unsupported" signal.
-- **IPv6 multicast names an adapter by *index*, IPv4 by *address*.** They are
-  not two spellings of one thing: feeding an address to the v6 side does not
-  raise, it lands as index `0`, which is "kernel's choice". Use
-  `_ifaddrs.interface_index()` for anything v6, `interface_address()` for
-  v4. Both honour a `%zone` suffix.
-- **POSIX delivers asynchronous ICMP errors only to *connected* UDP sockets.**
-  An unconnected probe never sees a port-unreachable and just times out, while
-  Windows reports it either way — so the unconnected version tests green here
-  and under-reports on Linux CI. Also note `_discover_mtu_udp` is still
-  unconnected by design; it treats such errors as failure anyway.
-- **`ThreadPoolExecutor.__exit__` calls `shutdown(wait=True)`,** and its atexit
-  hook joins worker threads too. It is therefore the wrong tool for bounding a
-  blocking call: a daemon `threading.Thread` joined through a queue is what
-  `_dns._system._bounded_lookup` uses, and why. Every blocking resolver call goes
-  through it — the `ptr` branch called `gethostbyaddr` directly and was
-  measured at 4.6s against a 0.1s deadline.
-- **Match a ping reply by address token, and remember hostnames are plural.**
-  `gethostbyname` is IPv4-only — use `getaddrinfo` with an explicit family, or
-  `ipv6=` silently does nothing. The reply needle also has to tolerate BSD's
-  punctuation: `ping6` prints `16 bytes from ::1, icmp_seq=0 hlim=64` — comma,
-  and `hlim` rather than `ttl`.
-- **Windows exposes no cached path MTU.** Already investigated, so do not
-  re-derive it: `MIB_IPFORWARDROW.dwForwardMtu` reads 0 (unsupported), and
-  `MIB_IPFORWARD_ROW2` has no MTU field. `Interface.mtu` is the link MTU;
-  `discover_mtu` probing is the only way to get a path MTU there. Linux *does*
-  answer — `get_pmtu` reads the `IP_MTU` literal for v4 and `IPV6_PATHMTU` for
-  v6, the latter returning an `ip6_mtuinfo` struct rather than a bare int.
-- **`GetBestRoute2`, not `GetIpForwardTable`.** It asks Windows which route it
-  would pick, so the kernel does longest-prefix matching, and unlike
-  `GetBestRoute` it serves both families. The POSIX side has no equivalent and
-  parses `/proc/net/route` and `/proc/net/ipv6_route` by hand — the v4 file
-  omits loopback entirely, and the v6 parser has to honour
-  `RTF_UP`/`RTF_REJECT`, since WSL2 carries a
-  `::/0` reject route on `lo` that would otherwise make every global IPv6
-  address "on-link via loopback". BSD has neither file and shells out to
-  `route -n get`.
-- **`tests/typing/api.py` is checked with a *consumer's* mypy config**,
-  `tests/typing/consumer.ini`, not the package's own — for two reasons, and
-  the second one bites.
-  1. The package sets `enable_incomplete_feature = ["TypeForm"]` so mypy will
-     type-check `__init__.py`'s own overload definitions. Nobody downstream
-     sets it, so checking `api.py` with it on is not the check that matters.
-  2. It keeps the two `lint`-job invocations on different option sets, which
-     is what stops the first from poisoning the second through `.mypy_cache`.
-     Measured here with mypy 1.20.2: from a cold cache, `mypy
-     tests/typing/api.py` alone is **clean**, but `mypy src/netimps` followed
-     by `mypy tests/typing/api.py` under the *same* config reports **25**
-     `call-overload` errors. `TypeForm[_T]` serialises into the cache as plain
-     `type[_T]`, so the second run reads a degraded `netimps` and loses every
-     union-alias overload. `--no-incremental` restores it.
+```
+src/netimps/   the package, below
+tests/         the suite, with integration/ and typing/ (see tests/AGENTS.md)
+docs/          the published site, with mkdocs.yml; built strictly as a release gate
+benchmarks/    run on demand, never in CI; results/ is tracked
+examples/      two runnable scripts, local and read-only
+.github/       the workflows (test, docs, release, probe) and probe/capture.py
+pyproject.toml, README.md, CHANGELOG.md, RELEASENOTES.md, LICENSE
+```
 
-  So: do not collapse the two invocations onto one config without passing
-  `--no-incremental`, and do not read a `call-overload` error in `api.py` as a
-  contract regression before re-running it from a cold cache.
-- **`.github/probe/` answers platform questions with captured bytes.** Push a
-  `probe-*` tag (not `ci-*` — that is test.yml's) or dispatch it, then read the
-  uploaded artifact. It records facts not worth re-deriving: macOS `ping` has
-  no `-4`/`-6`, BSD `-W` is milliseconds,
-  `IP_DONTFRAG` is 28 on Darwin and 67 on FreeBSD, and CPython exports
-  `socket.IP_MTU` on no platform at all. Output is redacted by default
-  (`--raw` to keep MACs and addresses for local diagnosis) because the
-  transcript is uploaded and may be pasted into an issue.
-- **Type-check for every platform, not just yours.** `mypy` checks every
-  per-platform branch whatever host it runs on, but resolves names against the
-  platform it *thinks* it is targeting — so `ctypes.WinDLL`,
-  `socket.SIO_RCVALL` and `socket.ioctl` type fine on Windows and fail on the
-  Linux runner. Run `mypy --platform linux`, `--platform darwin` and
-  `--platform win32`; CI runs all three. A clean run on one platform says
-  nothing about `attr-defined` errors on another.
-- **Constants differ between the BSDs, not just between BSD and Linux.**
-  `IP_DONTFRAG` is 67 on FreeBSD and **28 on Darwin**; one number for "BSD"
-  made `_set_dont_fragment` fail silently on macOS, which for a DF option means
-  the MTU search loses its whole point. `IPV6_DONTFRAG` (62) they do agree on.
-- Run `black src/ tests/` before committing. CI's `lint` job runs
-  `black --check src/ tests/`, `mypy src/netimps`, and the consumer-config
-  check above; all three must pass.
+Under `src/netimps/`, one line per package:
 
-## Develop
+- `__init__.py`, `__main__.py` — the one flat import surface, declared in
+  `__all__`, and `python -m netimps`.
+- `_ip/` — IP aliases and builders, CIDR maths, classification, host and zone
+  splitting, `Host`.
+- `_ifaddrs/` — interface discovery through `getifaddrs(3)` and
+  `GetAdaptersAddresses`, the enumeration cache, lookups.
+- `_sockets/` — `bind`, socket options, source IP, TCP checks, route, hops, MTU.
+- `_dns/` — `resolve`, its five backends, the cache, the message codec.
+- `_ping/` — `ping` over the platform binary, or a TCP or UDP probe.
+- `_udp/` — `UDPEndpoint` and `Datagram`: arrival interface, source pinning.
+- `_msg/` — `recvmsg` and `sendmsg` everywhere, and the `socket` patch.
+- `_winsock/` — the `ctypes` `WSARecvMsg`/`WSASendMsg` behind `_msg`; Windows
+  only, reached only through `_msg`.
+- `_fqdn/` — the `FQDN` value type.
+- `cli/` — the one public subpackage: the `duho`-backed command line.
 
-Venvs are named `.venv/<version>-<os>-<arch>/`, one per interpreter this
-project is tested against. The suffix is not decoration: this repo tests two
-Pythons, and on a machine that can run more than one architecture the name is
-the only thing distinguishing them.
+The single modules are `_exceptions.py` (the hierarchy), `_parse.py` (the
+generic `parse`, `try_parse`, `is_valid`, `classify`, above `_ip`, `_fqdn` and
+`_mac`), `_mac.py`, `_scheme.py`, `_scan.py`, `_multicast.py`, `_retry.py`,
+`_pktinfo.py` (the pktinfo constants and layouts, imported by neither `_udp` nor
+`_msg`), and `_proc.py`, the only module that imports `subprocess` and the one
+runner every platform binary goes through.
 
-`<arch>` is what the interpreter was **built for**
-(`sysconfig.get_platform()`), not what the host is (`platform.machine()`).
-They differ: an ARM64 Windows box runs emulated x64 CPython perfectly happily
-and reports `ARM64` for the machine while the interpreter is `win-amd64`.
-Prefer a native build where one exists — the emulated one is slower and can
-diverge on exactly the low-level behaviour this package pokes at.
+## Environment
+
+Venvs are named `.venv/<version>-<os>-<arch>/`, one per interpreter this project
+is tested against: the latest, and the floor (3.9), which is what CI's oldest
+job runs. The suffix is not decoration: on a machine that can run more than one
+architecture it is the only thing that tells the two apart.
+
+`<arch>` is what the interpreter was **built for** (`sysconfig.get_platform()`),
+not what the host is (`platform.machine()`). They differ: an ARM64 Windows box
+runs emulated x64 CPython perfectly happily and reports `ARM64` for the machine
+while the interpreter is `win-amd64`. Prefer a native build where one exists:
+the emulated one is slower and can diverge on exactly the low-level behaviour
+this package pokes at.
 
 ```bash
-# Latest (development), and the floor (what CI's oldest job runs).
 py -3.14-arm64 -m venv .venv/3.14-nt-arm64
 py -3.9-arm64  -m venv .venv/3.9-nt-arm64
 
 .venv/3.14-nt-arm64/Scripts/pip install -e ".[dev,docs]"
 .venv/3.9-nt-arm64/Scripts/pip install -e ".[dev]"
-
-.venv/3.14-nt-arm64/Scripts/pytest -q
-.venv/3.9-nt-arm64/Scripts/pytest -q          # the floor -- run it before pushing
 ```
 
-On POSIX the scripts live in `bin/` rather than `Scripts/`, and the name is
-e.g. `.venv/3.14-posix-x86_64`.
+On POSIX the scripts live in `bin/` rather than `Scripts/`, and the name is e.g.
+`.venv/3.14-posix-x86_64`. The `dev` extra installs every other extra, so tests
+that depend on one run rather than skip.
 
-Tests live in `tests/` and run via `pytest -q` from a checkout;
-`pyproject.toml` puts `src/` on the path and turns warnings into errors (each
-exception is listed there with its reason). `tests/integration/` holds the
-suites that talk to real sockets, a real event loop or the platform's own
-binaries, on loopback only; `conftest.py` above it applies to both.
+## Checks
 
-| File | Covers |
-| --- | --- |
-| `conftest.py` | the suite-wide network guard and its `no_such_host` / `allow_resolver` / `allow_off_host_destination` opt-outs; the `fake_program` and `server` fixtures |
-| `fakedns.py` | the fake name server on loopback (UDP and TCP on one number) that the resolver tests talk to |
-| `test_network_guard.py` | the guard itself: every road to a name server or an off-host destination is refused, and the explicit ways through |
-| `test_fakedns.py` | the fake name server's port-pair search and what it reports when the host refuses a pair |
-| `test_surface.py` | exactly what `netimps.__all__` exports, and the positional arguments of each callable |
-| `test_exceptions.py` | the exception hierarchy and the one place each class is defined |
-| `test_import_structure.py` | import direction: no name taken from the root, no module over 500 lines and no function-local sibling import without a recorded reason |
-| `test_comments.py` | the shipped source and header describe the code as it is |
-| `test_readme.py` | the README's Python example and command lines run (or are named as not executed, with the reason) |
-| `test_ip.py` | `parse`/`try_parse`/`is_valid`, the aliases, CIDR maths, `unmap`, `is_wildcard` |
-| `test_classification.py` | the classifiers and `try_parse`: one answer on every Python |
-| `test_classify.py` | `classify`: text read as a MAC, a network, an interface or an address |
-| `test_mac.py` | `MACAddress` parsing, ordering, subclassing, `hex`, and the hash/eq law across every accepted spelling |
-| `test_fqdn.py` | `FQDN`: the label algebra, the pathlib inversion, limits, ordering, the hash/eq law |
-| `test_host.py` | `Host`: keeps its text, resolves lazily, caches the answer and the failure |
-| `test_host_text.py` | `split_zone`, `split_host` and `join_host` pairs and brackets, `is_local_host`, the MAC pattern's privacy |
-| `test_parse_classmethods.py` | `Type.parse` / `try_parse` on `MACAddress`, `FQDN` and `Host` |
-| `test_text_and_wire_forms.py` | text and wire forms: `MACAddress.format`, `FQDN.encode` / `decode` / `decode_at`, over mixed-case, derived and non-ASCII names |
-| `test_value_types.py` | the value types cannot change after construction; copy and pickle keep the class |
-| `test_interfaces.py` | `get_interfaces` against the facts the OS fixes (loopback, indices, `/sys/class/net`), the pure helpers, the fallback, the cache, `get_interface`, `is_local_address`, `iter_addresses`, `is_broadcast` |
-| `test_sockets.py` | bind options, `tcp_check`, route, MTU, `disable_connreset`, `set_buffer_size`, `SocketOption`, `max_udp_payload`; loopback, or assertions about shape |
-| `test_bind_defaults.py` | `bind()`: family inference, the `connreset` default, the hint and the one exception type for a taken port, hijack resistance, port sharing, the address types it accepts |
-| `test_udp_datagram.py` | `send(src=<address>)` without enumeration, truncation on both receive paths, `Datagram.destination` / `is_unicast`, `datagrams(on_error=)` |
-| `test_msg.py` | `recvmsg`/`sendmsg` on every platform, and the `socket` patch (install, reverse, no-op on POSIX) |
-| `test_freebsd_pktinfo.py` | IPv4 arrival data and source pinning where the carrier is not `IP_PKTINFO` |
-| `test_proc.py` | the runner: missing program, exit status, deadline that kills the children, invalid bytes, `LC_ALL`, stdin |
-| `test_net.py` | the `resolve` backend chain (real dnspython and wire client against the fake name server, `nslookup` as a fake program), `ping` and its options, the port registry |
-| `test_retry.py` | `retry`, `backoff_delays` and `Backoff`: delays, jitter modes, argument checks |
-| `test_scheme_ports.py` | the WS-Management scheme spellings and their canonical reverse names |
-| `test_dns_wire.py` | the standard-library DNS client against the fake name server and a fake DoH endpoint |
-| `test_dns_bounds.py` | a DNS reply is untrusted input and an argument is not an option |
-| `test_dns_search_candidates.py` | the names each resolver backend asks about for a given `search=`, which differ by backend |
-| `test_resolution.py` | `Host` and `FQDN` resolving through `resolve()` |
-| `test_resolution_cache.py` | `cache=` on `resolve`/`Host`/`FQDN`: hits, negative answers, outages, keys, counted by a fake `nslookup` |
-| `test_resolution_deadline.py` | `deadline=` bounds a whole resolution, and `ping` bounds its own lookup |
-| `test_resolution_errors.py` | `ResolutionError` is an `OSError`; `NoAnswerError` is its leaf |
-| `test_resolution_outage.py` | an outage is not an empty answer, in every resolver backend (real dnspython and wire client against the fake name server) |
-| `test_cli.py` | the CLI, driven through the real parser; skips itself when the `cli` extra is absent |
-| `integration/test_platform_smoke.py` | the **only** non-mocked tests of the platform binaries: the real `ping`/`ping6`, `discover_mtu` and real loopback sockets |
-| `integration/test_udp_endpoint.py` | `UDPEndpoint` on real loopback sockets: the receive path, pktinfo, source pinning, the interface cache |
-| `integration/test_udp_reply.py` | `reply_socket` and `reply_address` for a pktinfo-using UDP server |
-| `integration/test_async_udp.py` | `arecv`/`datagrams` on a **real loop**, both Windows loop types, and no leaked threads |
-| `integration/test_scan.py` | `scan_ports` / `scan_hosts` and the multicast helpers, loopback only |
-| `typing/api.py` | the static-typing contract; never executed, checked by mypy with `typing/consumer.ini` |
+CI runs, on a push to `main`, on a pull request against `main`, on a `ci-*` tag
+(a throwaway tag, so an agent without dashboard access can trigger and poll a
+run) and on `workflow_dispatch`:
 
-**`fake_program` is how tests stand in for a platform binary.** It writes a
-program into a temporary directory first on `PATH`: a `#!` script on POSIX, a
-`distlib`-built `.exe` launcher on Windows (a `.cmd` shim is refused by the
-runner, so it would not exercise the real path). `fake.argv` / `fake.calls`
-read back what the library passed; `stdout`, `stderr` and `returncode` may be
-lists, one per run. The fixture adds the fake's directory to the guard's
-allow-list, so a fake `nslookup` is not mistaken for a real off-host query.
-Never patch `subprocess` or `_proc.run` to stand in for a program, except to
-make the runner report a deadline the test cannot wait for.
+- `black --check src/ tests/`, with `target-version = py39` from
+  `pyproject.toml`. Run `black src/ tests/` before committing.
+- `mypy --platform linux src/netimps`, then `--platform darwin`, then
+  `--platform win32`. `mypy` checks every per-platform branch whatever host it
+  runs on but resolves names against the platform it *thinks* it targets, so
+  `ctypes.WinDLL`, `socket.SIO_RCVALL` and `socket.ioctl` type fine on Windows
+  and fail on the Linux runner. A clean run on one platform says nothing about
+  `attr-defined` errors on another.
+- `mypy --config-file tests/typing/consumer.ini tests/typing/api.py`, the typing
+  contract checked as a consumer would (`tests/AGENTS.md`, "The typing check").
+- the test suite, `pytest -q -rs`: the full 3.9 to 3.14 matrix on ubuntu plus
+  both edges on windows and macos, and the dependency floors on the oldest
+  Python. The commands, the test files and how to write one are in
+  `tests/AGENTS.md`. Run both venvs before pushing.
 
-`tests/integration/test_platform_smoke.py` must stay unmocked. Every other ping test
-asserts the argv the library builds, which cannot catch a flag the platform
-rejects; this file is what turns "CI is green" into evidence about the
-platform. If one of its assertions fails, the library is broken there — do not
-mock it to make it pass.
+The docs site is built and deployed by a separate `docs.yml`: on a
+docs-affecting push to `main`, on `workflow_dispatch`, and on the **Release
+workflow completing successfully** (`workflow_run`, *not* `release: published`,
+which never fires because GitHub does not start runs from `GITHUB_TOKEN`-created
+events), so a wrong sentence on the landing page can be corrected without
+cutting a version. `mkdocs build --strict` is the check.
 
-Run against **3.9 and 3.14** — 3.9 is the floor, so no unquoted `X | Y` unions
-at runtime. CI runs the full 3.9–3.14 matrix on ubuntu plus both edges on
-windows and macos, on a push to `main`, on a pull request against `main`, on a
-`ci-*` tag (a throwaway tag, so an agent without dashboard access can trigger
-and poll a run), and on `workflow_dispatch`. The docs site is built and
-deployed by a separate `docs.yml` — on a docs-affecting push to `main`, on
-`workflow_dispatch`, and on the **Release workflow completing successfully**
-(`workflow_run`, *not* `release: published`, which never fires because GitHub
-does not start runs from `GITHUB_TOKEN`-created events) — so a wrong sentence
-on the landing page can be corrected without cutting a version.
-
-Code is formatted with **black** (`target-version = py39`, configured in
-`pyproject.toml`; installed by the `dev` extra):
-
-```bash
-.venv/3.14-nt-arm64/Scripts/black src/ tests/          # format
-.venv/3.14-nt-arm64/Scripts/black --check src/ tests/  # verify, as CI does
-```
-
-`benchmarks/run.py` is a perf suite run **on demand**, never per push — shared
+`benchmarks/run.py` is a perf suite run **on demand**, never per push: shared
 runners are too noisy for the numbers to mean anything. `python
 benchmarks/run.py --save` writes one JSON per (platform, interpreter,
 architecture) into `benchmarks/results/`, which is tracked so a before/after
 comparison stays recoverable.
 
-### Releasing
+## Conventions
+
+- **A private module imports a name from the module that owns it, never from
+  the root.** `__init__` imports each private module or package once and
+  declares `__all__`; `tests/test_import_structure.py` pins the direction and
+  the 500-line module limit. A private package re-exports names for its
+  siblings, and a test patches where the code reads the name
+  (`tests/AGENTS.md`).
+- **`duho` is a CLI-only dependency.** Only modules under `cli/` import it, and
+  `cli.main()` imports it inside the function, so a no-extra install gets a
+  message rather than an `ImportError` traceback. The library never requires an
+  extra.
+- **A platform fact is measured, not reasoned, and the comment beside the code
+  that depends on it carries the measurement.** The manpages disagree across
+  BSD and Linux and a green suite on one platform proves nothing about another:
+  a claim about a platform needs a measurement there (a `ci-*` tag runs the
+  matrix). `.github/probe/capture.py` answers a platform question with captured
+  bytes: push a `probe-*` tag (not `ci-*`, which is `test.yml`'s) or dispatch
+  `probe.yml`, then read the uploaded artifact. Its output is redacted by
+  default (`--raw` keeps MACs and addresses for local diagnosis) because the
+  transcript is uploaded and may be pasted into an issue.
+- **Check every platform before adding a socket option or constant, not just
+  Windows.** CPython exports `IP_MTU`, `IP_MTU_DISCOVER` and `IP_DONTFRAG` on
+  none, so a `getattr(socket, "IP_MTU", None)` guard disables the code
+  everywhere. Where the constant is documented and stable, use the literal and
+  let the `OSError` from `setsockopt` or `getsockopt` be the "unsupported"
+  signal; the BSDs differ from each other as well as from Linux.
+- **Comments describe the code as it is**, in a line or three: the constraint,
+  the reason, the unit, and a measured platform fact with its date. No history,
+  no other project by name, nothing a reader of the public repository cannot
+  open. `tests/test_comments.py` enforces the history part over the source and
+  every shipped header.
+- **Line endings are LF** (`.gitattributes`).
+
+## Releasing
 
 This project follows [Semantic Versioning](https://semver.org/) and keeps a
-[`CHANGELOG.md`](CHANGELOG.md). Pre-1.0, MINOR means "the documented API
-broke" and nothing else — additions and fixes are PATCH. Pushing a tag matching
-`v*` triggers the release workflow: test gate → build → strict docs build
-(a *gate*, not a deploy) → GitHub release → publish to PyPI with
-`skip-existing: true`, so a run that fails partway through can be re-run.
-Creating the release fires `docs.yml`, which owns every Pages deploy. Package
-builds locally with `hatchling`.
-
-## License
-
-MIT — see [LICENSE](LICENSE).
+[`CHANGELOG.md`](CHANGELOG.md) and a [`RELEASENOTES.md`](RELEASENOTES.md).
+Pre-1.0, MINOR means "the documented API broke" and nothing else: additions and
+fixes are PATCH. Pushing a tag matching `v*` triggers the release workflow: test
+gate → build → strict docs build (a *gate*, not a deploy) → GitHub release →
+publish to PyPI with `skip-existing: true`, so a run that fails partway through
+can be re-run. Creating the release fires `docs.yml`, which owns every Pages
+deploy. The package builds locally with `hatchling`.
