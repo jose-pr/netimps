@@ -9,8 +9,8 @@ name: Release
 # upload. docs.yml deploys the docs when this workflow completes.
 #
 # The tag reaches a script only as an environment variable (`env:`), never
-# spliced into its source. Expressions that only test it for a `-` read
-# `github.ref`.
+# spliced into its source. An expression that only tests it for a `-` is
+# evaluated by the runner, not by a shell.
 on:
   push:
     tags:
@@ -228,7 +228,7 @@ jobs:
           # "Full Changelog: <compare link>" line after body_path's content.
           generate_release_notes: true
           # A tag with a `-` in it (v1.0.0-rc.1) is a pre-release.
-          prerelease: ${{ contains(github.ref, '-') }}
+          prerelease: ${{ contains(github.ref_name, '-') }}
           body_path: release_notes.md
           # Pin the release object to the tagged commit; left unset it defaults
           # to the default branch.
@@ -239,7 +239,7 @@ jobs:
   publish-pypi:
     name: Publish to PyPI
     needs: [build, github-release]
-    if: ${{ !contains(github.ref, '-') }}
+    if: ${{ !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
     environment:
       name: pypi
