@@ -15,8 +15,8 @@ import sys
 import pytest
 
 import netimps
-from netimps import cli
-from netimps.cli import Netimps, run
+from netimps.cli import route as _route_cli
+from netimps.cli import Netimps, main
 
 _HAS_DUHO = importlib.util.find_spec("duho") is not None
 
@@ -38,7 +38,7 @@ def _run(capsys, *argv):
     """Run the CLI and return (exit_code, stdout, stderr)."""
     if not _HAS_DUHO:
         pytest.skip("the cli extra is not installed")
-    code = run(list(argv))
+    code = main(list(argv))
     captured = capsys.readouterr()
     return code, captured.out, captured.err
 
@@ -83,7 +83,7 @@ def test_run_without_the_cli_extra_names_it(monkeypatch):
     duho lives in the ``cli`` extra, so the one thing that user must be told
     is the name of the extra -- not an ImportError traceback from an import
     they never wrote. Blocked in-process here, so the assertion is on the
-    exception ``run`` raises rather than on a subprocess's output.
+    exception ``main`` raises rather than on a subprocess's output.
     """
 
     class _Blocked:
@@ -99,20 +99,20 @@ def test_run_without_the_cli_extra_names_it(monkeypatch):
     monkeypatch.setattr(sys, "meta_path", [_Blocked()] + list(sys.meta_path))
 
     with pytest.raises(SystemExit) as caught:
-        run(["ping", "127.0.0.1"])
+        main(["ping", "127.0.0.1"])
     assert "netimps[cli]" in str(caught.value)
 
 
 def test_the_module_imports_and_exits_cleanly_without_duho():
     """End to end: what the installed console script actually does.
 
-    The console script starts with ``from netimps.cli import run``, so the
-    module has to import with duho absent -- a test that only calls ``run``
+    The console script starts with ``from netimps.cli import main``, so the
+    module has to import with duho absent -- a test that only calls ``main``
     in a process where duho was already imported cannot show that.
     """
     script = (
-        _BLOCK_DUHO + "from netimps.cli import run\n"
-        "raise SystemExit(run(['ping', '127.0.0.1']))\n"
+        _BLOCK_DUHO + "from netimps.cli import main\n"
+        "raise SystemExit(main(['ping', '127.0.0.1']))\n"
     )
     out = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
     assert out.returncode == 1
@@ -251,7 +251,7 @@ def test_ping_without_a_host_is_a_usage_error(capsys):
     if not _HAS_DUHO:
         pytest.skip("the cli extra is not installed")
     with pytest.raises(SystemExit) as caught:
-        run(["ping"])
+        main(["ping"])
     assert caught.value.code == 2
     captured = capsys.readouterr()
     assert "dst" in captured.err
@@ -396,7 +396,9 @@ def test_route_renders_the_on_link_tri_state(
     "on-link, no router" for a lookup that was never attempted states as fact
     the one thing that was not established.
     """
-    monkeypatch.setattr(cli, "get_route", lambda dst: _FakeRoute(gateway, on_link))
+    monkeypatch.setattr(
+        _route_cli, "get_route", lambda dst: _FakeRoute(gateway, on_link)
+    )
 
     _, out, _ = _run(capsys, "route", "192.0.2.1", "--json")
     payload = json.loads(out)
@@ -411,8 +413,8 @@ def test_route_renders_the_on_link_tri_state(
 
 def test_route_hops_line_is_added_not_sliced_in(capsys, monkeypatch):
     """``--hops`` appends a line; without it nothing extra is printed."""
-    monkeypatch.setattr(cli, "get_route", lambda dst: _FakeRoute(None, True))
-    monkeypatch.setattr(cli, "count_hops", lambda dst: 3)
+    monkeypatch.setattr(_route_cli, "get_route", lambda dst: _FakeRoute(None, True))
+    monkeypatch.setattr(_route_cli, "count_hops", lambda dst: 3)
 
     _, plain, _ = _run(capsys, "route", "192.0.2.1")
     assert "hops" not in plain
@@ -435,6 +437,6 @@ def test_method_choices_are_enforced(capsys, command):
     if not _HAS_DUHO:
         pytest.skip("the cli extra is not installed")
     with pytest.raises(SystemExit) as caught:
-        run([command, "127.0.0.1", "-m", "carrier-pigeon"])
+        main([command, "127.0.0.1", "-m", "carrier-pigeon"])
     assert caught.value.code == 2
     assert "carrier-pigeon" in capsys.readouterr().err

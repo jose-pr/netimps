@@ -1,16 +1,12 @@
-"""``python -m netimps`` entry point.
+"""``python -m netimps``: the same program as the ``netimps`` console script.
 
-Equivalent to the ``netimps`` console script. Requires the ``cli`` extra::
-
-    pip install netimps[cli]
-
-Without it, this exits with a one-line message naming the extra -- importing
-:mod:`netimps.cli` never needs duho, only running a command does.
+Needs the ``cli`` extra (``pip install netimps[cli]``); without it this exits
+with one line naming the extra.
 """
 
 from __future__ import annotations
 
-from .cli import run
+from .cli import main
 
 if __name__ == "__main__":
-    raise SystemExit(run())
+    raise SystemExit(main())

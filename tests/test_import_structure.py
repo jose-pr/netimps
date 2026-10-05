@@ -32,7 +32,6 @@ MAX_MODULE_LINES = 500
 
 #: Modules over the limit, each with why.
 _LONG_MODULES = {
-    "cli.py": "eleven subcommands in one module, ahead of becoming a package",
     "_fqdn/_name.py": (
         "one class: the label algebra, the constructors and the dunder methods "
         "share its slots, and docstrings are most of the lines"
@@ -43,6 +42,11 @@ _LONG_MODULES = {
 #: with the cycle or the platform that forces it. Every other import of a
 #: sibling is at the top of its module.
 _LOCAL_IMPORTS = {
+    ("cli/__init__.py", "netimps.cli._root"): (
+        "the root parser's base class comes from duho, the optional `cli` "
+        "extra: `import netimps.cli` must work without it so `main` can name "
+        "the extra"
+    ),
     ("_fqdn/_name.py", "netimps._dns"): (
         "_dns imports _ip, which imports this module: a top-level import here "
         "runs while _ip is half built"
