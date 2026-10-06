@@ -97,9 +97,10 @@ and `is_loopback` a `bool` or `None`. `repr` is a constructor call that rebuilds
   skips the loopback rank rather than returning `None`.
 - **`is_multicast` and `is_point_to_point` are the kernel's flags, never the name.**
   The `IFF_MULTICAST` bit is 0x1000 on Linux (measured 2026-10-07 on kernel
-  6.18: `eth0` 0x1003, `lo` 0x9 in `/sys/class/net`) and 0x8000 on macOS and the
-  BSDs from `<net/if.h>`, **not yet measured there**; `IFF_POINTOPOINT` is 0x10
-  on all of them. A POSIX platform with no entry reports `is_multicast` as
+  6.18: `eth0` 0x1003, `lo` 0x9 in `/sys/class/net`) and 0x8000 on macOS and
+  FreeBSD (measured 2026-10-07 on macOS 15.7 and FreeBSD 16.0 against
+  `ifconfig`; the other BSDs carry the same value in `<net/if.h>`, unmeasured);
+  `IFF_POINTOPOINT` is 0x10 on all of them. A POSIX platform with no entry reports `is_multicast` as
   `None`. On Windows the adapter's `Flags` and `IfType` decide; the Windows
   point-to-point types (PPP 23, SLIP 28, tunnel 131) come from the type
   definitions, with no such adapter on the measuring machine.

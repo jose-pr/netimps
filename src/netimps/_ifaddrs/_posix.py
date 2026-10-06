@@ -38,10 +38,12 @@ _IFF_RUNNING = 0x40
 _IFF_POINTOPOINT = 0x10
 #: ``IFF_MULTICAST`` differs. Linux 0x1000, measured 2026-10-07 on kernel 6.18
 #: under WSL2 (``eth0`` reports 0x1003 in ``/sys/class/net``, ``lo`` 0x9, and
-#: ``getifaddrs`` agrees). The BSDs and macOS carry 0x8000 in
-#: ``<net/if.h>``; that value has not been measured on those platforms. Any
-#: other platform has no entry, and the flag is then unknown rather than
-#: guessed.
+#: ``getifaddrs`` agrees). macOS and FreeBSD 0x8000, measured 2026-10-07 on
+#: macOS 15.7 and FreeBSD 16.0 against ``ifconfig`` (``en0`` 0x8863 with
+#: MULTICAST, ``utun0`` 0x8051 with POINTOPOINT and MULTICAST, ``stf0`` 0x0
+#: with neither). The other BSDs carry the same value in ``<net/if.h>`` and
+#: are unmeasured. Any other platform has no entry, and the flag is then
+#: unknown rather than guessed.
 _IFF_MULTICAST_BY_PLATFORM = (
     ("linux", 0x1000),
     ("darwin", 0x8000),
