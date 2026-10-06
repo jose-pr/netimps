@@ -14,7 +14,13 @@ a laptop the max is usually somebody else's scheduler, not your code.
 Nothing here touches the network. The two cases that would -- name resolution
 and ICMP -- are measured against loopback and against the parsing/argv-building
 path respectively, so a result is reproducible on a disconnected machine and
-does not silently benchmark somebody's DNS server.
+does not silently benchmark somebody's DNS server: ``resolve`` asks a fake name
+server this process starts on loopback (the one the test suite uses) and the
+host cases ask for ``localhost`` or an address literal.
+
+The UDP cases come in pairs, one through :class:`netimps.UDPEndpoint` and one
+through the bare socket call it wraps, so the difference is the cost of what the
+endpoint adds. A receive case includes the send that feeds it, in both halves.
 """
 
 from __future__ import annotations
@@ -24,6 +30,7 @@ import json
 import pathlib
 import platform
 import re
+import socket
 import statistics
 import sys
 import time
@@ -80,6 +87,98 @@ def _iter_addresses_once():
     return list(netimps.iter_addresses(_CACHED_INTERFACES))
 
 
+_STATE: "Dict[str, object]" = {}
+_PAYLOAD = b"x" * 32
+
+
+def _udp():
+    """The sockets the UDP cases share, built on the first call and left open.
+
+    ``endpoint`` receives and ``source`` sends to it. ``sink`` is a plain socket
+    the send cases write to: its buffer is large and never drained, and a full
+    one drops datagrams without an error. ``bare`` is a plain bound socket for
+    the ``recvfrom`` baseline, and ``datagram`` is one received datagram for
+    ``reply_socket`` to answer.
+    """
+    state = _STATE.get("udp")
+    if state is None:
+        endpoint = netimps.UDPEndpoint(netimps.bind("127.0.0.1", 0))
+        bare = netimps.bind("127.0.0.1", 0)
+        sink = netimps.bind("127.0.0.1", 0)
+        sink.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 << 20)
+        source = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        for sock in (endpoint.socket, bare, sink):
+            sock.settimeout(5.0)
+        source.sendto(_PAYLOAD, endpoint.socket.getsockname())
+        state = {
+            "endpoint": endpoint,
+            "bare": bare,
+            "sink": sink,
+            "source": source,
+            "datagram": endpoint.recv(2048, resolve_interface=False),
+        }
+        _STATE["udp"] = state
+    return state
+
+
+def _endpoint_recv(resolve_interface):
+    state = _udp()
+    state["source"].sendto(_PAYLOAD, state["endpoint"].socket.getsockname())
+    return state["endpoint"].recv(2048, resolve_interface=resolve_interface)
+
+
+def _bare_recvfrom():
+    state = _udp()
+    state["source"].sendto(_PAYLOAD, state["bare"].getsockname())
+    return state["bare"].recvfrom(2048)
+
+
+def _endpoint_send(src):
+    state = _udp()
+    return state["endpoint"].send(
+        _PAYLOAD, "127.0.0.1", state["sink"].getsockname()[1], src=src
+    )
+
+
+def _bare_sendto():
+    state = _udp()
+    return state["source"].sendto(_PAYLOAD, state["sink"].getsockname())
+
+
+def _reply_socket():
+    state = _udp()
+    state["endpoint"].reply_socket(state["datagram"]).close()
+
+
+def _fake_nameserver():
+    """The test suite's fake name server on loopback, started on first use."""
+    server = _STATE.get("nameserver")
+    if server is None:
+        tests = pathlib.Path(__file__).resolve().parent.parent / "tests"
+        sys.path.insert(0, str(tests))
+        import fakedns  # noqa: E402  (the suite's own module, not an installed one)
+
+        server = fakedns.make_nameserver()
+        _STATE["nameserver"] = server
+    return server
+
+
+def _resolve_fake():
+    server = _fake_nameserver()
+    return netimps.resolve(
+        "host.test",
+        "a",
+        ns="127.0.0.1",
+        port=server.port,
+        backends="wire",
+        search=False,
+    )
+
+
+#: An address no adapter holds, and not loopback: ``is_local_address`` answers
+#: a loopback address before it enumerates, so only this one scans the adapters.
+_UNHELD_ADDRESS = "192.0.2.1"
+
 _SUBNETS = ["10.%d.0.0/16" % octet for octet in range(256)]
 _MANY_ADDRESSES = ["10.0.%d.%d" % (a, b) for a in range(8) for b in range(256)]
 
@@ -127,9 +226,17 @@ BENCHMARKS = {
         _iter_addresses_once,
         "flattening an already-enumerated list; isolates the loop from the syscall",
     ),
-    "is_local_address_hit": (
+    "is_local_address_scan": (
+        lambda: netimps.is_local_address(_UNHELD_ADDRESS),
+        "membership lookup of an address no adapter holds: enumerates every call",
+    ),
+    "is_local_address_scan_cached": (
+        lambda: netimps.is_local_address(_UNHELD_ADDRESS, cache=True),
+        "the same lookup from the enumeration cache, one syscall a second",
+    ),
+    "is_local_address_loopback": (
         lambda: netimps.is_local_address("127.0.0.1"),
-        "membership lookup; re-enumerates, which is why it is not free",
+        "a loopback address returns before any enumeration: the check alone",
     ),
     "get_source_ip_loopback": (
         lambda: netimps.get_source_ip("127.0.0.1"),
@@ -138,6 +245,54 @@ BENCHMARKS = {
     "get_free_port": (
         netimps.get_free_port,
         "bind(0) + close, the standard racy-but-useful helper",
+    ),
+    "udp_endpoint_recv": (
+        lambda: _endpoint_recv(False),
+        "UDPEndpoint.recv without resolving the arrival interface; includes the send",
+    ),
+    "udp_endpoint_recv_resolved": (
+        lambda: _endpoint_recv(True),
+        "UDPEndpoint.recv filling .interface from the shared enumeration cache",
+    ),
+    "udp_recvfrom_baseline": (
+        _bare_recvfrom,
+        "recvfrom on a plain socket, the floor for the two cases above",
+    ),
+    "udp_endpoint_send_src": (
+        lambda: _endpoint_send("127.0.0.1"),
+        "UDPEndpoint.send pinned to a source address, as a multi-homed server replies",
+    ),
+    "udp_endpoint_send": (
+        lambda: _endpoint_send(None),
+        "UDPEndpoint.send with no source pinning",
+    ),
+    "udp_sendto_baseline": (
+        _bare_sendto,
+        "sendto on a plain socket, the floor for the two cases above",
+    ),
+    "udp_reply_socket": (
+        _reply_socket,
+        "reply_socket for a received datagram, bound and closed: one per request",
+    ),
+    "resolve_fake_nameserver": (
+        _resolve_fake,
+        "resolve over the standard-library DNS client to a fake server on loopback",
+    ),
+    "resolve_localhost_system": (
+        lambda: netimps.resolve("localhost", backends="system"),
+        "resolve through the OS resolver; localhost comes from the hosts file",
+    ),
+    "host_ip_localhost": (
+        lambda: netimps.Host("localhost").ip(),
+        "a fresh Host looked up once, the cost a server pays per new peer name",
+    ),
+    "host_ip_literal": (
+        lambda: netimps.Host("192.0.2.10").ip(),
+        "Host.ip of an address: no lookup, only the parse and the wrapper",
+    ),
+    "getaddrinfo_localhost_baseline": (
+        lambda: socket.getaddrinfo("localhost", None),
+        "the standard library's own lookup, the floor for host_ip_localhost",
     ),
     "get_default_port": (
         lambda: netimps.get_default_port("https"),

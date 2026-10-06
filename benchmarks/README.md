@@ -62,10 +62,20 @@ Two groups behave very differently, and conflating them is the usual mistake:
 - **Pure computation** — `parse_*`, `split_host`, `collapse`, `subtract`,
   `get_default_port`. Microseconds, stable, and the only ones where a small
   median change is likely to be real.
-- **Syscall-bound** — `get_interfaces`, `is_local_address`, `get_source_ip`,
-  `get_free_port`. These cross into the kernel, so they are both slower and far
-  noisier. `get_interfaces` is the expensive one by a wide margin, and
-  `is_local_address` is not free precisely because it re-enumerates.
+- **Syscall-bound** — `get_interfaces`, `is_local_address_scan`,
+  `get_source_ip`, `get_free_port`. These cross into the kernel, so they are both
+  slower and far noisier. `get_interfaces` is the expensive one by a wide margin,
+  and `is_local_address` is not free precisely because it re-enumerates: only an
+  address no adapter holds measures that, since a loopback address returns
+  first (`is_local_address_loopback`), and `_scan_cached` shows the cache.
+- **The hot paths of a UDP server and a client** — `udp_endpoint_*`,
+  `udp_reply_socket`, `resolve_*` and `host_ip_*`. Each endpoint case has a
+  `*_baseline` beside it that does the same on a bare socket or the standard
+  library's own lookup, so the difference is what the library adds. The receive
+  cases include the send that feeds them in both halves. `resolve_fake_nameserver`
+  asks the test suite's fake name server on loopback, started on first use, and
+  every name case asks for `localhost` or an address literal: nothing leaves the
+  machine.
 
 ## Baseline
 
