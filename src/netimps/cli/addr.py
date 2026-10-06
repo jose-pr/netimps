@@ -16,7 +16,7 @@ from netimps import (
     is_link_scoped,
 )
 
-from ._common import ERROR, FOUND, Command, error, guarded
+from ._common import ERROR, FOUND, Command, address_text, error, guarded
 
 
 class Addr(Command):
@@ -91,7 +91,7 @@ class Addr(Command):
     def address(self, address: _ty.Any) -> "_ty.Tuple[_ty.Any, str]":
         payload = {
             "kind": "address",
-            "value": str(address),
+            "value": address_text(address),
             "version": address.version,
             "is_private": address.is_private,
             "is_global": address.is_global,
@@ -101,7 +101,7 @@ class Addr(Command):
             "reverse_pointer": address.reverse_pointer,
         }
         plain = [
-            "address     %s (IPv%d)" % (address, address.version),
+            "address     %s (IPv%d)" % (address_text(address), address.version),
             "private     %s" % address.is_private,
             "global      %s" % address.is_global,
             "loopback    %s" % address.is_loopback,

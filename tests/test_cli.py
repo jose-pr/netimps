@@ -591,6 +591,27 @@ def test_scan_json_shapes(capsys, listener):
     assert net == [{"host": "127.0.0.1", "ports": [listener]}]
 
 
+def test_source_prints_a_v4_mapped_address_the_same_on_every_python(
+    capsys, monkeypatch
+):
+    """The text is `::ffff:1.2.3.4` on 3.9 as on 3.14, not the hex form `str`
+    gives before 3.13."""
+    monkeypatch.setattr(
+        _source_cli, "get_source_ip", lambda dst: netimps.IPv6Address("::ffff:102:304")
+    )
+    status, out, _ = _run(capsys, "source", "1.2.3.4", "--json")
+    assert status == 0
+    assert json.loads(out)["src"] == "::ffff:1.2.3.4"
+    status, out, _ = _run(capsys, "source", "1.2.3.4")
+    assert out.strip() == "::ffff:1.2.3.4"
+
+
+def test_addr_prints_a_v4_mapped_address_the_same_on_every_python(capsys):
+    status, out, _ = _run(capsys, "addr", "::ffff:102:304", "--json")
+    assert status == 0
+    assert json.loads(out)["value"] == "::ffff:1.2.3.4"
+
+
 def test_source_json_shape(capsys):
     payload = json.loads(_run(capsys, "source", "127.0.0.1", "--json")[1])
     assert set(payload) == {"dst", "src"} and payload["src"].startswith("127.")

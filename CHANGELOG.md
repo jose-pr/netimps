@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`format_address(address) -> str`** writes an address object as the same text
+  on every Python: a v4-mapped IPv6 address in the mixed form
+  (`::ffff:1.2.3.4`, RFC 5952 section 5), where `str()` writes the hex form
+  (`::ffff:102:304`) before 3.13; any other address as `str()` does, a `%zone`
+  kept and an interface's `/prefix` kept. It takes address and interface
+  objects and raises `TypeError` for anything else.
+
 - **`classify(text)`** reads text as a `MACAddress`, an `IPNetwork`, an
   `IPInterface` or an `IPAddress`, in that order of preference (a `/` makes it
   a network, or an interface when host bits are set), and raises
@@ -139,6 +146,13 @@ probe says so in its prefix.
 | `netimps.cli:run` | `netimps.cli:main` |
 
 ### Changed
+
+- **An address object is written the same on every Python.** `join_host` of a
+  v4-mapped IPv6 address on Python before 3.13 is `[::ffff:1.2.3.4]:80`, where
+  it was `[::ffff:102:304]:80`; the same goes for `str(Host(address))`,
+  `split_host` and `split_zone` of an address object, the repr of `Route` and the
+  addresses the command line prints (`format_address`). Text passed in as a
+  `str` is not re-rendered.
 
 - **The shipped API header is split.** `netimps/AGENTS.md` keeps every public
   name with its signature and one sentence, the exceptions, the command line's

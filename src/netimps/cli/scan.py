@@ -12,7 +12,7 @@ from netimps import (
     try_parse,
 )
 
-from ._common import FOUND, NONE, Command, guarded
+from ._common import FOUND, NONE, Command, address_text, guarded
 
 
 class Scan(Command):
@@ -70,7 +70,7 @@ class Scan(Command):
             timeout=self.timeout,
             workers=self.workers,
         )
-        return [{"host": str(addr), "ports": ports} for addr, ports in found]
+        return [{"host": address_text(addr), "ports": ports} for addr, ports in found]
 
     def scan(self) -> "_ty.Dict[str, _ty.Any]":
         open_ports = scan_ports(

@@ -9,7 +9,7 @@ import typing as _ty
 
 from duho import Cmd, LoggingArgs
 
-from netimps import ResolutionError
+from netimps import IPv4Address, IPv6Address, ResolutionError, format_address
 
 #: Exit statuses, one meaning each (as ``grep``): found or yes, nothing found or
 #: no, and an error.
@@ -18,6 +18,14 @@ NONE = 1
 ERROR = 2
 
 _F = _ty.TypeVar("_F", bound=_ty.Callable[..., int])
+
+
+def address_text(value: "_ty.Any") -> str:
+    """What a result prints as: an address through ``format_address``, so the
+    same text on every Python, and anything else through ``str``."""
+    if isinstance(value, (IPv4Address, IPv6Address)):
+        return format_address(value)
+    return str(value)
 
 
 def error(text: str) -> None:

@@ -6,7 +6,7 @@ import typing as _ty
 
 from netimps import resolve
 
-from ._common import FOUND, NONE, Command, guarded
+from ._common import FOUND, NONE, Command, guarded, address_text
 
 
 class Resolve(Command):
@@ -41,7 +41,7 @@ class Resolve(Command):
         # server) raises, and `guarded` makes it an error: only an answer of
         # "no records" is an empty list.
         records = [
-            str(r)
+            address_text(r)
             for r in resolve(
                 self.query,
                 self.rdtype,

@@ -15,7 +15,7 @@ from ipaddress import (
     IPv6Interface,
     IPv6Network,
 )
-from ._types import IPAddress, ip_literal
+from ._types import IPAddress, format_address, ip_literal
 
 _D = TypeVar("_D")
 
@@ -50,9 +50,9 @@ def _dst_argument(value) -> str:
             "pass an address from it instead" % (value,)
         )
     if isinstance(value, (IPv4Interface, IPv6Interface)):
-        return str(value.ip)
+        return format_address(value.ip)
     if isinstance(value, (IPv4Address, IPv6Address)):
-        return str(value)
+        return format_address(value)
     return _host_text(value)
 
 

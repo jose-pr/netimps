@@ -22,6 +22,7 @@ from ._types import (
     IPv6Address,
     IPv6Interface,
     IPv6Network,
+    format_address,
 )
 from ._host import Host, HostLike, _dst_argument, _host_text, get_hostname
 from ._hosttext import join_host, split_host, split_zone
@@ -64,6 +65,7 @@ __all__ = [
     "split_host",
     "split_zone",
     "join_host",
+    "format_address",
     "unmap",
     "is_wildcard",
     "is_link_scoped",

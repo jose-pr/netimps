@@ -43,7 +43,8 @@ below is imported from `netimps`.
   ```
 
   Accepts a `str`, an address, an `IPv4Interface`/`IPv6Interface` (its `.ip` is
-  used) or an `FQDN`; an already-bracketed string is not double-bracketed.
+  used) or an `FQDN`; an address object is written with `format_address`, so a
+  v4-mapped one is `[::ffff:1.2.3.4]:80` on every Python; an already-bracketed string is not double-bracketed.
   **Only an IPv6 *literal* is bracketed** — a hostname never is, however many
   colons it has, because brackets in a URI authority assert "the inside is an
   address". A port-less v6 comes back bare, which is what makes
@@ -63,6 +64,30 @@ below is imported from `netimps`.
   `float` or a numeric `str` raises `TypeError`; a pair may carry digit text).
   What sits inside brackets is validated as an IPv6 literal by `split_host` as
   `join_host` does, so `split_host("[10.0.0.5]:80")` raises.
+- **`format_address(address: IPAddress | IPInterface) -> str`** — the text of
+  an address object, the same on every Python. `str()` of a v4-mapped IPv6
+  address is the hex form before 3.13 (`::ffff:102:304`) and the mixed form from
+  it (`::ffff:1.2.3.4`, RFC 5952 section 5); this writes the mixed form on every
+  interpreter and, for any other address, what `str()` writes, so a log line, a
+  golden file or a key does not depend on the interpreter:
+
+  ```python
+  format_address(IPv6Address("::ffff:102:304"))   # '::ffff:1.2.3.4' on 3.9 and 3.14
+  format_address(IPv6Address("fe80::1%eth0"))     # 'fe80::1%eth0'  -- zone kept
+  format_address(IPv4Address("1.2.3.4"))          # '1.2.3.4'
+  format_address(IPv6Interface("::ffff:1.2.3.4/96"))  # '::ffff:1.2.3.4/96'
+  ```
+
+  The family never changes (`unmap` is the function that does), a `%zone` is
+  kept, and an interface keeps its `/prefix`. Takes address and interface
+  objects only: text is parsed first, and `TypeError` is raised for text, a
+  network or any other type. Where netimps writes an address object as text it
+  goes through this: `join_host`, `str(Host(address))`, `split_host` and
+  `split_zone` of an address object, `Route`'s repr and the command line's
+  output. A `str` passed in is never re-rendered (`join_host("::ffff:102:304", 80)`
+  keeps its text), the reprs of the standard library's types
+  (`IPv6Address('...')`, which `Interface` and `Datagram` show) are the standard
+  library's, and text read back from a platform tool is not touched.
 - **`unmap(value) -> IPAddress`** — collapse an IPv4-mapped IPv6 address
   (`::ffff:10.0.0.5`) to plain IPv4; anything else passes through. The form a
   dual-stack socket reports an IPv4 peer in, and almost nothing a caller does wants

@@ -67,6 +67,7 @@ EXPECTED = [
     "count_hops",
     "disable_connreset",
     "discover_mtu",
+    "format_address",
     "get_default_port",
     "get_default_scheme",
     "get_free_port",

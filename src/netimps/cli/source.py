@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from netimps import get_source_ip
 
-from ._common import FOUND, NONE, Command, guarded
+from ._common import FOUND, NONE, Command, guarded, address_text
 
 
 class Source(Command):
@@ -23,5 +23,7 @@ class Source(Command):
         if address is None:
             self.note("no route to %s" % self.dst)
             return NONE
-        self.emit({"dst": self.dst, "src": str(address)}, str(address))
+        self.emit(
+            {"dst": self.dst, "src": address_text(address)}, address_text(address)
+        )
         return FOUND

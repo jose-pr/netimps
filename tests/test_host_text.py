@@ -17,8 +17,11 @@ import netimps
 from netimps import (
     FQDN,
     Host,
+    IPv4Interface,
     IPv6Address,
+    IPv6Interface,
     MACAddress,
+    format_address,
     is_local_host,
     join_host,
     split_host,
@@ -482,6 +485,107 @@ def test_the_round_trip_law_survives_the_widening(host, port):
     against strings.
     """
     assert netimps.split_host(netimps.join_host(host, port)) == (str(host), port)
+
+
+# --------------------------------------------------------------------------- #
+# format_address: one text for an address on every Python                      #
+# --------------------------------------------------------------------------- #
+
+#: Each address, spelled every way the standard library accepts, and the one
+#: text it must print as. ``str(IPv6Address)`` of a v4-mapped address is the
+#: hex form before Python 3.13 and the mixed form from it; this table is the
+#: same on every interpreter.
+_ADDRESS_TEXT = [
+    (IPv6Address("::ffff:1.2.3.4"), "::ffff:1.2.3.4"),
+    (IPv6Address("::ffff:102:304"), "::ffff:1.2.3.4"),
+    (IPv6Address("0:0:0:0:0:ffff:102:304"), "::ffff:1.2.3.4"),
+    (IPv6Address("::FFFF:0A00:0005"), "::ffff:10.0.0.5"),
+    (IPv6Address("::ffff:0.0.0.0"), "::ffff:0.0.0.0"),
+    (IPv6Address("::ffff:1.2.3.4%eth0"), "::ffff:1.2.3.4%eth0"),
+    (IPv6Address("fe80::1%eth0"), "fe80::1%eth0"),
+    (IPv6Address("fe80::1%3"), "fe80::1%3"),
+    (IPv6Address("2001:db8::1"), "2001:db8::1"),
+    (IPv6Address("::1"), "::1"),
+    (IPv6Address("::"), "::"),
+    (IPv6Address("::1.2.3.4"), "::102:304"),
+    (IPv6Address("64:ff9b::1.2.3.4"), "64:ff9b::102:304"),
+    (ipaddress.IPv4Address("1.2.3.4"), "1.2.3.4"),
+    (ipaddress.IPv4Address("0.0.0.0"), "0.0.0.0"),
+    (IPv6Interface("::ffff:1.2.3.4/96"), "::ffff:1.2.3.4/96"),
+    (IPv6Interface("2001:db8::1/64"), "2001:db8::1/64"),
+    (IPv4Interface("10.0.0.5/24"), "10.0.0.5/24"),
+]
+
+
+@pytest.mark.parametrize(("address", "text"), _ADDRESS_TEXT)
+def test_format_address_is_the_same_text_on_every_python(address, text):
+    assert format_address(address) == text
+
+
+def test_format_address_agrees_with_str_where_str_is_the_mixed_form():
+    """From 3.13 ``str`` writes the form this function writes on every Python,
+    so it is the interpreter's own answer there and nothing to second-guess."""
+    import sys
+
+    if sys.version_info < (3, 13):
+        pytest.skip("str() of a v4-mapped address is the hex form before 3.13")
+    for address, _ in _ADDRESS_TEXT:
+        assert format_address(address) == str(address)
+
+
+def test_format_address_keeps_the_family_and_the_zone():
+    mapped = IPv6Address("::ffff:1.2.3.4%eth0")
+    text = format_address(mapped)
+    assert text.endswith("%eth0")
+    assert isinstance(ipaddress.ip_address(text.split("%")[0]), IPv6Address)
+    assert netimps.parse(text.split("%")[0], netimps.IPAddress) == IPv6Address(
+        "::ffff:1.2.3.4"
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["::ffff:1.2.3.4", 5, None, b"x", Host("::1"), ipaddress.ip_network("10.0.0.0/8")],
+)
+def test_format_address_takes_address_objects_only(value):
+    """Text is parsed first (``parse``): a function that formats guesses nothing."""
+    with pytest.raises(TypeError):
+        format_address(value)
+
+
+@pytest.mark.parametrize(
+    ("host", "port", "text"),
+    [
+        (IPv6Address("::ffff:1.2.3.4"), 80, "[::ffff:1.2.3.4]:80"),
+        (IPv6Address("::ffff:102:304"), 80, "[::ffff:1.2.3.4]:80"),
+        (IPv6Address("::ffff:1.2.3.4"), None, "::ffff:1.2.3.4"),
+        (IPv6Address("fe80::1%eth0"), 80, "[fe80::1%eth0]:80"),
+        (IPv6Interface("::ffff:1.2.3.4/96"), 80, "[::ffff:1.2.3.4]:80"),
+        (ipaddress.IPv4Address("1.2.3.4"), 80, "1.2.3.4:80"),
+    ],
+)
+def test_join_host_prints_an_address_object_the_same_on_every_python(host, port, text):
+    assert join_host(host, port) == text
+    assert split_host(text)[0] == format_address(
+        host.ip if isinstance(host, (IPv4Interface, IPv6Interface)) else host
+    )
+
+
+def test_a_host_made_from_an_address_object_keeps_the_same_text_on_every_python():
+    assert str(Host(IPv6Address("::ffff:102:304"))) == "::ffff:1.2.3.4"
+    assert str(Host(IPv6Interface("::ffff:1.2.3.4/96"))) == "::ffff:1.2.3.4"
+
+
+def test_a_route_shows_its_addresses_the_same_on_every_python():
+    route = netimps.Route(
+        IPv6Address("::ffff:102:304"),
+        src=IPv6Address("::ffff:1.2.3.5"),
+        gateway=IPv6Address("::ffff:1.2.3.1"),
+    )
+    assert repr(route) == (
+        "Route(dst='::ffff:1.2.3.4', src='::ffff:1.2.3.5', "
+        "gateway='::ffff:1.2.3.1', on_link=False)"
+    )
 
 
 # --------------------------------------------------------------------------- #

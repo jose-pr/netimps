@@ -7,7 +7,7 @@ import typing as _ty
 from netimps import Route as _Route
 from netimps import count_hops, get_route
 
-from ._common import FOUND, Command, guarded
+from ._common import FOUND, Command, address_text, guarded
 
 
 class Route(Command):
@@ -32,9 +32,9 @@ class Route(Command):
 
     def payload(self, found: _Route) -> "_ty.Dict[str, _ty.Any]":
         payload: "_ty.Dict[str, _ty.Any]" = {
-            "dst": str(found.dst),
-            "src": None if found.src is None else str(found.src),
-            "gateway": None if found.gateway is None else str(found.gateway),
+            "dst": address_text(found.dst),
+            "src": None if found.src is None else address_text(found.src),
+            "gateway": None if found.gateway is None else address_text(found.gateway),
             "interface_index": found.interface_index,
             "on_link": found.on_link,
         }
@@ -49,7 +49,7 @@ class Route(Command):
         # failed to establish, so the two stay distinguishable in text
         # ("unknown") exactly as they are in JSON (``null``).
         if found.gateway is not None:
-            gateway = str(found.gateway)
+            gateway = address_text(found.gateway)
         elif found.on_link:
             gateway = "(on-link, no router)"
         else:

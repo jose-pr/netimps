@@ -83,6 +83,7 @@ from netimps import (
     is_local_host,
     is_unicast,
     bind,
+    format_address,
     join_host,
     max_udp_payload,
     parse,
@@ -358,6 +359,8 @@ assert_type(fqdn.wire_length, int)
 
 assert_type(join_host("example.com", 8080), str)
 assert_type(join_host("::1"), str)
+assert_type(format_address(IPv6Address("::ffff:1.2.3.4")), str)
+assert_type(format_address(IPv4Interface("10.0.0.5/24")), str)
 assert_type(unmap("::ffff:10.0.0.5"), IPAddress)
 assert_type(is_wildcard("0.0.0.0"), bool)
 assert_type(is_wildcard(Host("example.org")), bool)

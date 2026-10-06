@@ -6,7 +6,7 @@ import typing as _ty
 
 from netimps import Interface, get_interfaces
 
-from ._common import FOUND, NONE, Command, guarded
+from ._common import FOUND, NONE, Command, address_text, guarded
 
 
 class Interfaces(Command):
@@ -46,7 +46,7 @@ class Interfaces(Command):
                 "mac": None if i.mac is None else str(i.mac),
                 "mtu": i.mtu,
                 "is_loopback": i.is_loopback,
-                "addresses": [str(a) for a in i.ips],
+                "addresses": [address_text(a) for a in i.ips],
                 "is_up": i.is_up,
                 "raw": None if i.raw is None else dict(i.raw),
             }
@@ -64,4 +64,6 @@ class Interfaces(Command):
             iface.mac,
             iface.mtu,
         )
-        return "\n".join([head] + ["  %s" % address for address in iface.ips])
+        return "\n".join(
+            [head] + ["  %s" % address_text(address) for address in iface.ips]
+        )

@@ -322,6 +322,9 @@ CIDR maths, address classification and `host:port` handling. Detail:
 - **`split_zone(text) -> (host, zone | None)`**
   — an IPv6 `%zone` suffix off a host.
 - **`unmap(value) -> IPAddress`** — an IPv4-mapped IPv6 address as plain IPv4.
+- **`format_address(address: IPAddress | IPInterface) -> str`** — an address as
+  text, the same on every Python: a v4-mapped IPv6 address in the mixed form
+  (`::ffff:1.2.3.4`), anything else as `str()` writes it.
 - **`is_wildcard(value: IPAddressLike | HostLike | None) -> bool`**
   — whether a value means "every local address"; a host name is `False`.
 - **`Host(value)`** — a host named by an address or a hostname:

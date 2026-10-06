@@ -7,7 +7,7 @@ import struct as _struct
 import sys as _sys
 from typing import Any, Optional, Tuple, Union
 from .._ifaddrs import _without_zone
-from .._ip import Host, HostLike, IPAddress, _dst_argument
+from .._ip import Host, HostLike, IPAddress, _dst_argument, format_address
 from .._parse import try_parse
 from ._connect import _DEFAULT_PROBE, get_source_ip
 from ._nexthop import _bsd_next_hop, _posix_next_hop, _windows_next_hop
@@ -98,9 +98,9 @@ class Route:
 
     def __repr__(self) -> str:
         return "Route(dst=%r, src=%r, gateway=%r, on_link=%r)" % (
-            None if self.dst is None else str(self.dst),
-            None if self.src is None else str(self.src),
-            None if self.gateway is None else str(self.gateway),
+            None if self.dst is None else _dst_argument(self.dst),
+            None if self.src is None else format_address(self.src),
+            None if self.gateway is None else format_address(self.gateway),
             self.on_link,
         )
 

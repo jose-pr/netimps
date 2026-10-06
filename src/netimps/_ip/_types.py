@@ -115,3 +115,33 @@ def ip_literal(text: str) -> "Optional[IPAddress]":
         return _ipaddress.ip_address(text)
     except ValueError:
         return None
+
+
+def format_address(address: "Union[IPAddress, IPInterface]") -> str:
+    """The text of an address, the same on every supported Python.
+
+    ``str()`` of a v4-mapped IPv6 address is the hex form (``::ffff:102:304``)
+    before Python 3.13 and the mixed form (``::ffff:1.2.3.4``, RFC 5952 section
+    5) from it. This writes the mixed form on every interpreter and, for any
+    other address, what ``str()`` writes. A ``%zone`` is kept and the family
+    never changes (``unmap`` is the function that changes it); an interface
+    keeps its ``/prefix``.
+
+    :raises TypeError: for anything that is not an address or interface object:
+        text is parsed first, and a network names no one address.
+    """
+    if isinstance(address, (IPv4Interface, IPv6Interface)):
+        return "%s/%d" % (format_address(address.ip), address.network.prefixlen)
+    if isinstance(address, IPv4Address):
+        return str(address)
+    if not isinstance(address, IPv6Address):
+        raise TypeError(
+            "expected an address object (IPv4Address, IPv6Address or an "
+            "interface), not %r" % (type(address).__name__,)
+        )
+    mapped = address.ipv4_mapped
+    if mapped is None:
+        return str(address)
+    text = "::ffff:%s" % (mapped,)
+    scope = address.scope_id
+    return text if scope is None else "%s%%%s" % (text, scope)
