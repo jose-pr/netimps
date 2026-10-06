@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys as _sys
-from typing import List, Literal, Optional, cast as _cast
+from typing import List, Literal, Optional, Union, cast as _cast
 from .. import _proc
 from .._ifaddrs import InterfaceLike, interface_address as _interface_address
 from .._ip import HostLike, IPAddress, _dst_argument
@@ -26,6 +26,7 @@ def ping(
     dont_fragment: bool = False,
     method: "Literal['icmp', 'tcp', 'udp']" = "icmp",
     port: "Optional[int]" = None,
+    cache: "Union[bool, float]" = False,
 ) -> "PingResult":
     """Ping ``dst``; the result is truthy if it answered.
 
@@ -93,6 +94,10 @@ def ping(
 
         Likewise an address not held by any local interface makes ``ping``
         fail, so the result is falsy -- this never silently reroutes.
+    :param cache: reuse a recent enumeration of the adapters while ``src`` is
+        resolved, as :func:`get_interfaces` does (``True`` for
+        :data:`INTERFACE_CACHE_TTL` seconds, or a number for that TTL).
+        ``False`` (the default) enumerates on each call; ignored without ``src``.
     :param size: ICMP **payload** bytes -- Windows ``-l``, POSIX ``-s``. Both
         flags mean the same thing: neither counts headers, so the wire packet is
         28 bytes larger (20 IP + 8 ICMP). Payload 1472 is exactly 1500 on the
@@ -192,7 +197,10 @@ def ping(
         if ipv6 is None and _try_parse(dst) is None:
             expected = _expected_addresses(dst, ipv6, timeout)
         resolved_source = _interface_address(
-            src, want_ipv6=_wants_ipv6(dst, ipv6, expected), strict=False
+            src,
+            want_ipv6=_wants_ipv6(dst, ipv6, expected),
+            strict=False,
+            cache=cache,
         )
         if resolved_source is None:
             # An interface with no usable address cannot be a src.

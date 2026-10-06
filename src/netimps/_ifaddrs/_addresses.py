@@ -118,6 +118,7 @@ def iter_addresses(
     interfaces: "Optional[Iterable[Interface]]" = None,
     *,
     family: "Optional[int]" = None,
+    cache: "Union[bool, float]" = False,
 ) -> "Iterator[Tuple[Interface, _IPInterface]]":
     """Yield ``(interface, address)`` once per address, not once per adapter.
 
@@ -139,6 +140,9 @@ def iter_addresses(
         :class:`ValueError` **when this function is called**, not on the first
         ``next()``: a generator that validates lazily reports a bad argument
         from somewhere the traceback does not name the caller.
+    :param cache: when *interfaces* is not given, reuse a recent enumeration, as
+        :func:`get_interfaces` does. ``False`` (the default) enumerates when the
+        first address is asked for. Ignored when *interfaces* is given.
 
     The ``interface`` is the full :class:`Interface`, so its name, MAC and MTU
     stay reachable -- the flattening loses no information.
@@ -147,16 +151,17 @@ def iter_addresses(
     version = (
         None if normalised is None else (4 if normalised == _socket.AF_INET else 6)
     )
-    return _iter_addresses(interfaces, version)
+    return _iter_addresses(interfaces, version, cache)
 
 
 def _iter_addresses(
     interfaces: "Optional[Iterable[Interface]]",
     family: "Optional[int]",
+    cache: "Union[bool, float]" = False,
 ) -> "Iterator[Tuple[Interface, _IPInterface]]":
     """The generator half of :func:`iter_addresses`, after validation."""
     if interfaces is None:
-        interfaces = get_interfaces()
+        interfaces = get_interfaces() if cache is False else get_interfaces(cache=cache)
     for iface in interfaces:
         entries: "Sequence[_IPInterface]"
         if family == 4:

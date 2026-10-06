@@ -233,7 +233,7 @@ def test_the_family_of_src_follows_the_destination(
     """
     asked = []
 
-    def fake_source(src, want_ipv6, strict):
+    def fake_source(src, want_ipv6, strict, cache=False):
         asked.append(want_ipv6)
         return None  # no usable address: ping returns before it spawns anything
 

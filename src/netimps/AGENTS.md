@@ -282,13 +282,15 @@ a per-packet lookup. Detail: `netimps/_ifaddrs/AGENTS.md`.
 - **`get_interfaces(*, raw=False, cache=False) -> List[Interface]`**
   — every adapter, as a list of `Interface`.
 - **`Interface`** — one adapter, read-only and hashable: `.name`, `.index`,
-  `.mac`, `.ips`, `.ipv4`, `.ipv6`, `.mtu`, `.is_up`, `.is_loopback`, `.raw` and
+  `.mac`, `.ips`, `.ipv4`, `.ipv6`, `.mtu`, `.is_up`, `.is_multicast`, `.is_point_to_point`, `.is_loopback`, `.raw` and
   **`Interface.primary_ip(ipv6=False, *, loopback_ok=True)`**, which picks one
   address from `.ips`.
-- **`iter_addresses(interfaces=None, *, family=None)`**
+- **`iter_addresses(interfaces=None, *, family=None, cache=False)`**
   — the flattened `(interface, address)` view, one entry per address.
 - **`get_interface(query=None, *, index=None, strict=True, cache=False) -> Interface | None`**
   — the first adapter matching an address, network, MAC, adapter name or index.
+  Several adapters can share a MAC (teamed or virtual ones): this returns the
+  first in enumeration order, and `iter_interfaces(mac)` yields them all.
 - **`iter_interfaces(query=None, *, index=None, cache=False) -> Iterator[Interface]`**
   — every match for the same queries.
 - **`is_local_address(address, *, cache=False) -> bool`** — true only for
@@ -431,7 +433,7 @@ private runner, so they all behave alike:
 
 Detail: `netimps/_ping/AGENTS.md`.
 
-- **`ping(dst, *, tries=1, timeout=1.0, ipv6=None, src=None, size=None, ttl=None, dont_fragment=False, method="icmp", port=None) -> PingResult`**
+- **`ping(dst, *, tries=1, timeout=1.0, ipv6=None, src=None, size=None, ttl=None, dont_fragment=False, method="icmp", port=None, cache=False) -> PingResult`**
   — is the host up, by ICMP echo, a TCP handshake or a UDP probe. A failure
 never raises; a caller's mistake does.
 - **`PingResult`** — truthy on success and equal to `bool`, with `.ok`, `.dst`,
@@ -441,7 +443,7 @@ never raises; a caller's mistake does.
 
 Detail: `netimps/_sockets/AGENTS.md`.
 
-- **`bind(address="", port=0, *, family=None, kind=SOCK_DGRAM, reuse_address=True, allow_address_takeover=False, reuse_port=False, broadcast=False, connreset=None, interface=None, device=None, options=(), listen=None)`**
+- **`bind(address="", port=0, *, family=None, kind=SOCK_DGRAM, reuse_address=True, allow_address_takeover=False, reuse_port=False, broadcast=False, connreset=None, interface=None, device=None, cache=False, options=(), listen=None)`**
   — create, configure and bind a socket in one call.
 - **`AddressInUseError(NetimpsError, OSError)`** — what `bind()` raises when the
   address is taken, the same on every platform.
@@ -536,7 +538,7 @@ accepts a scheme name too; passing both raises `ValueError`.
 
 ## Multicast
 
-- **`multicast_socket(group=None, port=0, *, interface=None, ttl=1, loop=True, bind=True, reuse=True, ipv6=None)`**
+- **`multicast_socket(group=None, port=0, *, interface=None, ttl=1, loop=True, bind=True, reuse=True, ipv6=None, cache=False)`**
   — a UDP socket configured and joined in one call. `group` is a group address
   or a list of them; `group=None` gives a send-only socket.
   `ipv6=None` takes the family from `group`, which is what you want whenever
@@ -553,7 +555,7 @@ accepts a scheme name too; passing both raises `ValueError`.
   index there — the first non-loopback adapter carrying a link-local address.
   An explicit `interface=` always wins, on every platform; the fallback only
   covers the case where nobody chose and the kernel would not either.
-- **`join_group(sock, group, *, interface=None)`** / **`leave_group(...)`** —
+- **`join_group(sock, group, *, interface=None, cache=False)`** / **`leave_group(...)`** —
   closing the socket drops membership too, so `leave_group` is only needed to
   leave while keeping the socket open.
 - **`is_multicast(address: IPAddressLike) -> bool`** — `224.0.0.0/4` or

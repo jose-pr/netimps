@@ -48,6 +48,8 @@ class Interfaces(Command):
                 "is_loopback": i.is_loopback,
                 "addresses": [address_text(a) for a in i.ips],
                 "is_up": i.is_up,
+                "is_multicast": i.is_multicast,
+                "is_point_to_point": i.is_point_to_point,
                 "raw": None if i.raw is None else dict(i.raw),
             }
             for i in found
@@ -57,6 +59,8 @@ class Interfaces(Command):
         flags = " [loopback]" if iface.is_loopback else ""
         if iface.is_up is False:
             flags += " [down]"
+        if iface.is_point_to_point:
+            flags += " [point-to-point]"
         head = "%s%s\n  index %s   mac %s   mtu %s" % (
             iface.name,
             flags,

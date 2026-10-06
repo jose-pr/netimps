@@ -34,6 +34,41 @@ _IFF_UP = 0x1
 _IFF_RUNNING = 0x40
 
 
+#: ``IFF_POINTOPOINT``: the same value (0x10) on Linux and on the BSDs.
+_IFF_POINTOPOINT = 0x10
+#: ``IFF_MULTICAST`` differs. Linux 0x1000, measured 2026-10-07 on kernel 6.18
+#: under WSL2 (``eth0`` reports 0x1003 in ``/sys/class/net``, ``lo`` 0x9, and
+#: ``getifaddrs`` agrees). The BSDs and macOS carry 0x8000 in
+#: ``<net/if.h>``; that value has not been measured on those platforms. Any
+#: other platform has no entry, and the flag is then unknown rather than
+#: guessed.
+_IFF_MULTICAST_BY_PLATFORM = (
+    ("linux", 0x1000),
+    ("darwin", 0x8000),
+    ("freebsd", 0x8000),
+    ("openbsd", 0x8000),
+    ("netbsd", 0x8000),
+    ("dragonfly", 0x8000),
+)
+
+
+def _iff_multicast() -> "Optional[int]":
+    for prefix, value in _IFF_MULTICAST_BY_PLATFORM:
+        if _sys.platform.startswith(prefix):
+            return value
+    return None
+
+
+def _posix_is_multicast(flags: int) -> "Optional[bool]":
+    """``IFF_MULTICAST``, or ``None`` on a platform whose value is not known."""
+    mask = _iff_multicast()
+    return None if mask is None else bool(flags & mask)
+
+
+def _posix_is_point_to_point(flags: int) -> bool:
+    return bool(flags & _IFF_POINTOPOINT)
+
+
 def _posix_is_up(flags: int) -> bool:
     """Configured up *and* with carrier: ``IFF_UP`` and ``IFF_RUNNING``."""
     return bool(flags & _IFF_UP) and bool(flags & _IFF_RUNNING)
@@ -263,6 +298,8 @@ def _posix_interfaces(want_raw: bool) -> "List[Interface]":
                     is_loopback=bool(flags & _IFF_LOOPBACK),
                     raw={"flags": flags, "families": []} if want_raw else None,
                     is_up=_posix_is_up(flags),
+                    is_multicast=_posix_is_multicast(flags),
+                    is_point_to_point=_posix_is_point_to_point(flags),
                 )
                 found[name] = iface
 

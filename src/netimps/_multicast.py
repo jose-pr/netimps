@@ -95,7 +95,7 @@ _NEEDS_EXPLICIT_V6_SCOPE = not (
 )
 
 
-def _default_v6_scope(group: str) -> int:
+def _default_v6_scope(group: str, cache: "Union[bool, float]" = False) -> int:
     """An interface index for a link-local IPv6 join, where 0 will not do.
 
     Index ``0`` means "kernel's choice", which is the right default and works
@@ -130,7 +130,7 @@ def _default_v6_scope(group: str) -> int:
     if parsed.packed[1] & 0x0F > _LINK_LOCAL_SCOPE:
         return 0
 
-    for iface in get_interfaces():
+    for iface in get_interfaces() if cache is False else get_interfaces(cache=cache):
         if iface.is_loopback or not iface.index:
             continue
         if any(
@@ -141,7 +141,12 @@ def _default_v6_scope(group: str) -> int:
     return 0
 
 
-def _membership_request(group: str, interface: "InterfaceLike", ipv6: bool):
+def _membership_request(
+    group: str,
+    interface: "InterfaceLike",
+    ipv6: bool,
+    cache: "Union[bool, float]" = False,
+):
     """Build the mreq structure for IP_ADD_MEMBERSHIP / IPV6_JOIN_GROUP.
 
     Resolving the interface spec lives here rather than in the callers
@@ -149,18 +154,22 @@ def _membership_request(group: str, interface: "InterfaceLike", ipv6: bool):
     IPv4 wants a local address, IPv6 wants an interface index.
     """
     if ipv6:
-        index = _interface_index(interface) or 0
+        index = _interface_index(interface, cache=cache) or 0
         if index == 0:
-            index = _default_v6_scope(group)
+            index = _default_v6_scope(group, cache)
         return _socket.inet_pton(_socket.AF_INET6, group) + _struct.pack("@I", index)
 
-    address = _interface_address(interface, want_ipv6=False)
+    address = _interface_address(interface, want_ipv6=False, cache=cache)
     local = "0.0.0.0" if address is None else str(address)
     return _struct.pack("4s4s", _socket.inet_aton(group), _socket.inet_aton(local))
 
 
 def join_group(
-    sock: "_socket.socket", group: str, *, interface: "InterfaceLike" = None
+    sock: "_socket.socket",
+    group: str,
+    *,
+    interface: "InterfaceLike" = None,
+    cache: "Union[bool, float]" = False,
 ) -> None:
     """Join ``group`` on ``sock``, optionally via a specific ``interface``.
 
@@ -176,11 +185,15 @@ def join_group(
     Raises :class:`ValueError` for a non-multicast group, or for an interface
     that resolves to no usable address (IPv4) or no index (IPv6), and
     :class:`OSError` if the kernel rejects the join.
+
+    ``cache`` is :func:`get_interfaces`'s argument: with ``True`` or a TTL in
+    seconds, resolving *interface* reuses a recent enumeration instead of
+    making the syscall. ``False`` (the default) enumerates on each call.
     """
     _require_group(group)
 
     ipv6 = ":" in group
-    request = _membership_request(group, interface, ipv6)
+    request = _membership_request(group, interface, ipv6, cache)
     if ipv6:
         sock.setsockopt(_socket.IPPROTO_IPV6, _socket.IPV6_JOIN_GROUP, request)
     else:
@@ -188,17 +201,21 @@ def join_group(
 
 
 def leave_group(
-    sock: "_socket.socket", group: str, *, interface: "InterfaceLike" = None
+    sock: "_socket.socket",
+    group: str,
+    *,
+    interface: "InterfaceLike" = None,
+    cache: "Union[bool, float]" = False,
 ) -> None:
     """Leave ``group`` on ``sock``. The inverse of :func:`join_group`.
 
     Closing the socket drops membership too, so this is only needed to leave a
-    group while keeping the socket open.
+    group while keeping the socket open. ``cache`` is :func:`join_group`'s.
     """
     _require_group(group)
 
     ipv6 = ":" in group
-    request = _membership_request(group, interface, ipv6)
+    request = _membership_request(group, interface, ipv6, cache)
     if ipv6:
         sock.setsockopt(_socket.IPPROTO_IPV6, _socket.IPV6_LEAVE_GROUP, request)
     else:
@@ -215,6 +232,7 @@ def multicast_socket(
     bind: bool = True,
     reuse: bool = True,
     ipv6: "Optional[bool]" = None,
+    cache: "Union[bool, float]" = False,
 ) -> "_socket.socket":
     """Return a UDP socket configured for multicast, joined to ``group``.
 
@@ -256,6 +274,9 @@ def multicast_socket(
         infer from: without it that socket is IPv4, and an IPv6 sender would
         be unreachable through this function. Passing a value that
         contradicts ``group`` raises rather than quietly winning.
+
+    :param cache: :func:`join_group`'s: reuse a recent enumeration while
+        *interface* is resolved, for every group and for the outgoing adapter.
 
     The caller owns the socket and should close it; closing drops membership.
     Raises :class:`ValueError` for a non-multicast group, for groups of mixed
@@ -311,7 +332,7 @@ def multicast_socket(
         # by interface index.
         if interface is not None:
             if ipv6:
-                index = _interface_index(interface)
+                index = _interface_index(interface, cache=cache)
                 if index:
                     sock.setsockopt(
                         _socket.IPPROTO_IPV6,
@@ -319,7 +340,7 @@ def multicast_socket(
                         _struct.pack("@I", index),
                     )
             else:
-                outgoing = _interface_address(interface, want_ipv6=False)
+                outgoing = _interface_address(interface, want_ipv6=False, cache=cache)
                 if outgoing is not None:
                     sock.setsockopt(
                         _socket.IPPROTO_IP,
@@ -333,7 +354,7 @@ def multicast_socket(
             sock.bind(("", port))
 
         for entry in groups:
-            join_group(sock, entry, interface=interface)
+            join_group(sock, entry, interface=interface, cache=cache)
     except BaseException:
         sock.close()
         raise

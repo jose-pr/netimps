@@ -45,7 +45,8 @@ Aliases: `interfaces|ifaces|if`, `resolve|dns`, `check|tcp`, `addr|parse`, `sour
 
 - **JSON shapes** (a contract; keys do not change):
   - `interfaces`: a list of `{name, index, mac, mtu, is_loopback, addresses,
-    is_up, raw}` (`raw` is `null` without `--raw`).
+    is_up, is_multicast, is_point_to_point, raw}` (`raw` is `null` without
+    `--raw`; each flag is `null` when the system did not say).
   - `ping`: `{ok, host, rtt_ms, ttl, attempts, method}`; `rtt_ms` is
     milliseconds (the library's `PingResult.rtt` is seconds).
   - `resolve`: a list of record strings.

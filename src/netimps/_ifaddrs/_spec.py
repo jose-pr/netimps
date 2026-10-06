@@ -27,7 +27,7 @@ not part of the public surface.
 
 from __future__ import annotations
 
-from typing import Optional, Union
+from typing import Any, Dict, Optional, Union
 from .._ip import IPAddress
 from .._mac import MACAddress
 from .._parse import is_valid, try_parse
@@ -43,11 +43,20 @@ from ._model import Interface
 InterfaceLike = Optional[Union[Interface, MACAddress, IPAddress, str]]
 
 
+def _cache_arguments(cache: "Union[bool, float]") -> "Dict[str, Any]":
+    """``cache=`` for an enumeration call, or nothing at all for the default.
+
+    The uncached path is the plain no-argument call, so a replacement for
+    ``get_interfaces`` that takes no ``cache=`` keyword still answers it.
+    """
+    return {} if cache is False else {"cache": cache}
+
+
 def _family_name(want_ipv6: bool) -> str:
     return "IPv6" if want_ipv6 else "IPv4"
 
 
-def _enumeration_is_degraded() -> bool:
+def _enumeration_is_degraded(cache: "Union[bool, float]" = False) -> bool:
     """True when :func:`netimps.get_interfaces` fell back to hostname lookup.
 
     That path reports a single synthetic interface named ``"<unknown>"``
@@ -56,13 +65,17 @@ def _enumeration_is_degraded() -> bool:
     against *that* answers a different question, so the locality rule below
     steps aside rather than rejecting addresses the host really has.
     """
-    return any(iface.name == "<unknown>" for iface in get_interfaces())
+    return any(
+        iface.name == "<unknown>" for iface in get_interfaces(**_cache_arguments(cache))
+    )
 
 
 def interface_address(
     interface: "InterfaceLike",
     want_ipv6: "Optional[bool]" = False,
     strict: bool = True,
+    *,
+    cache: "Union[bool, float]" = False,
 ) -> "Optional[IPAddress]":
     """Reduce an interface spec to a local address.
 
@@ -81,6 +94,8 @@ def interface_address(
     :param strict: when True (the default) an unresolvable spec raises
         :class:`ValueError`; when False it returns the best answer it has and
         never raises.
+    :param cache: ``get_interfaces``'s argument: the lookups this makes reuse a
+        recent enumeration. ``False`` (the default) enumerates on each lookup.
 
     ``None`` in gives ``None`` out -- "no preference", which callers translate
     into leaving the flag off entirely.
@@ -120,7 +135,7 @@ def interface_address(
         isinstance(interface, str) and is_valid(interface, MACAddress)
     ):
         wanted = MACAddress(interface)
-        match = get_interface(wanted)
+        match = get_interface(wanted, **_cache_arguments(cache))
         if match is None:
             return _fail("no interface with MAC %s" % (wanted,))
         interface = match
@@ -129,7 +144,12 @@ def interface_address(
     # it up here beats a confusing setsockopt/subprocess error later.
     if isinstance(interface, str) and not is_valid(interface, IPAddress):
         match = next(
-            (iface for iface in get_interfaces() if iface.name == interface), None
+            (
+                iface
+                for iface in get_interfaces(**_cache_arguments(cache))
+                if iface.name == interface
+            ),
+            None,
         )
         if match is None:
             return _fail("no interface named %r" % (interface,))
@@ -172,12 +192,21 @@ def interface_address(
     # The zoned address goes to the lookup, which filters by the zone: a zone
     # that names an adapter not holding the address is a miss, as it is for
     # `interface_index` and `get_interface`.
-    if strict and get_interface(parsed) is None and not _enumeration_is_degraded():
+    if (
+        strict
+        and get_interface(parsed, **_cache_arguments(cache)) is None
+        and not _enumeration_is_degraded(cache)
+    ):
         return _fail("no local interface holds address %s" % (parsed,))
     return parsed
 
 
-def interface_index(interface: "InterfaceLike", strict: bool = True) -> "Optional[int]":
+def interface_index(
+    interface: "InterfaceLike",
+    strict: bool = True,
+    *,
+    cache: "Union[bool, float]" = False,
+) -> "Optional[int]":
     """Reduce an interface spec to its OS interface index.
 
     The index-shaped sibling of :func:`interface_address`, for the OS
@@ -194,6 +223,8 @@ def interface_index(interface: "InterfaceLike", strict: bool = True) -> "Optiona
     :param strict: when True (the default) a spec that names no local
         interface -- or one the platform reports no index for -- raises
         :class:`ValueError`; when False it returns ``None``.
+    :param cache: ``get_interfaces``'s argument, as on
+        :func:`interface_address`.
 
     ``None`` in gives ``None`` out -- "no preference", which callers translate
     into leaving the index at ``0`` and letting the kernel pick.
@@ -224,7 +255,7 @@ def interface_index(interface: "InterfaceLike", strict: bool = True) -> "Optiona
         isinstance(interface, str) and is_valid(interface, MACAddress)
     ):
         wanted = MACAddress(interface)
-        match = get_interface(wanted)
+        match = get_interface(wanted, **_cache_arguments(cache))
         if match is None:
             return _fail("no interface with MAC %s" % (wanted,))
     elif isinstance(interface, str) and not is_valid(interface, IPAddress):
@@ -232,7 +263,12 @@ def interface_index(interface: "InterfaceLike", strict: bool = True) -> "Optiona
         # socket.if_nametoindex() so the Windows *friendly* name works too --
         # if_nametoindex there wants the adapter's GUID-ish system name.
         match = next(
-            (iface for iface in get_interfaces() if iface.name == interface), None
+            (
+                iface
+                for iface in get_interfaces(**_cache_arguments(cache))
+                if iface.name == interface
+            ),
+            None,
         )
         if match is None:
             return _fail("no interface named %r" % (interface,))
@@ -242,7 +278,7 @@ def interface_index(interface: "InterfaceLike", strict: bool = True) -> "Optiona
             return _fail("cannot resolve %r to a local interface" % (interface,))
         # The zoned address, so the lookup filters by the zone: an unknown
         # adapter name or index is a miss, never an index taken on trust.
-        match = get_interface(address)
+        match = get_interface(address, **_cache_arguments(cache))
         if match is None:
             return _fail("no local interface holds address %s" % (address,))
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import ipaddress as _ipaddress
 import socket as _socket
-from typing import Any, Iterable, NamedTuple, Optional, Tuple
+from typing import Any, Iterable, NamedTuple, Optional, Tuple, Union
 from .._ifaddrs import (
     InterfaceLike,
     interface_address as _interface_address,
@@ -47,6 +47,7 @@ def bind(
     connreset: "Optional[bool]" = None,
     interface: "InterfaceLike" = None,
     device: "InterfaceLike" = None,
+    cache: "Union[bool, float]" = False,
     options: "Iterable[Tuple[int, int, Any]]" = (),
     listen: "Optional[int]" = None,
 ) -> "_socket.socket":
@@ -121,6 +122,11 @@ def bind(
         leaves the platform default (reporting on). ``None`` (the default) is
         ``False`` for a datagram socket and leaves any other socket alone. A
         no-op everywhere but Windows. See :func:`disable_connreset`.
+    :param cache: reuse a recent enumeration of the adapters when
+        ``interface`` or ``device`` has to be resolved, as
+        :func:`get_interfaces` does: ``True`` for
+        :data:`INTERFACE_CACHE_TTL` seconds or a number for that TTL. ``False``
+        (the default) enumerates on each call. Ignored when neither is given.
     :param options: extra ``(level, name, value)`` triples -- or
         :class:`SocketOption` values -- for anything not covered by the named
         arguments.
@@ -162,7 +168,7 @@ def bind(
                 "address on the device goes in address=)"
             )
         # Both checks run before a socket exists, so a refused call leaks nothing.
-        device_name = _device_name(device)
+        device_name = _device_name(device, cache)
         device_option = _device_option()
     # Coerced through the same helper `ping`, `resolve` and `UDPEndpoint.send`
     # use, so one union is accepted everywhere rather than this one entry point
@@ -173,7 +179,9 @@ def bind(
 
     if interface is not None:
         resolved = _interface_address(
-            interface, want_ipv6=None if family is None else family == _socket.AF_INET6
+            interface,
+            want_ipv6=None if family is None else family == _socket.AF_INET6,
+            cache=cache,
         )
         if resolved is None:
             raise ValueError("cannot resolve interface %r to an address" % (interface,))
@@ -192,7 +200,7 @@ def bind(
             # it. The zone is attached here as `%index` and turned into the
             # sockaddr's numeric scope id by `_sockaddr_for_bind`, which is the
             # only spelling POSIX accepts.
-            zone = _interface_index(interface, strict=False)
+            zone = _interface_index(interface, strict=False, cache=cache)
             if zone and "%" not in address:
                 address = "%s%%%d" % (address, int(zone))
 

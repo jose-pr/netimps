@@ -11,7 +11,7 @@ below is imported from `netimps`.
 
 ## Reachability
 
-**`ping(dst, *, tries=1, timeout=1.0, ipv6=None, src=None, size=None, ttl=None, dont_fragment=False, method="icmp", port=None) -> PingResult`**
+**`ping(dst, *, tries=1, timeout=1.0, ipv6=None, src=None, size=None, ttl=None, dont_fragment=False, method="icmp", port=None, cache=False) -> PingResult`**
 
 `method` is `"icmp" | "tcp" | "udp"`.
 
@@ -28,6 +28,7 @@ pins the interface's IPv6 address.
 | --- | --- |
 | `dst` | `HostLike` (hostname, address string, address object, or `IPv4Interface`/`IPv6Interface` -- its `.ip` is pinged). `ping(get_interfaces()[0].ipv4[0])` works directly. |
 | `src` | `Interface`, address, **MAC**, adapter name or string. A MAC is resolved to the adapter holding it. Applies to `tcp`/`udp` as well as ICMP. |
+| `cache` | `get_interfaces`'s: `True` or a TTL in seconds reuses a recent enumeration while `src` is resolved; `False` (default) enumerates per call. |
 | `size` | ICMP payload bytes. The wire packet is larger by the IP header plus 8: **28 bytes for IPv4**, 48 for IPv6. |
 | `ttl` | initial hop limit. The flag letter differs per platform (below); applies to `tcp`/`udp` too. |
 | `dont_fragment` | DF bit — Windows `-f`, Linux `-M do`, BSD `-D`. With `size`, the manual MTU probe: largest passing `size` + 28 = IPv4 path MTU. |

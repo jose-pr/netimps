@@ -533,6 +533,8 @@ def test_interfaces_json_shape(capsys):
         "is_loopback",
         "addresses",
         "is_up",
+        "is_multicast",
+        "is_point_to_point",
         "raw",
     }
 
@@ -546,6 +548,18 @@ def test_interfaces_text_marks_a_down_interface(capsys):
     _, out, _ = _run(capsys, "interfaces")
     down = [i for i in netimps.get_interfaces() if i.is_up is False]
     assert out.count("[down]") == len(down)
+
+
+def test_interfaces_text_marks_a_point_to_point_interface(capsys, monkeypatch):
+    from netimps.cli import interfaces as _interfaces_cli
+
+    tunnel = netimps.Interface("tun0", 5, is_point_to_point=True, is_multicast=False)
+    monkeypatch.setattr(_interfaces_cli, "get_interfaces", lambda raw=False: [tunnel])
+    _, out, _ = _run(capsys, "interfaces")
+    assert "[point-to-point]" in out
+    _, out, _ = _run(capsys, "interfaces", "--json")
+    (record,) = json.loads(out)
+    assert record["is_point_to_point"] is True and record["is_multicast"] is False
 
 
 def test_ping_json_shape(capsys):

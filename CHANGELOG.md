@@ -44,6 +44,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `Datagram.interface_index` and `Route.interface_index` now have a way back to
   an `Interface`.
 
+- **`Interface.is_multicast` and `Interface.is_point_to_point`**: the kernel's
+  `IFF_MULTICAST` and `IFF_POINTOPOINT` on POSIX, and on Windows the absence of
+  the adapter's no-multicast flag and a PPP, SLIP or tunnel adapter type; `None`
+  when the system did not say (the degraded enumeration, a hand-built value, a
+  POSIX platform whose flag value is not known). Part of equality, the hash and
+  the repr, and shown by `netimps interfaces` (`[point-to-point]`, and both in
+  `--json`). Linux reports its loopback as not multicast-capable.
+
+- **`cache=` on the lookups that resolve an adapter**: `iter_addresses`,
+  `bind` (for `interface=` and `device=`), `join_group`, `leave_group`,
+  `multicast_socket` and `ping` (for `src=`) take `get_interfaces`'s argument,
+  so a caller making many of them pays one enumeration. The default stays
+  `False`: nothing changes for a caller who does not ask. `get_interface(mac)`
+  returns the first adapter carrying a MAC, in enumeration order, and
+  `iter_interfaces(mac)` yields them all; the header says so.
+
 - **`Interface.is_up`**: `True` when the interface is usable (`IFF_UP` and
   `IFF_RUNNING` on POSIX, the operational status on Windows), `False` when it is
   not, `None` when the system did not say; part of equality, the hash and the

@@ -102,6 +102,26 @@ _IF_OPER_STATUS_UP = 1
 _IF_OPER_STATUS_UNKNOWN = 4
 
 
+#: ``IP_ADAPTER_NO_MULTICAST`` in ``IP_ADAPTER_ADDRESSES.Flags``. Measured
+#: 2026-10-07 on Windows 11: the Wi-Fi, Bluetooth, Hyper-V and loopback adapters
+#: all report 0x1c0 to 0x1c5 and 0x181, none with this bit, so each is
+#: multicast-capable.
+_IP_ADAPTER_NO_MULTICAST = 0x10
+
+#: ``IfType`` values that are point-to-point by definition (IANA ifType): PPP
+#: (23), SLIP (28) and a tunnel (131). No such adapter was present on the
+#: machine measured on 2026-10-07, so this is the definition and not a reading.
+_POINT_TO_POINT_IF_TYPES = (23, 28, 131)
+
+
+def _windows_is_multicast(flags: int) -> bool:
+    return not flags & _IP_ADAPTER_NO_MULTICAST
+
+
+def _windows_is_point_to_point(if_type: int) -> bool:
+    return if_type in _POINT_TO_POINT_IF_TYPES
+
+
 def _address_is_usable(dad_state: int) -> bool:
     """False for an address the system marks tentative or duplicate."""
     return dad_state not in (_IP_DAD_STATE_TENTATIVE, _IP_DAD_STATE_DUPLICATE)
@@ -246,6 +266,8 @@ def _windows_interfaces(want_raw: bool) -> "List[Interface]":
                 ips=ips,
                 mtu=mtu if mtu > 0 else None,
                 is_up=_windows_is_up(int(node.OperStatus)),
+                is_multicast=_windows_is_multicast(int(node.Flags)),
+                is_point_to_point=_windows_is_point_to_point(int(node.IfType)),
                 # IfType is the Windows spelling of IFF_LOOPBACK.
                 is_loopback=int(node.IfType) == _IF_TYPE_SOFTWARE_LOOPBACK,
                 raw=raw,

@@ -218,8 +218,9 @@ def get_interface(
     ``index=`` among them (``get_interface(iface.name)``,
     ``get_interface(index=iface.index)``); singular lookup is exactly the first
     plural result. Since addresses can appear on more than one adapter
-    (especially unscoped IPv6 link-local addresses), use the plural form when
-    every match matters.
+    (especially unscoped IPv6 link-local addresses) and so can a MAC (a teamed
+    or virtual adapter), this returns the first in enumeration order: use the
+    plural form when every match matters.
 
     :param strict: when True (the default), a miss returns ``None``. When
         False, an address or ``IPInterface`` miss produces a synthetic

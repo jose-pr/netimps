@@ -30,13 +30,15 @@ is deliberately not used.
 | `.mtu` | link MTU in bytes, or `None` |
 | `.primary_ip(ipv6=False, *, loopback_ok=True)` | pick **one** entry from `.ips`, ranked routable → loopback → link-local, or `None` |
 | `.is_up` | `bool` or `None`: `IFF_UP` and `IFF_RUNNING` on POSIX, the operational status on Windows; `None` when the system did not say |
+| `.is_multicast` | `bool` or `None`: `IFF_MULTICAST` on POSIX, no `IP_ADAPTER_NO_MULTICAST` flag on Windows; `None` when the system did not say. Linux reports its loopback as `False` and Windows reports its own as `True` |
+| `.is_point_to_point` | `bool` or `None`: `IFF_POINTOPOINT` on POSIX, a PPP, SLIP or tunnel adapter type on Windows; `None` when the system did not say |
 | `.is_loopback` | the **kernel's** loopback flag when it was reported, otherwise derived from the addresses |
 | `.raw` | `None` unless `raw=True`; a **read-only mapping** of platform-specific leftovers, tuples where the system gave a list |
 
 The constructor raises `TypeError` for a field of the wrong type: `name` is a `str`,
 `index` an `int`, `mac` a `MACAddress` or `None`, each of `ips` an
-`IPv4Interface`/`IPv6Interface`, `mtu` an `int` or `None`, `is_up` and `is_loopback`
-a `bool` or `None`. `repr` is a constructor call that rebuilds an equal value.
+`IPv4Interface`/`IPv6Interface`, `mtu` an `int` or `None`, `is_up`, `is_multicast`, `is_point_to_point`
+and `is_loopback` a `bool` or `None`. `repr` is a constructor call that rebuilds an equal value.
 
 - **`is_loopback` is the kernel's answer, and never the name.** `IFF_LOOPBACK`
   on POSIX, `IF_TYPE_SOFTWARE_LOOPBACK` on Windows, captured during
@@ -93,13 +95,22 @@ a `bool` or `None`. `repr` is a constructor call that rebuilds an equal value.
   real NIC has no loopback entry so the rank takes nothing from it. A NIC
   holding *only* a link-local address still yields it, and `loopback_ok=False`
   skips the loopback rank rather than returning `None`.
-- `__eq__` compares name, index, MAC, addresses, MTU and `is_up`, and the hash
-  covers exactly those; the loopback flag and `.raw` are deliberately outside both.
+- **`is_multicast` and `is_point_to_point` are the kernel's flags, never the name.**
+  The `IFF_MULTICAST` bit is 0x1000 on Linux (measured 2026-10-07 on kernel
+  6.18: `eth0` 0x1003, `lo` 0x9 in `/sys/class/net`) and 0x8000 on macOS and the
+  BSDs from `<net/if.h>`, **not yet measured there**; `IFF_POINTOPOINT` is 0x10
+  on all of them. A POSIX platform with no entry reports `is_multicast` as
+  `None`. On Windows the adapter's `Flags` and `IfType` decide; the Windows
+  point-to-point types (PPP 23, SLIP 28, tunnel 131) come from the type
+  definitions, with no such adapter on the measuring machine.
+- `__eq__` compares name, index, MAC, addresses, MTU, `is_up`, `is_multicast`
+  and `is_point_to_point`, and the hash covers exactly those; the loopback flag and `.raw` are deliberately outside both.
 
-**`iter_addresses(interfaces=None, *, family=None)`** — the flattened
+**`iter_addresses(interfaces=None, *, family=None, cache=False)`** — the flattened
 `(interface, address)` view, yielded once per address rather than per adapter,
 for callers that filter or act per address. The full `Interface` comes along,
 so nothing is lost. Pass an existing enumeration in a loop; it is a syscall.
+`cache=` is `get_interfaces`'s, used when no enumeration is passed.
 
 - **`family` is `4` or `AF_INET`, `6` or `AF_INET6`**, the same two spellings
   everywhere a family is taken (`bind`, `get_free_port`, `has_pktinfo`,
@@ -168,6 +179,10 @@ so nothing is lost. Pass an existing enumeration in a loop; it is a syscall.
   `strict=False`, only an address or `IPInterface` miss synthesizes a host-route
   interface named `"<unknown>"`; networks and MACs have no honest synthetic
   result.
+  **Several adapters can share a MAC** (a teamed or bridged pair, a virtual
+  adapter that copies its host's): `get_interface(mac)` returns the first in
+  enumeration order and never says there were more; `iter_interfaces(mac)`
+  yields every one.
 - **`iter_interfaces(query=None, *, index=None, cache=False) -> Iterator[Interface]`** — every match for the same
   query forms (names and `index=` included), in OS order and with each adapter yielded once even if several
   assigned addresses match. An `Interface` yields itself without enumeration.

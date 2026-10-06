@@ -72,6 +72,18 @@ class Interface:
             bound; on Windows an adapter that is down stays listed with its name,
             MAC, index and MTU, and an address the system marks tentative or
             duplicate is left out of ``ips``.
+        is_multicast: Whether the interface can carry multicast: ``IFF_MULTICAST``
+            on POSIX, and on Windows the absence of the adapter's
+            ``IP_ADAPTER_NO_MULTICAST`` flag. The kernel's own answer, never the
+            name. ``None`` when the system did not say (the degraded enumeration
+            path, hand-built objects, a POSIX platform whose flag value has not
+            been measured). Linux reports its loopback interface as not
+            multicast-capable and Windows reports its own as capable, so the
+            value is a fact about the interface, not about its kind.
+        is_point_to_point: Whether the interface joins two endpoints with no
+            broadcast domain (a tunnel, a PPP or VPN link): ``IFF_POINTOPOINT``
+            on POSIX, a PPP, SLIP or tunnel ``IfType`` on Windows. ``None`` when
+            the system did not say, as for ``is_multicast``.
         is_loopback: The kernel's own loopback flag (``IFF_LOOPBACK`` on POSIX,
             ``IF_TYPE_SOFTWARE_LOOPBACK`` on Windows) when the enumeration
             reported one; otherwise derived from the addresses. The constructor
@@ -87,7 +99,18 @@ class Interface:
     ``IPv4Interface``/``IPv6Interface``).
     """
 
-    __slots__ = ("name", "index", "mac", "ips", "mtu", "is_up", "_is_loopback", "raw")
+    __slots__ = (
+        "name",
+        "index",
+        "mac",
+        "ips",
+        "mtu",
+        "is_up",
+        "is_multicast",
+        "is_point_to_point",
+        "_is_loopback",
+        "raw",
+    )
 
     name: str
     index: int
@@ -95,6 +118,8 @@ class Interface:
     ips: "Tuple[_IPInterface, ...]"
     mtu: "Optional[int]"
     is_up: "Optional[bool]"
+    is_multicast: "Optional[bool]"
+    is_point_to_point: "Optional[bool]"
     _is_loopback: "Optional[bool]"
     raw: "Optional[Mapping[str, Any]]"
 
@@ -109,6 +134,8 @@ class Interface:
         raw: "Optional[Mapping[str, Any]]" = None,
         is_loopback: "Optional[bool]" = None,
         is_up: "Optional[bool]" = None,
+        is_multicast: "Optional[bool]" = None,
+        is_point_to_point: "Optional[bool]" = None,
     ) -> None:
         if not isinstance(name, str):
             raise TypeError("name must be str, not %r" % (type(name).__name__,))
@@ -118,6 +145,8 @@ class Interface:
         _check_optional("mtu", mtu, int)
         _check_optional("is_loopback", is_loopback, bool)
         _check_optional("is_up", is_up, bool)
+        _check_optional("is_multicast", is_multicast, bool)
+        _check_optional("is_point_to_point", is_point_to_point, bool)
         if raw is not None and not isinstance(raw, Mapping):
             raise TypeError(
                 "raw must be a mapping or None, not %r" % (type(raw).__name__,)
@@ -139,6 +168,8 @@ class Interface:
         object.__setattr__(self, "ips", entries)
         object.__setattr__(self, "mtu", mtu)
         object.__setattr__(self, "is_up", is_up)
+        object.__setattr__(self, "is_multicast", is_multicast)
+        object.__setattr__(self, "is_point_to_point", is_point_to_point)
         object.__setattr__(self, "_is_loopback", is_loopback)
         object.__setattr__(self, "raw", None if raw is None else _freeze(raw))
 
@@ -159,6 +190,8 @@ class Interface:
                 raw=None if self.raw is None else _thaw(self.raw),
                 is_loopback=self._is_loopback,
                 is_up=self.is_up,
+                is_multicast=self.is_multicast,
+                is_point_to_point=self.is_point_to_point,
             ),
             (),
         )
@@ -301,6 +334,10 @@ class Interface:
         )
         if self.is_up is not None:
             text += ", is_up=%r" % (self.is_up,)
+        if self.is_multicast is not None:
+            text += ", is_multicast=%r" % (self.is_multicast,)
+        if self.is_point_to_point is not None:
+            text += ", is_point_to_point=%r" % (self.is_point_to_point,)
         return text + ")"
 
     def __eq__(self, other: object) -> bool:
@@ -313,6 +350,8 @@ class Interface:
             and self.ips == other.ips
             and self.mtu == other.mtu
             and self.is_up == other.is_up
+            and self.is_multicast == other.is_multicast
+            and self.is_point_to_point == other.is_point_to_point
         )
 
     def __hash__(self) -> int:
@@ -323,7 +362,18 @@ class Interface:
         operation on the package's flagship return value -- raise
         ``TypeError``. :attr:`raw` is left out of both.
         """
-        return hash((self.name, self.index, self.mac, self.ips, self.mtu, self.is_up))
+        return hash(
+            (
+                self.name,
+                self.index,
+                self.mac,
+                self.ips,
+                self.mtu,
+                self.is_up,
+                self.is_multicast,
+                self.is_point_to_point,
+            )
+        )
 
 
 class _Pending:
@@ -342,12 +392,16 @@ class _Pending:
         is_loopback: bool,
         raw: "Optional[Dict[str, Any]]",
         is_up: "Optional[bool]" = None,
+        is_multicast: "Optional[bool]" = None,
+        is_point_to_point: "Optional[bool]" = None,
     ) -> None:
         self.name = name
         self.index = index
         self.mtu = mtu
         self.is_loopback = is_loopback
         self.is_up = is_up
+        self.is_multicast = is_multicast
+        self.is_point_to_point = is_point_to_point
         self.raw = raw
         self.mac: "Optional[MACAddress]" = None
         self.ips: "List[_IPInterface]" = []
@@ -362,6 +416,8 @@ class _Pending:
             raw=self.raw,
             is_loopback=self.is_loopback,
             is_up=self.is_up,
+            is_multicast=self.is_multicast,
+            is_point_to_point=self.is_point_to_point,
         )
 
 

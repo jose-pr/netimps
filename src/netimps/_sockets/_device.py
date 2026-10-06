@@ -5,7 +5,7 @@ from __future__ import annotations
 import errno as _errno
 import socket as _socket
 import sys as _sys
-from typing import NamedTuple
+from typing import NamedTuple, Union
 from .._exceptions import DeviceBindingUnsupportedError
 from .._ifaddrs import InterfaceLike, interface_index as _interface_index
 
@@ -79,12 +79,12 @@ def _device_option() -> "_DeviceOption":
     return option
 
 
-def _device_name(device: "InterfaceLike") -> str:
+def _device_name(device: "InterfaceLike", cache: "Union[bool, float]" = False) -> str:
     """The kernel's name for the interface *device* names.
 
     :raises ValueError: when *device* names no local interface.
     """
-    index = _interface_index(device, strict=True)
+    index = _interface_index(device, strict=True, cache=cache)
     try:
         return _socket.if_indextoname(int(index or 0))
     except (OSError, OverflowError) as exc:

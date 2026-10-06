@@ -49,6 +49,7 @@ signal, not noise.
 | `test_text_and_wire_forms.py` | text and wire forms: `MACAddress.format`, `FQDN.encode` / `decode` / `decode_at`, over mixed-case, derived and non-ASCII names |
 | `test_value_types.py` | the value types cannot change after construction; copy and pickle keep the class |
 | `test_interfaces.py` | `get_interfaces` against the facts the OS fixes (loopback, indices, `/sys/class/net`), the pure helpers, the fallback, the cache, `get_interface`, `is_local_address`, `iter_addresses`, `is_broadcast` |
+| `test_interface_flags.py` | `Interface.is_multicast` and `is_point_to_point` against the kernel's own flags and a real group join, and `cache=` through `iter_addresses`, `bind`, `join_group`, `leave_group` and `ping`, counted by `interface_enumerations()` |
 | `test_device_binding.py` | `bind(device=)` and `has_device_binding()`: refused before a socket opens, and on Linux the restriction itself on loopback, IPv4 and IPv6 |
 | `test_sockets.py` | bind options, `tcp_check`, route, MTU, `disable_connreset`, `set_buffer_size`, `SocketOption`, `max_udp_payload`; loopback, or assertions about shape |
 | `test_bind_defaults.py` | `bind()`: family inference, the `connreset` default, the hint and the one exception type for a taken port, hijack resistance, port sharing, the address types it accepts |

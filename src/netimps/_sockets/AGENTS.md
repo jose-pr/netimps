@@ -12,7 +12,7 @@ name below is imported from `netimps`.
 
 ## Socket helpers
 
-- **`bind(address="", port=0, *, family=None, kind=SOCK_DGRAM, reuse_address=True, allow_address_takeover=False, reuse_port=False, broadcast=False, connreset=None, interface=None, device=None, options=(), listen=None)`**
+- **`bind(address="", port=0, *, family=None, kind=SOCK_DGRAM, reuse_address=True, allow_address_takeover=False, reuse_port=False, broadcast=False, connreset=None, interface=None, device=None, cache=False, options=(), listen=None)`**
   — create, configure and bind in one call. `family=None` takes the family
   from the address (`family` is `4`/`AF_INET` or `6`/`AF_INET6`, anything else
   raises `ValueError`): an IPv6 literal (or an `interface=` whose address is
@@ -96,6 +96,10 @@ name below is imported from `netimps`.
     `DeviceBindingUnsupportedError`, naming `has_device_binding()`. A refusal by
     the kernel keeps its `OSError` subclass and `errno` (`PermissionError` for
     `EPERM`), names the device, and closes the socket.
+  - **`cache=`** is `get_interfaces`'s (`True` for the default TTL, a number
+    for that TTL, `False` to enumerate per call): it applies to resolving
+    `interface` and `device`, so a server binding several sockets pays one
+    enumeration. Ignored when neither is given.
   - Other `bind` behaviour is unchanged: family inference, `reuse_port`,
     `connreset`, the hint in the error message and `AddressInUseError`.
 
