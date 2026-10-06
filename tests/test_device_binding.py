@@ -108,8 +108,8 @@ def test_device_and_interface_together_are_refused():
 def test_where_there_is_no_option_bind_says_so_before_a_socket_is_opened(
     no_socket_from_bind,
 ):
-    """Windows was measured to have none; macOS and FreeBSD are unmeasured, so
-    they are refused the same way until a measurement says otherwise."""
+    """Windows, macOS and FreeBSD were each measured to have no option that
+    restricts receive, so they are refused the same way."""
     assert has_device_binding() is False
     with pytest.raises(DeviceBindingUnsupportedError) as caught:
         bind("", 0, device=_loopback_name())

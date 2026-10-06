@@ -446,8 +446,8 @@ Detail: `netimps/_sockets/AGENTS.md`.
 - **`AddressInUseError(NetimpsError, OSError)`** — what `bind()` raises when the
   address is taken, the same on every platform.
 - **`has_device_binding() -> bool`** — whether `bind(device=...)` can restrict a
-  socket to one device on this host (Linux, measured); the platforms differ, see
-  the socket header.
+  socket to one device on this host (Linux only; Windows, macOS and FreeBSD were
+  measured and have none); see the socket header.
 - **`DeviceBindingUnsupportedError(NetimpsError, OSError)`** — what
   `bind(device=...)` raises where there is no such option.
 - **`SocketOption(level, name, value)`** — a named triple for `bind`'s

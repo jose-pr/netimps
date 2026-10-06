@@ -17,8 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `NetimpsError` and an `OSError`) is what `bind(device=...)` raises where it
   cannot. Linux uses `SO_BINDTODEVICE`, measured unprivileged on kernel 6.18 for
   IPv4 and IPv6; Windows has no option that restricts receive, so it is
-  unsupported there; macOS and FreeBSD are unmeasured and are treated as
-  unsupported until they are. `device=` with `interface=` raises `ValueError`.
+  unsupported there; macOS 15.7 and FreeBSD 16.0 were measured and are
+  unsupported too (macOS accepts `IP_BOUND_IF`, which scopes what is sent but
+  does not restrict what is received). `device=` with `interface=` raises `ValueError`.
 
 - **`format_address(address) -> str`** writes an address object as the same text
   on every Python: a v4-mapped IPv6 address in the mixed form

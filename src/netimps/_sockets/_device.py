@@ -28,6 +28,13 @@ class _DeviceOption(NamedTuple):
 #: bound to ``eth0`` did not. CPython exports ``socket.SO_BINDTODEVICE`` only
 #: on Linux and only from 3.3, so the literal is used and the ``OSError`` from
 #: ``setsockopt`` is the "refused" signal.
+#:
+#: Platforms with no row, measured 2026-10-07: Windows and macOS 15.7 accept
+#: options that steer what is *sent* (``IP_UNICAST_IF``; ``IP_BOUND_IF`` and
+#: ``IPV6_BOUND_IF``) and a wildcard socket naming another interface still
+#: received a loopback datagram, so none restricts receive; macOS refuses
+#: ``SO_BINDTODEVICE`` and the ``UNICAST_IF`` pair with errno 42. FreeBSD 16.0
+#: refuses every candidate with errno 42.
 _OPTIONS = {
     "linux": _DeviceOption(_socket.SOL_SOCKET, 25),
 }
@@ -39,8 +46,15 @@ _NO_OPTION = {
         "IP_UNICAST_IF and IPV6_UNICAST_IF steer what is sent, and a socket "
         "naming another interface still received a loopback datagram)"
     ),
-    "darwin": "IP_BOUND_IF and IPV6_BOUND_IF are unmeasured, so none is used",
-    "freebsd": "no option is documented and none is measured",
+    "darwin": (
+        "SO_BINDTODEVICE, IP_UNICAST_IF and IPV6_UNICAST_IF are refused, and "
+        "IP_BOUND_IF and IPV6_BOUND_IF are accepted but scope what is sent, "
+        "not what is received (measured 2026-10-07, macOS 15.7)"
+    ),
+    "freebsd": (
+        "every candidate option is refused with ENOPROTOOPT (measured "
+        "2026-10-07, FreeBSD 16.0)"
+    ),
 }
 
 

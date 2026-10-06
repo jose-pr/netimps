@@ -103,8 +103,8 @@ name below is imported from `netimps`.
   | --- | --- | --- |
   | Linux | `SO_BINDTODEVICE` (25), the device's name as bytes, IPv4 and IPv6 | 2026-10-07, kernel 6.18 under WSL2, as uid 1000 and as root: a wildcard socket bound to `lo` received a loopback datagram, one bound to `eth0` did not. Unprivileged from kernel 5.7; before it `CAP_NET_RAW` is needed and `bind` raises `PermissionError`. |
   | Windows | none: `has_device_binding()` is `False` | 2026-10-07, Windows 11: `IP_UNICAST_IF` and `IPV6_UNICAST_IF` are accepted (v4 index in network order, v6 in host order) and steer what is *sent*; a wildcard socket naming another interface still received a loopback datagram, so they do not restrict receive. |
-  | macOS | unmeasured: treated as none | `IP_BOUND_IF` (25) and `IPV6_BOUND_IF` (125) are candidates; no code uses them until a measurement shows they restrict receive. |
-  | FreeBSD | unmeasured: treated as none | no option is documented. |
+  | macOS | none: `has_device_binding()` is `False` | 2026-10-07, macOS 15.7, as an ordinary user and as root: `SO_BINDTODEVICE`, `IP_UNICAST_IF` and `IPV6_UNICAST_IF` are refused (errno 42); `IP_BOUND_IF` (25) and `IPV6_BOUND_IF` (125) are accepted and scope what is *sent*, but a wildcard socket bound to a real adapter still received a datagram sent to loopback, so they do not restrict receive. |
+  | FreeBSD | none: `has_device_binding()` is `False` | 2026-10-07, FreeBSD 16.0, as root: every candidate (`SO_BINDTODEVICE`, `IP_BOUND_IF`, `IPV6_BOUND_IF`, `IP_UNICAST_IF`, `IPV6_UNICAST_IF`) is refused with errno 42. |
 
   `has_device_binding()` asks the kernel on a throwaway socket naming loopback,
   so it also answers "may this process", and is `False` without opening a
