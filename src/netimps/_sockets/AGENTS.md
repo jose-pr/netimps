@@ -12,7 +12,7 @@ name below is imported from `netimps`.
 
 ## Socket helpers
 
-- **`bind(address="", port=0, *, family=None, kind=SOCK_DGRAM, reuse_address=True, allow_address_takeover=False, reuse_port=False, broadcast=False, connreset=None, interface=None, options=(), listen=None)`**
+- **`bind(address="", port=0, *, family=None, kind=SOCK_DGRAM, reuse_address=True, allow_address_takeover=False, reuse_port=False, broadcast=False, connreset=None, interface=None, device=None, options=(), listen=None)`**
   — create, configure and bind in one call. `family=None` takes the family
   from the address (`family` is `4`/`AF_INET` or `6`/`AF_INET6`, anything else
   raises `ValueError`): an IPv6 literal (or an `interface=` whose address is
@@ -23,7 +23,8 @@ name below is imported from `netimps`.
   `ConnectionResetError` on a later receive) and leaves other sockets alone;
   `True` keeps the platform's reporting. `interface` accepts the usual union
   (`Interface`, MAC, adapter name, address) and **raises `ValueError`** if
-  unresolvable rather than silently binding the wildcard. `options` is read
+  unresolvable rather than silently binding the wildcard. `device=` restricts
+  the socket to one device; see its own entry below. `options` is read
   once, so a generator is honoured. `reuse_port=True` shares the port with other
   sockets that ask: `SO_REUSEPORT` on POSIX, and on **Windows**, which has no such
   option, a datagram socket takes the address-sharing path (`SO_REUSEADDR`), so
@@ -76,6 +77,45 @@ name below is imported from `netimps`.
   > flag that reads as "strictest" would be the least strict one available.
   > `reuse_address` governs POSIX `SO_REUSEADDR` only;
   > `allow_address_takeover=True` is the single way to opt into a takeover.
+- **`bind(..., device=<InterfaceLike>)`** — restrict the socket to **one
+  device**, so it receives only what arrives on it. The reason it exists: on
+  Linux a socket bound to an adapter's *address* hears no limited broadcast and
+  no subnet broadcast, while a wildcard socket bound to the *device* hears the
+  broadcasts of that adapter only, which is what a per-interface broadcast
+  listener on a multi-homed host needs. `device` takes the same union as
+  `interface` (an `Interface`, a MAC, an adapter name, an address held by the
+  adapter).
+  - **The address stays what `address` says.** With none, the wildcard is bound
+    (IPv4; `family=6` for IPv6). With an address too, the kernel applies both:
+    the socket receives what is addressed to that address *and* arrived on the
+    device. `address=` is not checked against the device.
+  - **`device=` with `interface=` raises `ValueError`**: `interface` already
+    stands for an address on an adapter; put such an address in `address=`.
+  - **Refused before any socket is opened**: a device naming no local interface
+    is a `ValueError` (on every platform); a platform with no option is a
+    `DeviceBindingUnsupportedError`, naming `has_device_binding()`. A refusal by
+    the kernel keeps its `OSError` subclass and `errno` (`PermissionError` for
+    `EPERM`), names the device, and closes the socket.
+  - Other `bind` behaviour is unchanged: family inference, `reuse_port`,
+    `connreset`, the hint in the error message and `AddressInUseError`.
+
+  | Platform | Device binding | Measured |
+  | --- | --- | --- |
+  | Linux | `SO_BINDTODEVICE` (25), the device's name as bytes, IPv4 and IPv6 | 2026-10-07, kernel 6.18 under WSL2, as uid 1000 and as root: a wildcard socket bound to `lo` received a loopback datagram, one bound to `eth0` did not. Unprivileged from kernel 5.7; before it `CAP_NET_RAW` is needed and `bind` raises `PermissionError`. |
+  | Windows | none: `has_device_binding()` is `False` | 2026-10-07, Windows 11: `IP_UNICAST_IF` and `IPV6_UNICAST_IF` are accepted (v4 index in network order, v6 in host order) and steer what is *sent*; a wildcard socket naming another interface still received a loopback datagram, so they do not restrict receive. |
+  | macOS | unmeasured: treated as none | `IP_BOUND_IF` (25) and `IPV6_BOUND_IF` (125) are candidates; no code uses them until a measurement shows they restrict receive. |
+  | FreeBSD | unmeasured: treated as none | no option is documented. |
+
+  `has_device_binding()` asks the kernel on a throwaway socket naming loopback,
+  so it also answers "may this process", and is `False` without opening a
+  socket where the platform has no row. A negative case that needs a peer (a
+  datagram entering through a real adapter and reaching a socket bound to
+  another) is not covered here; loopback shows the half where a socket bound
+  elsewhere does not hear loopback.
+- **`has_device_binding() -> bool`** — see above; never raises.
+- **`DeviceBindingUnsupportedError(NetimpsError, OSError)`** — raised by
+  `bind(device=...)` on a platform with no device binding, with `errno`
+  `ENOPROTOOPT`.
 - **`AddressInUseError(NetimpsError, OSError)`** — what `bind()` raises when the address is
   taken, on every platform and interpreter. The platforms surface that
   situation three ways: `PermissionError`/errno 13 on Windows 3.14,

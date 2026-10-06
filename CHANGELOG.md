@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`bind(..., device=<interface>)` restricts a socket to one device**, so a
+  wildcard socket receives what arrives on that adapter only: the way to listen
+  for the broadcasts of one adapter on a multi-homed host, which a socket bound to
+  the adapter's address cannot hear on Linux. **`has_device_binding()`** says
+  whether the platform can, and **`DeviceBindingUnsupportedError`** (a
+  `NetimpsError` and an `OSError`) is what `bind(device=...)` raises where it
+  cannot. Linux uses `SO_BINDTODEVICE`, measured unprivileged on kernel 6.18 for
+  IPv4 and IPv6; Windows has no option that restricts receive, so it is
+  unsupported there; macOS and FreeBSD are unmeasured and are treated as
+  unsupported until they are. `device=` with `interface=` raises `ValueError`.
+
 - **`format_address(address) -> str`** writes an address object as the same text
   on every Python: a v4-mapped IPv6 address in the mixed form
   (`::ffff:1.2.3.4`, RFC 5952 section 5), where `str()` writes the hex form

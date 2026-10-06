@@ -21,6 +21,7 @@ __all__ = [
     "ResolutionTimeoutError",
     "DNSDecodeError",
     "AddressInUseError",
+    "DeviceBindingUnsupportedError",
 ]
 
 
@@ -106,6 +107,18 @@ class AddressInUseError(NetimpsError, OSError):
     while ``except PermissionError`` stops catching a case that was never about
     permission. A genuine privilege failure -- POSIX ``EACCES`` on a port below
     1024 -- is left exactly as it was.
+    """
+
+    __slots__ = ()
+
+
+class DeviceBindingUnsupportedError(NetimpsError, OSError):
+    """``bind(device=...)`` on a platform with no way to restrict a socket to a device.
+
+    Raised before any socket is opened, with ``errno`` set to ``ENOPROTOOPT``
+    and a message naming :func:`has_device_binding`, which says in advance
+    whether a platform can. An :class:`OSError`, so an ``except OSError`` around
+    a ``bind`` keeps catching it.
     """
 
     __slots__ = ()

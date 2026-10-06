@@ -11,6 +11,7 @@ from .._ifaddrs import (
     interface_index as _interface_index,
 )
 from .._ip import HostLike, _dst_argument, _family_argument
+from ._device import _DeviceOption, _apply_device, _device_name, _device_option
 from ._hint import _with_hint
 from ._options import disable_connreset
 
@@ -45,6 +46,7 @@ def bind(
     broadcast: bool = False,
     connreset: "Optional[bool]" = None,
     interface: "InterfaceLike" = None,
+    device: "InterfaceLike" = None,
     options: "Iterable[Tuple[int, int, Any]]" = (),
     listen: "Optional[int]" = None,
 ) -> "_socket.socket":
@@ -84,6 +86,20 @@ def bind(
         Accepts an :class:`Interface`, a MAC, an adapter name or an address --
         the same union as ``ping(src=)``. Raises :class:`ValueError` if it
         cannot be resolved, rather than silently binding the wildcard.
+    :param device: restrict the socket to this one device, so it receives only
+        what arrives on it. Takes the same union as ``interface``. **The address
+        stays what ``address`` says**: with no address the wildcard is bound
+        (IPv4 unless ``family`` says otherwise), which is what a broadcast
+        listener on one adapter of a multi-homed host wants, and a socket bound
+        to an adapter's *address* hears no broadcast on Linux. With an address
+        too, the kernel applies both: the socket receives what is addressed to
+        that address *and* arrived on the device. ``device`` and ``interface``
+        together raise :class:`ValueError`, since ``interface`` already stands
+        for an address on an adapter. A device naming no local interface raises
+        :class:`ValueError` and a platform with no device binding raises
+        :class:`DeviceBindingUnsupportedError`, both before a socket is
+        opened; :func:`has_device_binding` says which platforms can. Measured
+        on Linux only: see the platform notes in the header.
     :param reuse_address: ask for the conventional "restart without waiting
         out ``TIME_WAIT``" behaviour. **What that takes differs by platform**,
         so the flag is not a single socket option: POSIX gets
@@ -137,6 +153,17 @@ def bind(
     the exception propagates, so a failed call leaks nothing.
     """
     family = _family_argument(family)
+    device_name: "Optional[str]" = None
+    device_option: "Optional[_DeviceOption]" = None
+    if device is not None:
+        if interface is not None:
+            raise ValueError(
+                "device= and interface= both name an adapter: pass one (an "
+                "address on the device goes in address=)"
+            )
+        # Both checks run before a socket exists, so a refused call leaks nothing.
+        device_name = _device_name(device)
+        device_option = _device_option()
     # Coerced through the same helper `ping`, `resolve` and `UDPEndpoint.send`
     # use, so one union is accepted everywhere rather than this one entry point
     # being stricter than its neighbours.
@@ -245,6 +272,8 @@ def bind(
             disable_connreset(sock)
         for level, name, value in options:
             sock.setsockopt(level, name, value)
+        if device_name is not None and device_option is not None:
+            _apply_device(sock, device_option, device_name)
 
         try:
             sock.bind(_sockaddr_for_bind(family, address, port))

@@ -64,7 +64,9 @@ from netimps import (
     ResolutionTimeoutError,
     DNSDecodeError,
     AddressInUseError,
+    DeviceBindingUnsupportedError,
     get_interface,
+    has_device_binding,
     iter_interfaces,
     is_broadcast,
     is_link_scoped,
@@ -447,6 +449,8 @@ def _exceptions_subclass_what_they_promise() -> None:
     _value(DNSDecodeError("x"))
     _timeout(ResolutionTimeoutError("x"))
     _os(AddressInUseError(98, "x"))
+    _os(DeviceBindingUnsupportedError(92, "x"))
+    _package(DeviceBindingUnsupportedError(92, "x"))
     _os(ResolutionError("x"))
     _os(NoAnswerError("x"))
     _package(ResolutionTimeoutError("x"))
@@ -497,6 +501,8 @@ assert_type(is_broadcast("10.0.0.255"), bool)
 
 # `family` is optional and inferred; `connreset` is a tri-state.
 assert_type(bind("::1", 0), socket.socket)
+assert_type(bind("", 67, device="eth0", broadcast=True), socket.socket)
+assert_type(has_device_binding(), bool)
 assert_type(bind(family=None, connreset=None), socket.socket)
 assert_type(bind("", 67, family=socket.AF_INET, connreset=False), socket.socket)
 

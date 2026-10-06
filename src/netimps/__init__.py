@@ -49,6 +49,7 @@ from ipaddress import (
 
 from ._exceptions import (
     AddressInUseError,
+    DeviceBindingUnsupportedError,
     DNSDecodeError,
     NetimpsError,
     NetimpsValueError,
@@ -134,6 +135,7 @@ from ._msg._patch import _patch_requested as _msg_patch_requested
 from ._udp import Datagram, UDPEndpoint, has_pktinfo, SocketAddress
 from ._sockets import (
     bind,
+    has_device_binding,
     max_udp_payload,
     SocketOption,
     disable_connreset,
@@ -224,6 +226,8 @@ __all__ = [
     "get_route",
     "bind",
     "AddressInUseError",
+    "DeviceBindingUnsupportedError",
+    "has_device_binding",
     "SocketOption",
     "disable_connreset",
     "set_buffer_size",

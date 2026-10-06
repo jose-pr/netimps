@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from ._bind import SocketOption, bind, get_free_port
 from ._connect import get_source_ip, tcp_check, wait_for_port
+from ._device import has_device_binding
 from ._hint import bind_error_hint
 from ._hops import count_hops
 from ._mtu import discover_mtu, max_udp_payload
@@ -31,6 +32,7 @@ from ._route import Route, get_route
 
 __all__ = [
     "bind",
+    "has_device_binding",
     "max_udp_payload",
     "SocketOption",
     "disable_connreset",

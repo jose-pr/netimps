@@ -441,10 +441,15 @@ never raises; a caller's mistake does.
 
 Detail: `netimps/_sockets/AGENTS.md`.
 
-- **`bind(address="", port=0, *, family=None, kind=SOCK_DGRAM, reuse_address=True, allow_address_takeover=False, reuse_port=False, broadcast=False, connreset=None, interface=None, options=(), listen=None)`**
+- **`bind(address="", port=0, *, family=None, kind=SOCK_DGRAM, reuse_address=True, allow_address_takeover=False, reuse_port=False, broadcast=False, connreset=None, interface=None, device=None, options=(), listen=None)`**
   — create, configure and bind a socket in one call.
 - **`AddressInUseError(NetimpsError, OSError)`** — what `bind()` raises when the
   address is taken, the same on every platform.
+- **`has_device_binding() -> bool`** — whether `bind(device=...)` can restrict a
+  socket to one device on this host (Linux, measured); the platforms differ, see
+  the socket header.
+- **`DeviceBindingUnsupportedError(NetimpsError, OSError)`** — what
+  `bind(device=...)` raises where there is no such option.
 - **`SocketOption(level, name, value)`** — a named triple for `bind`'s
   `options=`.
 - **`disable_connreset(sock) -> bool`**
@@ -765,6 +770,7 @@ caller would already catch, so an existing `except ValueError` /
 | `ResolutionTimeoutError` | `ResolutionError`, `TimeoutError` | a backend's deadline expired |
 | `DNSDecodeError` | `NetimpsValueError` | the DNS codec cannot read a reply or write a name |
 | `AddressInUseError` | `NetimpsError`, `OSError` | `bind()` found the address taken |
+| `DeviceBindingUnsupportedError` | `NetimpsError`, `OSError` | `bind(device=...)` on a platform with no device binding |
 
 A caller's own mistake (a bad option, a wrong argument type) is plain
 `ValueError` / `TypeError`, never a `NetimpsError`. `NetimpsValueError` is what

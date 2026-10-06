@@ -5,6 +5,9 @@ A base that is wrong here is invisible to a caller until an ``except`` clause
 they wrote against the builtin (or against the package base) stops matching.
 """
 
+import copy
+import errno
+import pickle
 import socket
 import struct
 import threading
@@ -17,6 +20,7 @@ import netimps
 # Private: the resolver package: its seams are patched where they are read and its search orders pinned.
 from netimps import (
     AddressInUseError,
+    DeviceBindingUnsupportedError,
     DNSDecodeError,
     NetimpsError,
     NetimpsValueError,
@@ -38,6 +42,7 @@ _BASES = [
     (ResolutionTimeoutError, (ResolutionError, TimeoutError)),
     (DNSDecodeError, (NetimpsValueError,)),
     (AddressInUseError, (NetimpsError, OSError)),
+    (DeviceBindingUnsupportedError, (NetimpsError, OSError)),
 ]
 _IDS = [cls.__name__ for cls, _ in _BASES]
 
@@ -54,6 +59,28 @@ def test_every_exception_is_exported_from_the_root(cls, bases):
     """A class missing from the root `__all__` is not API a caller may catch."""
     assert getattr(netimps, cls.__name__) is cls
     assert cls.__name__ in netimps.__all__
+
+
+@pytest.mark.parametrize("cls, bases", _BASES, ids=_IDS)
+@pytest.mark.parametrize(
+    "roundtrip",
+    [
+        copy.copy,
+        copy.deepcopy,
+        lambda e: pickle.loads(pickle.dumps(e)),
+        lambda e: pickle.loads(pickle.dumps(e, protocol=0)),
+    ],
+    ids=["copy", "deepcopy", "pickle", "pickle0"],
+)
+def test_every_exception_survives_copy_and_pickle(cls, bases, roundtrip):
+    """A worker process or a retry wrapper copies the exception it re-raises;
+    the class, the arguments and (for an OSError) the errno must come back."""
+    error = cls(errno.ENOPROTOOPT, "no option") if OSError in cls.__mro__ else cls("x")
+    clone = roundtrip(error)
+    assert type(clone) is cls
+    assert clone.args == error.args
+    if isinstance(error, OSError):
+        assert clone.errno == error.errno
 
 
 def test_every_exception_class_is_defined_in_one_module():
