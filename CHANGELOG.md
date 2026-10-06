@@ -44,6 +44,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `Datagram.interface_index` and `Route.interface_index` now have a way back to
   an `Interface`.
 
+- **`aretry(func, attempts=3, *, delay, multiplier, max_delay, jitter, retryable,
+  on_retry, jitter_seconds, symmetric)` and `await_for_port(dst, port, *,
+  deadline=30.0, interval=0.1, timeout=None)`** are `retry` and `wait_for_port`
+  as coroutines: the same arguments, schedule, answers and exceptions, with the
+  waits as `asyncio.sleep` and the connect as a non-blocking connect on the
+  running loop, so no thread is used for an address (a name is looked up with
+  `loop.getaddrinfo`, the loop's executor). Cancelling leaves no socket and no
+  task behind, and `await_for_port` ends within a second after its `deadline`.
+  `import netimps` still does not import asyncio. The header's asyncio section
+  now lists by name what awaits without a thread and what needs `to_thread` or
+  `run_in_executor`, with the `functools.partial` form for keyword-only options.
+
 - **`Interface.is_multicast` and `Interface.is_point_to_point`**: the kernel's
   `IFF_MULTICAST` and `IFF_POINTOPOINT` on POSIX, and on Windows the absence of
   the adapter's no-multicast flag and a PPP, SLIP or tunnel adapter type; `None`

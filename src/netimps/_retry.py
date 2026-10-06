@@ -10,9 +10,9 @@ Re-exported from :mod:`netimps`.
 from __future__ import annotations
 
 import time as _time
-from typing import Callable, Iterator, Optional, Tuple, Type, TypeVar
+from typing import Awaitable, Callable, Iterator, Optional, Tuple, Type, TypeVar
 
-__all__ = ["retry", "backoff_delays", "Backoff"]
+__all__ = ["retry", "aretry", "backoff_delays", "Backoff"]
 
 #: Exceptions worth retrying by default. ``OSError`` covers the whole socket
 #: family (timeout, refused, reset, unreachable, DNS). Deliberately narrow:
@@ -408,6 +408,73 @@ def retry(
                 on_retry(index + 1, exc, wait)
             if wait:
                 _sleep(wait)
+
+    # Unreachable: the loop either returns or raises.
+    raise AssertionError("retry loop exited without result")
+
+
+async def aretry(
+    func: "Callable[[], Awaitable[_T]]",
+    attempts: int = 3,
+    *,
+    delay: float = 0.5,
+    multiplier: float = 2.0,
+    max_delay: float = 30.0,
+    jitter: float = 0.1,
+    retryable: "Tuple[Type[BaseException], ...]" = DEFAULT_RETRYABLE,
+    on_retry: "Optional[Callable[[int, BaseException, float], None]]" = None,
+    jitter_seconds: "Optional[float]" = None,
+    symmetric: bool = False,
+) -> "_T":
+    """:func:`retry` for a coroutine: ``await func()``, waiting on the running loop.
+
+    ::
+
+        result = await aretry(lambda: client.fetch(url))
+        result = await aretry(partial(fetch, url), attempts=5, delay=1.0)
+
+    ``func`` is called with no arguments and must return an awaitable (a
+    coroutine function, or a lambda returning one); anything else raises
+    :class:`TypeError`. Every other argument means what it means on
+    :func:`retry`, is checked by the same rules before the first call, and the
+    last exception is re-raised unwrapped. ``on_retry`` is a plain function.
+
+    The waits are ``asyncio.sleep`` on the running loop, so no thread is used
+    and the loop keeps running. Cancelling the task cancels the call or the wait
+    in progress and propagates ``CancelledError`` at once; ``retryable`` never
+    catches it, whatever it names, unless it names ``BaseException``.
+    """
+    import asyncio
+
+    delays = list(
+        backoff_delays(
+            attempts=attempts,
+            delay=delay,
+            multiplier=multiplier,
+            max_delay=max_delay,
+            jitter=jitter,
+            jitter_seconds=jitter_seconds,
+            symmetric=symmetric,
+        )
+    )
+
+    for index in range(attempts):
+        try:
+            pending = func()
+            if not hasattr(pending, "__await__"):
+                raise TypeError(
+                    "aretry needs a callable that returns an awaitable, got %r"
+                    % (type(pending).__name__,)
+                )
+            return await pending
+        except retryable as exc:
+            if index >= len(delays):
+                raise  # last attempt: surface the real error, unwrapped
+            wait = delays[index]
+            if on_retry is not None:
+                on_retry(index + 1, exc, wait)
+            if wait:
+                await asyncio.sleep(wait)
 
     # Unreachable: the loop either returns or raises.
     raise AssertionError("retry loop exited without result")

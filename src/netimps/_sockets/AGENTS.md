@@ -231,6 +231,18 @@ name below is imported from `netimps`.
   than per resolved address. `timeout` is one attempt's connect timeout and
   defaults to `interval` raised to at least 1s. An out-of-range `port` raises
   from `tcp_check`.
+- **`await_for_port(dst, port, *, deadline=30.0, interval=0.1, timeout=None)`**
+  — the same wait as a coroutine: a non-blocking connect on the running loop
+  (`loop.sock_connect`, on the selector and the Proactor loop alike) and
+  `asyncio.sleep` between attempts, the same arguments, backoff and `True` or
+  `False`, and the same `ValueError` for a `port` out of range. An address is
+  read in place and needs no thread; a name goes through `loop.getaddrinfo`, which
+  uses the loop's executor. Each attempt gets at most what is left of `deadline`,
+  so the call ends within a fraction of a second after it however the connect
+  behaves. Cancelling closes the attempt's socket and leaves no task behind. As
+  `tcp_check`, one `timeout` covers every address a name resolves to, and
+  Windows takes about two seconds to refuse a connection to `::1`, so a
+  `localhost` whose service listens on IPv4 only needs `timeout` above that.
 
 ## Routing, hops and MTU
 

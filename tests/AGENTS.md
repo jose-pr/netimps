@@ -73,6 +73,7 @@ signal, not noise.
 | `integration/test_udp_endpoint.py` | `UDPEndpoint` on real loopback sockets: the receive path, pktinfo, source pinning, the interface cache |
 | `integration/test_udp_reply.py` | `reply_socket` and `reply_address` for a pktinfo-using UDP server |
 | `integration/test_async_udp.py` | `arecv`/`datagrams` on a **real loop**, both Windows loop types, and no leaked threads |
+| `integration/test_async_waits.py` | `aretry` and `await_for_port` on a **real loop**, every Windows loop type: the loop keeps running while they wait, no thread, a deadline bounds the whole wait, cancelling leaves no socket and no task |
 | `integration/test_scan.py` | `scan_ports` / `scan_hosts` and the multicast helpers, loopback only |
 | `typing/api.py` | the static-typing contract; never executed, checked by mypy with `typing/consumer.ini` |
 

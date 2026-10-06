@@ -20,6 +20,7 @@ unprivileged on every supported platform.
 
 from __future__ import annotations
 
+from ._aconnect import await_for_port
 from ._bind import SocketOption, bind, get_free_port
 from ._connect import get_source_ip, tcp_check, wait_for_port
 from ._device import has_device_binding
@@ -42,6 +43,7 @@ __all__ = [
     "get_free_port",
     "tcp_check",
     "wait_for_port",
+    "await_for_port",
     "get_route",
     "Route",
     "count_hops",

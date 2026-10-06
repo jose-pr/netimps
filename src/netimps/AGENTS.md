@@ -470,6 +470,8 @@ nothing.
   — whether a TCP handshake completes.
 - **`wait_for_port(dst, port, *, deadline=30.0, interval=0.1, timeout=None)`**
   — poll until a TCP port answers or a deadline passes.
+- **`await_for_port(dst, port, *, deadline=30.0, interval=0.1, timeout=None)`**
+  — `wait_for_port` as a coroutine, on the running loop.
 
 ## Routing, hops and MTU
 
@@ -663,8 +665,17 @@ re-raised unwrapped**, so the traceback still points at the real problem.
   `max_delay` is a real ceiling.
 - `on_retry(attempt, exc, next_delay)` is the logging hook; this logs nothing
   itself.
-- Synchronous — it blocks. For async, drive **`backoff_delays(...)`** from your
-  own loop; it yields the same schedule, `attempts - 1` values.
+- Synchronous — it blocks. **`aretry`** is the coroutine form (below); or drive
+  **`backoff_delays(...)`** from your own loop, which yields the same schedule,
+  `attempts - 1` values.
+
+**`aretry(func: Callable[[], Awaitable[T]], attempts=3, *, delay=0.5, multiplier=2.0, max_delay=30.0, jitter=0.1, retryable=(OSError,), on_retry=None, jitter_seconds=None, symmetric=False) -> T`**
+
+`retry` for a coroutine: `await aretry(lambda: client.fetch(url))`. The
+arguments, the checks and the exceptions are `retry`'s; `func` must return an
+awaitable (`TypeError` otherwise) and `on_retry` stays a plain function. Waits
+are `asyncio.sleep` on the running loop, so no thread; cancelling it propagates
+`CancelledError` at once.
 
 **`backoff_delays(attempts=3, delay=0.5, *, multiplier=2.0, max_delay=30.0, jitter=0.1, jitter_seconds=None, symmetric=False)`**
 
@@ -747,14 +758,21 @@ returns to the base the moment the peer moves the transfer forward.
 
 ## Asyncio
 
-Without a thread, an asyncio caller can await `UDPEndpoint.arecv`,
-`UDPEndpoint.asend`, `UDPEndpoint.datagrams` and `UDPEndpoint.aclose`, and use
-`async with UDPEndpoint(...)`; the value types, the parsing and classifying
-functions, `backoff_delays` and `Backoff` do no I/O. Everything else that waits
-is blocking and needs a thread (`asyncio.to_thread`, or `loop.run_in_executor`
-with `functools.partial`, since the options are keyword-only): the resolvers,
-the lookups of `Host` and `FQDN`, `ping`, `tcp_check`, `wait_for_port`, `retry`,
-`scan_ports`, `scan_hosts`, `count_hops`, `discover_mtu` and `get_tcp_mss`.
+**Awaited with no thread:** `UDPEndpoint.arecv`, `UDPEndpoint.asend`,
+`UDPEndpoint.datagrams` and `UDPEndpoint.aclose` (and `async with
+UDPEndpoint(...)`), **`aretry`** and **`await_for_port`**, which wait with
+`asyncio.sleep` and connect on the loop (`await_for_port` looks a name up with
+`loop.getaddrinfo`, the loop's executor; an address needs none). The value
+types, the parsing and classifying functions, `backoff_delays` and `Backoff` do
+no I/O and are called directly.
+
+**Blocking, so they need a thread** (`asyncio.to_thread`, or
+`loop.run_in_executor` with `functools.partial`, since the options are
+keyword-only: `loop.run_in_executor(None, functools.partial(ping, host,
+timeout=2))`): the resolvers, the lookups of `Host` and `FQDN`, `ping`,
+`tcp_check`, `wait_for_port`, `retry`, `scan_ports`, `scan_hosts`, `count_hops`,
+`discover_mtu`, `get_tcp_mss`, `get_pmtu`, `get_route` and `get_source_ip`.
+`import netimps` does not import asyncio; the two coroutines do when they run.
 
 ## Exceptions
 

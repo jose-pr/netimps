@@ -127,7 +127,7 @@ from ._multicast import (
     multicast_socket,
 )
 from ._fqdn import FQDN, FQDNLike
-from ._retry import Backoff, backoff_delays, retry
+from ._retry import Backoff, aretry, backoff_delays, retry
 from ._msg import CMSG_LEN, CMSG_SPACE, has_recvmsg, recvmsg, sendmsg
 from ._msg._patch import is_socket_patched, patch_socket_module
 from ._msg._patch import _patch_requested as _msg_patch_requested
@@ -151,6 +151,7 @@ from ._sockets import (
     get_route,
     tcp_check,
     wait_for_port,
+    await_for_port,
 )
 from ._scan import PortsLike
 
@@ -223,6 +224,7 @@ __all__ = [
     "get_free_port",
     "tcp_check",
     "wait_for_port",
+    "await_for_port",
     "get_route",
     "bind",
     "AddressInUseError",
@@ -251,6 +253,7 @@ __all__ = [
     "patch_socket_module",
     "is_socket_patched",
     "retry",
+    "aretry",
     "Backoff",
     "backoff_delays",
     # Scanning.

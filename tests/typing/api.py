@@ -37,6 +37,8 @@ from typing_extensions import assert_type
 from netimps import (
     Backoff,
     backoff_delays,
+    aretry,
+    await_for_port,
     retry,
     Datagram,
     FQDN,
@@ -427,6 +429,15 @@ def _backoff_is_a_timer(timer: Backoff) -> None:
 assert_type(retry(lambda: 1), int)
 assert_type(retry(lambda: "text", 5, delay=0.1), str)
 assert_type(backoff_delays(3), Iterator[float])
+
+
+async def _the_coroutines_return_what_they_wait_for() -> None:
+    async def fetch() -> int:
+        return 1
+
+    assert_type(await aretry(fetch), int)
+    assert_type(await aretry(fetch, 5, delay=0.1, retryable=(OSError,)), int)
+    assert_type(await await_for_port("h", 80, deadline=5.0, timeout=1.0), bool)
 
 
 # The hierarchy is part of the typing contract: a handler written against a
