@@ -301,18 +301,38 @@ while current is not None:
 
 # Host narrows to a name; an address costs a reverse lookup, which may find none.
 assert_type(Host("www.example.com").fqdn(), Optional[FQDN])
-assert_type(Host("www.example.com").fqdn(check=True, ns="192.0.2.53"), Optional[FQDN])
+assert_type(Host("www.example.com").fqdn(check=True, ns="192.0.2.53"), FQDN)
+assert_type(Host("www.example.com").fqdn(check=False), Optional[FQDN])
 
 # The three resolving methods, and the pair `resolve()` always returns.
 assert_type(Host("db.internal").ip(), Optional[IPAddress])
 assert_type(
     Host("db.internal").ip(check=True, ipv6=True, backends=["system"], refresh=True),
-    Optional[IPAddress],
+    IPAddress,
 )
 assert_type(Host("db.internal").resolve(), Tuple[Optional[FQDN], Optional[IPAddress]])
 host_name, host_ip = Host("db.internal").resolve(check=True, tcp=True)
-assert_type(host_name, Optional[FQDN])
-assert_type(host_ip, Optional[IPAddress])
+assert_type(host_name, FQDN)
+assert_type(host_ip, IPAddress)
+
+# `check=True` raises where nothing is found, so the answer is never None; a
+# `check` the checker cannot see is either.
+assert_type(Host("db.internal").ip(check=False), Optional[IPAddress])
+assert_type(
+    Host("db.internal").resolve(check=False),
+    Tuple[Optional[FQDN], Optional[IPAddress]],
+)
+
+
+def _either(flag: bool) -> None:
+    assert_type(Host("h").ip(check=flag), Optional[IPAddress])
+    assert_type(Host("h").fqdn(check=flag), Optional[FQDN])
+    assert_type(FQDN("h.example").ip(check=flag), Optional[IPAddress])
+    assert_type(FQDN("h.example").resolve(check=flag), Tuple[FQDN, Optional[IPAddress]])
+
+
+assert_type(FQDN("h.example").ip(check=True), IPAddress)
+assert_type(FQDN("h.example").resolve(check=True), Tuple[FQDN, IPAddress])
 assert_type(fqdn.ip(), Optional[IPAddress])
 assert_type(fqdn.resolve(), Tuple[FQDN, Optional[IPAddress]])
 assert_type(fqdn.resolve(ipv6=False, timeout=None), Tuple[FQDN, Optional[IPAddress]])
@@ -340,6 +360,8 @@ assert_type(join_host("example.com", 8080), str)
 assert_type(join_host("::1"), str)
 assert_type(unmap("::ffff:10.0.0.5"), IPAddress)
 assert_type(is_wildcard("0.0.0.0"), bool)
+assert_type(is_wildcard(Host("example.org")), bool)
+assert_type(is_wildcard(FQDN("example.org")), bool)
 
 option = SocketOption(1, 2, 3)
 assert_type(option.level, int)

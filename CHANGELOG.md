@@ -327,6 +327,14 @@ probe says so in its prefix.
 
 ### Fixed
 
+- **`is_wildcard` takes what its annotation says**: a `Host` or an `FQDN`
+  (`HostLike`), read as its text. A `Host` holding a name raised
+  `NetimpsValueError`; it answers `False`, as the same text does.
+- **`Host.ip`, `Host.fqdn`, `Host.resolve`, `FQDN.ip` and `FQDN.resolve` are
+  annotated by `check`**: with `check=True` they raise instead of returning
+  `None`, and the annotations say so (an `IPAddress`, an `FQDN`, a pair of
+  both), so a caller needs no assertion. Nothing else changes at run time.
+
 - **On Windows the `os.sysconf` stand-in answers `SC_OPEN_MAX`.** The socket
   patch installs `os.sysconf` where the platform has none, and it answered
   `SC_IOV_MAX` alone. A library that reads `SC_OPEN_MAX` behind

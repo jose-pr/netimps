@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import platform as _platform
 import socket as _socket
-from typing import Any, List, Optional, Tuple, Type, TypeVar, Union, overload
+from typing import Any, List, Literal, Optional, Tuple, Type, TypeVar, Union, overload
 from .._exceptions import NetimpsValueError, ResolutionError
 from .._fqdn import FQDN
 from ipaddress import (
@@ -178,6 +178,54 @@ class Host:
         """True if the value is already an IP literal -- no DNS needed."""
         return ip_literal(self.value) is not None
 
+    @overload
+    def fqdn(
+        self,
+        *,
+        check: Literal[True],
+        ns: "Optional[Union[str, List[str]]]" = None,
+        timeout: "Optional[float]" = 5.0,
+        port: int = 53,
+        tcp: bool = False,
+        search: "Union[bool, List[str]]" = True,
+        backends: "Optional[Union[str, List[str]]]" = None,
+        source: "Optional[Union[str, List[str]]]" = None,
+        cache: "Union[bool, float]" = False,
+        deadline: "Optional[float]" = None,
+    ) -> "FQDN": ...
+
+    @overload
+    def fqdn(
+        self,
+        *,
+        check: Literal[False] = False,
+        ns: "Optional[Union[str, List[str]]]" = None,
+        timeout: "Optional[float]" = 5.0,
+        port: int = 53,
+        tcp: bool = False,
+        search: "Union[bool, List[str]]" = True,
+        backends: "Optional[Union[str, List[str]]]" = None,
+        source: "Optional[Union[str, List[str]]]" = None,
+        cache: "Union[bool, float]" = False,
+        deadline: "Optional[float]" = None,
+    ) -> "Optional[FQDN]": ...
+
+    @overload
+    def fqdn(
+        self,
+        *,
+        check: bool,
+        ns: "Optional[Union[str, List[str]]]" = None,
+        timeout: "Optional[float]" = 5.0,
+        port: int = 53,
+        tcp: bool = False,
+        search: "Union[bool, List[str]]" = True,
+        backends: "Optional[Union[str, List[str]]]" = None,
+        source: "Optional[Union[str, List[str]]]" = None,
+        cache: "Union[bool, float]" = False,
+        deadline: "Optional[float]" = None,
+    ) -> "Optional[FQDN]": ...
+
     def fqdn(
         self,
         *,
@@ -222,6 +270,60 @@ class Host:
 
             return lookup_fqdn(text, **resolver_keywords(locals()))
         return FQDN.parse(text) if check else FQDN.try_parse(text)
+
+    @overload
+    def ip(
+        self,
+        *,
+        check: Literal[True],
+        ipv6: "Optional[bool]" = None,
+        ns: "Optional[Union[str, List[str]]]" = None,
+        timeout: "Optional[float]" = 5.0,
+        port: int = 53,
+        tcp: bool = False,
+        search: "Union[bool, List[str]]" = True,
+        backends: "Optional[Union[str, List[str]]]" = None,
+        source: "Optional[Union[str, List[str]]]" = None,
+        cache: "Union[bool, float]" = False,
+        deadline: "Optional[float]" = None,
+        refresh: bool = False,
+    ) -> "IPAddress": ...
+
+    @overload
+    def ip(
+        self,
+        *,
+        check: Literal[False] = False,
+        ipv6: "Optional[bool]" = None,
+        ns: "Optional[Union[str, List[str]]]" = None,
+        timeout: "Optional[float]" = 5.0,
+        port: int = 53,
+        tcp: bool = False,
+        search: "Union[bool, List[str]]" = True,
+        backends: "Optional[Union[str, List[str]]]" = None,
+        source: "Optional[Union[str, List[str]]]" = None,
+        cache: "Union[bool, float]" = False,
+        deadline: "Optional[float]" = None,
+        refresh: bool = False,
+    ) -> "Optional[IPAddress]": ...
+
+    @overload
+    def ip(
+        self,
+        *,
+        check: bool,
+        ipv6: "Optional[bool]" = None,
+        ns: "Optional[Union[str, List[str]]]" = None,
+        timeout: "Optional[float]" = 5.0,
+        port: int = 53,
+        tcp: bool = False,
+        search: "Union[bool, List[str]]" = True,
+        backends: "Optional[Union[str, List[str]]]" = None,
+        source: "Optional[Union[str, List[str]]]" = None,
+        cache: "Union[bool, float]" = False,
+        deadline: "Optional[float]" = None,
+        refresh: bool = False,
+    ) -> "Optional[IPAddress]": ...
 
     def ip(
         self,
@@ -314,6 +416,57 @@ class Host:
             object.__setattr__(self, "_attempted", True)
             object.__setattr__(self, "_resolved", found)
         return found
+
+    @overload
+    def resolve(
+        self,
+        *,
+        check: Literal[True],
+        ipv6: "Optional[bool]" = None,
+        ns: "Optional[Union[str, List[str]]]" = None,
+        timeout: "Optional[float]" = 5.0,
+        port: int = 53,
+        tcp: bool = False,
+        search: "Union[bool, List[str]]" = True,
+        backends: "Optional[Union[str, List[str]]]" = None,
+        source: "Optional[Union[str, List[str]]]" = None,
+        cache: "Union[bool, float]" = False,
+        deadline: "Optional[float]" = None,
+    ) -> "Tuple[FQDN, IPAddress]": ...
+
+    @overload
+    def resolve(
+        self,
+        *,
+        check: Literal[False] = False,
+        ipv6: "Optional[bool]" = None,
+        ns: "Optional[Union[str, List[str]]]" = None,
+        timeout: "Optional[float]" = 5.0,
+        port: int = 53,
+        tcp: bool = False,
+        search: "Union[bool, List[str]]" = True,
+        backends: "Optional[Union[str, List[str]]]" = None,
+        source: "Optional[Union[str, List[str]]]" = None,
+        cache: "Union[bool, float]" = False,
+        deadline: "Optional[float]" = None,
+    ) -> "Tuple[Optional[FQDN], Optional[IPAddress]]": ...
+
+    @overload
+    def resolve(
+        self,
+        *,
+        check: bool,
+        ipv6: "Optional[bool]" = None,
+        ns: "Optional[Union[str, List[str]]]" = None,
+        timeout: "Optional[float]" = 5.0,
+        port: int = 53,
+        tcp: bool = False,
+        search: "Union[bool, List[str]]" = True,
+        backends: "Optional[Union[str, List[str]]]" = None,
+        source: "Optional[Union[str, List[str]]]" = None,
+        cache: "Union[bool, float]" = False,
+        deadline: "Optional[float]" = None,
+    ) -> "Tuple[Optional[FQDN], Optional[IPAddress]]": ...
 
     def resolve(
         self,

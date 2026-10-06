@@ -9,6 +9,8 @@ import netimps
 
 # Private: the IP helpers' private seams.
 from netimps import (
+    FQDN,
+    Host,
     IPAddress,
     IPInterface,
     IPNetwork,
@@ -734,6 +736,15 @@ def test_is_wildcard_accepts_parsed_addresses():
     assert is_wildcard(ipaddress.IPv4Address("0.0.0.0")) is True
     assert is_wildcard(ipaddress.IPv6Address("::")) is True
     assert is_wildcard(ipaddress.IPv4Address("1.2.3.4")) is False
+
+
+def test_is_wildcard_reads_a_host_and_an_fqdn_as_their_text():
+    """A ``Host`` holding a listen address is as much the wildcard as its text,
+    and one holding a name is not: it is False, never an error."""
+    assert is_wildcard(Host("0.0.0.0")) is True
+    assert is_wildcard(Host("")) is True
+    assert is_wildcard(Host("example.org")) is False
+    assert is_wildcard(FQDN("example.org")) is False
 
 
 def test_is_wildcard_of_a_host_name_is_false():

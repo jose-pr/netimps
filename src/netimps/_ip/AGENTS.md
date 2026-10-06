@@ -75,12 +75,12 @@ below is imported from `netimps`.
   (expanded). One address has many spellings; only the parsed form sees through
   them. Takes `IPAddressLike`; raises `NetimpsValueError` for text that is no
   address.
-- **`is_wildcard(value: IPAddressLike | None) -> bool`** — whether a value
+- **`is_wildcard(value: IPAddressLike | HostLike | None) -> bool`** — whether a value
   means "every local address": `""`, `None`, `"0.0.0.0"`, `"::"`, the v4-mapped
   `::ffff:0.0.0.0`, and any other spelling whose address form is unspecified. A
   `%zone` is stripped first. Text that is no address is a host
   name and answers `False`: `bind` takes a name as its host, and a name is
-  never the wildcard. `TypeError` for a network or a value of another type.
+  never the wildcard. A `Host` or an `FQDN` is read as its text. `TypeError` for a network or a value of another type.
 - **`split_zone(text) -> (host, zone | None)`** — split an IPv6 `%zone` suffix
   off a host: `"fe80::1%eth0"` → `("fe80::1", "eth0")`, `"10.0.0.5"` →
   `("10.0.0.5", None)`. Use it before `try_parse` or a comparison, because
@@ -143,7 +143,8 @@ Which call looks anything up:
   for A, `None` for either in one lookup, in the OS's own order. `check=True`
   raises instead of returning `None`: `NoAnswerError` for an empty answer, a
   plain `ResolutionError` (or `ResolutionTimeoutError`) for a resolver outage or
-  an empty host (`resolve(strict=True)` alone re-raises only the outage). **With none of `ns`, `port`, `tcp`, `source` or `backends`, the
+  an empty host (`resolve(strict=True)` alone re-raises only the outage); the
+  annotation is `IPAddress` then, by overloads on `check: Literal[True]`. **With none of `ns`, `port`, `tcp`, `source` or `backends`, the
   OS resolver alone answers**, as the standard library's lookups do: a missed
   name costs milliseconds, where the full chain behind `netimps.resolve` costs
   seconds. Naming any of them selects `resolve()`'s own chain rules. `timeout`
@@ -155,5 +156,6 @@ Which call looks anything up:
 - **`.resolve(*, check=False, ipv6=None, <resolver options>) -> (FQDN | None,
   IPAddress | None)`** — the pair `(fqdn, ip)`, always a pair, so
   `fqdn, ip = host.resolve()` never fails to unpack; a half that was not found
-  is `None`, or raises with `check=True`.
+  is `None`, or raises with `check=True` (annotated `(FQDN, IPAddress)` then).
+  `.fqdn(check=True)` is annotated `FQDN`.
 - Compares equal to a plain `str`, and hashes by its text.

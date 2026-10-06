@@ -32,6 +32,10 @@ MAX_MODULE_LINES = 500
 
 #: Modules over the limit, each with why.
 _LONG_MODULES = {
+    "_ip/_host.py": (
+        "one class: each resolving method carries three typing overloads "
+        "(raises, may return nothing, either) beside its implementation"
+    ),
     "_fqdn/_name.py": (
         "one class: the label algebra, the constructors and the dunder methods "
         "share its slots, and docstrings are most of the lines"

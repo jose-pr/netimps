@@ -14,7 +14,7 @@ from ipaddress import (
     IPv6Interface,
     IPv6Network,
 )
-from ._host import Host
+from ._host import Host, HostLike
 from ._types import IPAddress, IPAddressLike, ip_literal
 
 
@@ -154,7 +154,7 @@ def unmap(value: "IPAddressLike") -> "IPAddress":
     return address
 
 
-def is_wildcard(value: "Union[IPAddressLike, None]") -> bool:
+def is_wildcard(value: "Union[IPAddressLike, HostLike, None]") -> bool:
     """Whether ``value`` means "every local address" -- the bind-anything form.
 
     True for ``""``, ``None``, ``"0.0.0.0"``, ``"::"`` and any other spelling
@@ -170,12 +170,15 @@ def is_wildcard(value: "Union[IPAddressLike, None]") -> bool:
 
     Text that is no address is a host name, and a name is never the wildcard:
     the answer is ``False``. This is the one classifier that takes a name,
-    because it is asked of a listen host, and ``bind`` takes a name there.
+    because it is asked of a listen host, and ``bind`` takes a name there. A
+    :class:`Host` or an :class:`FQDN` is read as the text it holds.
 
     :raises TypeError: for a value that is neither text nor an address.
     """
     if value is None:
         return True
+    if isinstance(value, (Host, FQDN)):
+        value = str(value)
     if isinstance(value, str):
         value = value.strip().split("%", 1)[0]
         if not value:

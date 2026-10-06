@@ -7,6 +7,7 @@ from typing import (
     Any,
     Iterable,
     Iterator,
+    Literal,
     List,
     Optional,
     Tuple,
@@ -440,6 +441,57 @@ class FQDN:
 
     # -- network convenience, delegating rather than reimplementing ---------
 
+    @overload
+    def resolve(
+        self,
+        *,
+        check: Literal[True],
+        ipv6: "Optional[bool]" = None,
+        ns: "Optional[Union[str, List[str]]]" = None,
+        timeout: "Optional[float]" = 5.0,
+        port: int = 53,
+        tcp: bool = False,
+        search: "Union[bool, List[str]]" = True,
+        backends: "Optional[Union[str, List[str]]]" = None,
+        source: "Optional[Union[str, List[str]]]" = None,
+        cache: "Union[bool, float]" = False,
+        deadline: "Optional[float]" = None,
+    ) -> "Tuple[FQDN, _IPAddress]": ...
+
+    @overload
+    def resolve(
+        self,
+        *,
+        check: Literal[False] = False,
+        ipv6: "Optional[bool]" = None,
+        ns: "Optional[Union[str, List[str]]]" = None,
+        timeout: "Optional[float]" = 5.0,
+        port: int = 53,
+        tcp: bool = False,
+        search: "Union[bool, List[str]]" = True,
+        backends: "Optional[Union[str, List[str]]]" = None,
+        source: "Optional[Union[str, List[str]]]" = None,
+        cache: "Union[bool, float]" = False,
+        deadline: "Optional[float]" = None,
+    ) -> "Tuple[FQDN, Optional[_IPAddress]]": ...
+
+    @overload
+    def resolve(
+        self,
+        *,
+        check: bool,
+        ipv6: "Optional[bool]" = None,
+        ns: "Optional[Union[str, List[str]]]" = None,
+        timeout: "Optional[float]" = 5.0,
+        port: int = 53,
+        tcp: bool = False,
+        search: "Union[bool, List[str]]" = True,
+        backends: "Optional[Union[str, List[str]]]" = None,
+        source: "Optional[Union[str, List[str]]]" = None,
+        cache: "Union[bool, float]" = False,
+        deadline: "Optional[float]" = None,
+    ) -> "Tuple[FQDN, Optional[_IPAddress]]": ...
+
     def resolve(
         self,
         *,
@@ -479,6 +531,57 @@ class FQDN:
         from .._ping import ping
 
         return ping(str(self), **kwargs)
+
+    @overload
+    def ip(
+        self,
+        *,
+        check: Literal[True],
+        ipv6: "Optional[bool]" = None,
+        ns: "Optional[Union[str, List[str]]]" = None,
+        timeout: "Optional[float]" = 5.0,
+        port: int = 53,
+        tcp: bool = False,
+        search: "Union[bool, List[str]]" = True,
+        backends: "Optional[Union[str, List[str]]]" = None,
+        source: "Optional[Union[str, List[str]]]" = None,
+        cache: "Union[bool, float]" = False,
+        deadline: "Optional[float]" = None,
+    ) -> "_IPAddress": ...
+
+    @overload
+    def ip(
+        self,
+        *,
+        check: Literal[False] = False,
+        ipv6: "Optional[bool]" = None,
+        ns: "Optional[Union[str, List[str]]]" = None,
+        timeout: "Optional[float]" = 5.0,
+        port: int = 53,
+        tcp: bool = False,
+        search: "Union[bool, List[str]]" = True,
+        backends: "Optional[Union[str, List[str]]]" = None,
+        source: "Optional[Union[str, List[str]]]" = None,
+        cache: "Union[bool, float]" = False,
+        deadline: "Optional[float]" = None,
+    ) -> "Optional[_IPAddress]": ...
+
+    @overload
+    def ip(
+        self,
+        *,
+        check: bool,
+        ipv6: "Optional[bool]" = None,
+        ns: "Optional[Union[str, List[str]]]" = None,
+        timeout: "Optional[float]" = 5.0,
+        port: int = 53,
+        tcp: bool = False,
+        search: "Union[bool, List[str]]" = True,
+        backends: "Optional[Union[str, List[str]]]" = None,
+        source: "Optional[Union[str, List[str]]]" = None,
+        cache: "Union[bool, float]" = False,
+        deadline: "Optional[float]" = None,
+    ) -> "Optional[_IPAddress]": ...
 
     def ip(
         self,

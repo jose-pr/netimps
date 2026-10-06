@@ -322,12 +322,14 @@ CIDR maths, address classification and `host:port` handling. Detail:
 - **`split_zone(text) -> (host, zone | None)`**
   — an IPv6 `%zone` suffix off a host.
 - **`unmap(value) -> IPAddress`** — an IPv4-mapped IPv6 address as plain IPv4.
-- **`is_wildcard(value: IPAddressLike | None) -> bool`**
+- **`is_wildcard(value: IPAddressLike | HostLike | None) -> bool`**
   — whether a value means "every local address"; a host name is `False`.
 - **`Host(value)`** — a host named by an address or a hostname:
   `Host.parse(text)`, `Host.try_parse(text, default=None)`, `.is_address`, and
   the lookups `.ip(...)`, `.fqdn(...)` and `.resolve(...)`, which return an
-  address, an `FQDN` and the pair.
+  address, an `FQDN` and the pair. With `check=True` each is typed as never
+  returning `None` (an `FQDN`, an `IPAddress`, a pair of both), since it raises
+  instead; `FQDN.ip` and `FQDN.resolve` likewise.
 - **`get_hostname(*, fqdn=False)`**
   — this machine's name, asked for when called.
 

@@ -144,7 +144,8 @@ ordered. Built from a dotted string or from separate labels, **leftmost first**:
 - **Network methods are named as actions and can block.**
   **`.resolve(*, check=False, ipv6=None, ns=None, timeout=5.0, port=53,
   tcp=False, search=True, backends=None, source=None, cache=False, deadline=None) -> (FQDN, IPAddress | None)`**
-  answers `(self, ip)`, the same pair `Host.resolve()` gives, so the two types
+  answers `(self, ip)` (`IPAddress` rather than `IPAddress | None` under
+  `check=True`, which raises), the same pair `Host.resolve()` gives, so the two types
   interchangeable as `HostLike` answer `.resolve()` alike; `.ip(...)` with the
   same options is the second element. `.ping(**kw)` → `ping()`. DNS records of
   any type come from `resolve(name, rdtype)`, not from here. The options are
