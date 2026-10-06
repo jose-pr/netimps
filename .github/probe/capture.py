@@ -29,6 +29,11 @@ _PARSER.add_argument(
     action="store_true",
     help="do not redact MACs and addresses (local diagnosis only)",
 )
+_PARSER.add_argument(
+    "--device-only",
+    action="store_true",
+    help="run only the device-binding probe (standard library only) and exit",
+)
 ARGS = _PARSER.parse_args()
 
 RESULTS = {"platform": {}, "probes": []}
@@ -89,6 +94,18 @@ def redact(text):
     # Global IPv6 only: fe80:: and ::1 stay, since both are the measurement.
     text = re.sub(r"\b(2[0-9a-fA-F]{3}):[0-9a-fA-F:]{4,}\b", r"\1:xxxx::x", text)
     return text
+
+
+def finish():
+    """Write the transcript as JSON, redacted once at the boundary."""
+    out_path = os.environ.get("PROBE_JSON", "probe.json")
+    with open(out_path, "w", encoding="utf-8") as handle:
+        # Redact once, here, at the only point where the transcript leaves the
+        # process. Doing it per-call-site is how `RESULTS["platform"]` -- assigned
+        # directly rather than through record() -- kept its hostname and FQDN
+        # while everything else was masked. One boundary, one guarantee.
+        json.dump(redact(RESULTS), handle, indent=2, default=str)
+    print("\nwrote %s (%d probes)" % (out_path, len(RESULTS["probes"])))
 
 
 def section(title):
@@ -173,6 +190,166 @@ for key, value in RESULTS["platform"].items():
 POSIX = os.name != "nt"
 DARWIN = sys.platform == "darwin"
 LINUX = sys.platform.startswith("linux")
+
+# --------------------------------------------------------------------------
+section("Binding a socket to a device")
+# --------------------------------------------------------------------------
+# Question: which option, if any, makes a UDP socket receive only what arrives
+# on one interface, as an ordinary user? Each candidate is tried on every
+# platform with its own number, because the same number means another option
+# elsewhere and an `ok` there proves nothing by itself: what counts is whether
+# the option *restricts what is received*. A wildcard socket is bound, the
+# option names a device, and a datagram is sent to it over loopback.
+#
+#   control        no option: loopback delivery works at all
+#   loopback       the device named is loopback: the datagram must arrive
+#   other          the device named is another interface: a datagram that
+#                  entered through loopback must NOT arrive
+#
+# An option restricts receive when `loopback` arrives and `other` does not.
+# The reverse case (a loopback-bound socket and a datagram that entered through
+# a real NIC) needs a peer on the network and is left to a real-peer harness.
+#
+# The Windows `*_UNICAST_IF` options are documented as steering what is *sent*;
+# they are here to see whether they also restrict what is received.
+#
+# Standard library only, from a checkout:
+#     python3 .github/probe/capture.py --device-only
+
+#: (label, family, level, option number, spellings of the device). A spelling is
+#: "name" (the interface name as bytes), "host" (the index as a native int) or
+#: "network" (the index packed in network byte order).
+_DEVICE_OPTIONS = [
+    ("SO_BINDTODEVICE", 4, socket.SOL_SOCKET, 25, ("name",)),
+    ("SO_BINDTODEVICE", 6, socket.SOL_SOCKET, 25, ("name",)),
+    ("IP_BOUND_IF", 4, socket.IPPROTO_IP, 25, ("host",)),
+    ("IPV6_BOUND_IF", 6, socket.IPPROTO_IPV6, 125, ("host",)),
+    ("IP_UNICAST_IF", 4, socket.IPPROTO_IP, 31, ("network", "host")),
+    ("IPV6_UNICAST_IF", 6, socket.IPPROTO_IPV6, 31, ("host", "network")),
+]
+
+
+def _device_value(spelling, index, name):
+    if spelling == "name":
+        return name.encode()
+    if spelling == "host":
+        return index
+    return struct.pack("!I", index)
+
+
+def _device_receive(version, level, option, value):
+    """Bind a wildcard socket with the option set (``None``: no option), send it
+    one datagram over loopback, and return (error text or None, arrived or None)."""
+    family = socket.AF_INET if version == 4 else socket.AF_INET6
+    loopback = "127.0.0.1" if version == 4 else "::1"
+    receiver = sender = None
+    try:
+        receiver = socket.socket(family, socket.SOCK_DGRAM)
+        if version == 6:
+            receiver.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+        if value is not None:
+            try:
+                receiver.setsockopt(level, option, value)
+            except OSError as exc:
+                return ("errno %s %s" % (exc.errno, exc.strerror), None)
+        receiver.bind(("" if version == 4 else "::", 0))
+        receiver.settimeout(0.5)
+        port = receiver.getsockname()[1]
+        sender = socket.socket(family, socket.SOCK_DGRAM)
+        sender.sendto(b"device-probe", (loopback, port))
+        try:
+            data, _ = receiver.recvfrom(64)
+            return (None, data == b"device-probe")
+        except socket.timeout:
+            return (None, False)
+    except OSError as exc:
+        return ("errno %s %s" % (exc.errno, exc.strerror), None)
+    finally:
+        for sock in (receiver, sender):
+            if sock is not None:
+                sock.close()
+
+
+def _device_verdict(control, on_loop, on_other):
+    if on_loop[0] is not None:
+        return "setsockopt refused (%s)" % (on_loop[0],)
+    if control[1] is not True:
+        return "control did not arrive: no verdict"
+    if on_loop[1] and on_other[1] is False:
+        return "RESTRICTS RECEIVE"
+    if on_loop[1] and on_other[1]:
+        return "accepted, does not restrict receive"
+    if on_other[0] is not None:
+        return "other device refused (%s)" % (on_other[0],)
+    return "loopback-bound socket received nothing: no verdict"
+
+
+def probe_device_binding():
+    """Print one line per (option, family, spelling) and return the verdicts."""
+    names = dict(socket.if_nameindex())
+    loop = [i for i, n in names.items() if n.startswith("lo") or "oopback" in n]
+    loop_index = loop[0] if loop else 1
+    others = sorted(i for i in names if i != loop_index)
+    ids = "%s/%s" % (os.getuid(), os.geteuid()) if hasattr(os, "getuid") else "n/a"
+    print("   uid/euid: %s" % ids)
+    print(
+        "   loopback device: %s (index %s); other devices: %s"
+        % (
+            names.get(loop_index),
+            loop_index,
+            ", ".join("%s=%s" % (i, names[i]) for i in others) or "none",
+        )
+    )
+    record("device-host", uid=ids, loopback=names.get(loop_index), others=names)
+    verdicts = []
+    for label, version, level, option, spellings in _DEVICE_OPTIONS:
+        for spelling in spellings:
+            control = _device_receive(version, level, option, None)
+            value = _device_value(spelling, loop_index, names.get(loop_index, "lo"))
+            on_loop = _device_receive(version, level, option, value)
+            on_other, other_name = ("no other device", None), None
+            for index in others:
+                value = _device_value(spelling, index, names[index])
+                on_other, other_name = (
+                    _device_receive(version, level, option, value),
+                    names[index],
+                )
+                if on_other[0] is None:
+                    break
+            verdict = _device_verdict(control, on_loop, on_other)
+            print(
+                "   %-16s v%s %-7s control=%s loopback=%s other(%s)=%s => %s"
+                % (
+                    label,
+                    version,
+                    spelling,
+                    control[1] if control[0] is None else control[0],
+                    on_loop[1] if on_loop[0] is None else on_loop[0],
+                    other_name,
+                    on_other[1] if on_other[0] is None else on_other[0],
+                    verdict,
+                )
+            )
+            record(
+                "device:%s:v%s:%s" % (label, version, spelling),
+                control=control,
+                loopback=on_loop,
+                other=on_other,
+                other_device=other_name,
+                verdict=verdict,
+            )
+            verdicts.append((label, version, spelling, verdict))
+    return verdicts
+
+
+try:
+    probe_device_binding()
+except BaseException as exc:  # noqa: BLE001 - a probe must never abort
+    print("   device probe failed: %r" % (exc,))
+    record("device-probe", error=repr(exc))
+if ARGS.device_only:
+    finish()
+    sys.exit(0)
 
 # --------------------------------------------------------------------------
 section("ping binaries and usage text")
@@ -686,11 +863,4 @@ for opt in (
     print("   socket.%-20s %s" % (opt, value))
     record("sockopt:%s" % opt, value=value)
 
-out_path = os.environ.get("PROBE_JSON", "probe.json")
-with open(out_path, "w", encoding="utf-8") as handle:
-    # Redact once, here, at the only point where the transcript leaves the
-    # process. Doing it per-call-site is how `RESULTS["platform"]` -- assigned
-    # directly rather than through record() -- kept its hostname and FQDN while
-    # everything else was masked. One boundary, one guarantee.
-    json.dump(redact(RESULTS), handle, indent=2, default=str)
-print("\nwrote %s (%d probes)" % (out_path, len(RESULTS["probes"])))
+finish()
