@@ -34,7 +34,7 @@ dependencies = []
 # the newest series that installs on Python 3.9 (2.8 needs 3.10).
 dns = ['dnspython>=2.7,<3']
 # The CLI is optional: importing netimps must never require duho.
-cli = ['duho>=0.6.0,<0.7']
+cli = ['duho>=0.7.0,<0.8']
 # The tests exercise every extra, so dev refers to them rather than repeating
 # their ranges.
 dev = ['netimps[cli,dns]', 'build', 'twine', 'hatchling', 'pytest', 'black', 'mypy<2', 'distlib>=0.4.0,<0.5']

@@ -187,6 +187,9 @@ probe says so in its prefix.
 
 ### Changed
 
+- **The `cli` extra needs `duho` 0.7**: `duho>=0.7.0,<0.8`, where it was
+  `>=0.6.0,<0.7`. The `netimps` command, its options and its output are the
+  same; the library itself still imports nothing of it.
 - **An address object is written the same on every Python.** `join_host` of a
   v4-mapped IPv6 address on Python before 3.13 is `[::ffff:1.2.3.4]:80`, where
   it was `[::ffff:102:304]:80`; the same goes for `str(Host(address))`,
