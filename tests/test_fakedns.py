@@ -23,7 +23,9 @@ def test_a_refused_pair_is_retried_on_a_fresh_port(monkeypatch):
     monkeypatch.setattr(fakedns.FakeNameserver, "__init__", refuse_twice)
     fake = fakedns.make_nameserver()
     try:
-        assert len(attempts) == 3
+        # At least three: the pair asked for after the two refusals is a real
+        # one, and the host may refuse that too before one binds.
+        assert len(attempts) >= 3
         assert fake.port > 0
     finally:
         fake.close()
