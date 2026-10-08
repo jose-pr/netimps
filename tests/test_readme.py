@@ -104,6 +104,11 @@ _SUBSTITUTED = {
         "0",
         "a fixed port is another process's on some hosts; port 0 reads one back",
     ),
+    'endpoints = netimps.bind_listen("127.0.0.1:6768")': (
+        "6768",
+        "0",
+        "a fixed port is another process's on some hosts; port 0 reads one back",
+    ),
 }
 
 
@@ -147,10 +152,15 @@ def test_the_quick_start_example_runs(no_such_host, allow_off_host_destination):
                 source = source.replace(old, new)
             exec(compile(source, "README.md", "exec"), namespace)
             for value in namespace.values():
-                if isinstance(value, socket.socket) and value not in opened:
-                    opened.append(value)
+                for item in value if isinstance(value, tuple) else (value,):
+                    if isinstance(item, netimps.UDPEndpoint):
+                        item = item.socket
+                    if isinstance(item, socket.socket) and item not in opened:
+                        opened.append(item)
         assert namespace["mac"].format("-", upper=True) == "AA-BB-CC-DD-EE-FF"
         assert namespace["server"].getsockname()[1] > 0
+        (endpoint,) = namespace["endpoints"]
+        assert endpoint.socket.getsockname()[0] == "127.0.0.1"
     finally:
         for sock in opened:
             sock.close()

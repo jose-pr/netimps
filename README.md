@@ -49,6 +49,9 @@ nothing to compile and no wheel to miss for your platform.
 - **Socket setup** — `bind()` with the options named, `UDPEndpoint` for UDP
   servers that need to know which interface a datagram arrived on, and
   `retry()` for the backoff loop everyone writes without jitter.
+- **Listening** — `bind_listen()` turns one argument (`"*"`, `"[::1]:69"`,
+  `"eth1:67"`, a MAC, a list of those) into bound `UDPEndpoint`s, limited to the
+  interfaces it names; `parse_listen()` is the same reading with no I/O.
 - **Multicast** — `multicast_socket` handling the join dance whose failure
   modes are otherwise silent.
 - **DNS and ping** — `resolve()` chaining `dnspython`/OS resolver/`nslookup`
@@ -137,6 +140,10 @@ sock = netimps.multicast_socket("224.0.0.251", 5353)  # mDNS listener
 # Server-side: bind with the options named, and know where packets came from
 server = netimps.bind("", 6767, broadcast=True)
 endpoint = netimps.UDPEndpoint(server)
+
+# Where a service listens: one argument, read once, then bound as endpoints
+netimps.parse_listen("eth1:67,[::1]:69")  # no I/O: (0.0.0.0, 67, ('eth1',)), (::1, 69, ())
+endpoints = netimps.bind_listen("127.0.0.1:6768")  # one UDPEndpoint for each socket
 
 # Retry with backoff and jitter
 netimps.retry(lambda: netimps.tcp_check("example.com", 443), attempts=3)

@@ -40,8 +40,19 @@ def bind_listen(
 ) -> "Tuple[UDPEndpoint, ...]":
     """Bind the sockets `listen` names and return an endpoint for each, in order.
 
-    See `netimps/_listen/AGENTS.md` for what each kind of entry opens. A failure
-    closes every socket this call opened and raises the error unchanged.
+    ``listen``, ``default_ports`` and ``family`` are ``parse_listen``'s. An address
+    is one socket; a wildcard is one socket that reports the arrival interface,
+    or one for each address of the host when ``per_address`` is true (or ``None``
+    and the host reports no packet info); a wildcard limited to interfaces is one
+    wildcard socket whose endpoint ``.interfaces`` are the adapters, bound to the
+    device when ``device_binding`` allows and the platform can. Every socket is
+    exclusive, and an IPv6 socket is IPv6 only.
+
+    A selector that matches no adapter, and a limited binding with
+    ``per_address=True`` or on a host without packet info, raise
+    ``NetimpsValueError`` before a socket is opened. A failure closes every
+    socket this call opened and raises the error unchanged. What each kind of
+    entry opens is set out in ``netimps/_listen/AGENTS.md``.
     """
     specs = parse_listen(listen, default_ports, family=family)
     clear_interface_cache()

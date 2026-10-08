@@ -81,9 +81,18 @@ def parse_listen(
 ) -> "Tuple[ListenAddress, ...]":
     """The sockets `listen` names, each address and port once, in the order first written.
 
-    See `netimps/_listen/AGENTS.md` for the grammar. Raises `TypeError` for a
-    value of a type the grammar does not take and `NetimpsValueError` for
-    anything else it refuses.
+    ``listen`` is ``None`` (the wildcard), text (``"host"``, ``"host:port"``,
+    ``"[::1]:69"``, ``"*"``, ``":67"``, ``"eth1:67"``, a MAC, several joined by
+    commas), an address, an ``Interface``, a ``MACAddress``, a ``ListenAddress``,
+    a ``(host, ports)`` pair, or a sequence of those. Text that is no address
+    names an interface; a host name is never resolved. ``default_ports`` is an
+    int or a sequence, given to each binding that names no port. ``family``
+    (``AF_INET`` or ``AF_INET6``) makes the wildcard forms and an interface
+    binding that family's; ``None`` takes the wildcard forms as IPv4's.
+
+    Raises ``TypeError`` for a value of a type the grammar does not take and
+    ``NetimpsValueError`` for anything else it refuses. The grammar in full is in
+    ``netimps/_listen/AGENTS.md``.
     """
     wanted = _family(family)
     ports = _default_ports(default_ports)

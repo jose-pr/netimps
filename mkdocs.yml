@@ -28,6 +28,7 @@ theme:
 
 nav:
   - Home: index.md
+  - Where a service listens: listening.md
   - API Reference:
       - Overview: api/reference.md
   - Changelog: changelog.md
