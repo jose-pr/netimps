@@ -416,9 +416,11 @@ def test_bind_to_interface_uses_its_address():
     loopback = next((i for i in netimps.get_interfaces() if i.is_loopback), None)
     if loopback is None:  # pragma: no cover - host without a loopback entry
         pytest.skip("no loopback interface enumerated on this host")
+    # The adapter's own pick, not a loopback address: WSL2's `lo` (measured 2026-10-09) also holds a
+    # routable 10.255.255.254/32, which `primary_ip()` ranks first.
     sock = bind(port=0, interface=loopback)
     try:
-        assert netimps.parse(sock.getsockname()[0]).is_loopback
+        assert netimps.parse(sock.getsockname()[0]) == loopback.primary_ip().ip
     finally:
         sock.close()
 

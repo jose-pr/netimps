@@ -1974,7 +1974,9 @@ def test_interface_spec_resolves_interface_object():
     if loopback is None:  # pragma: no cover - host without a loopback entry
         pytest.skip("no loopback interface enumerated on this host")
     resolved = _spec.interface_address(loopback)
-    assert resolved.is_loopback
+    # The adapter's own pick, not a loopback address: WSL2's `lo` (measured 2026-10-09) also holds a
+    # routable 10.255.255.254/32, which `primary_ip()` ranks first.
+    assert resolved == loopback.primary_ip().ip
 
 
 # --------------------------------------------------------------------------- #
