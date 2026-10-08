@@ -501,6 +501,32 @@ def test_a_datagram_that_fits_is_not_marked_truncated():
         assert packet.truncated is False
 
 
+@pytest.mark.skipif(not _IS_WINDOWS, reason="WSAEMSGSIZE is Winsock's answer")
+def test_a_control_buffer_that_is_too_small_is_not_a_truncated_payload():
+    """`truncated` is the payload alone, on a socket whose option something else set.
+
+    `UDPEndpoint(sock, pktinfo=False)` reads with no control buffer. Measured on
+    Windows 11 ARM64 (2026-10-09): when another endpoint had turned packet info
+    on for the socket, a 2-octet datagram read with a 100-octet buffer came back
+    whole and marked truncated.
+    """
+    sock = bind("127.0.0.1", 0)
+    sock.settimeout(5.0)
+    UDPEndpoint(sock)  # turns the socket's packet-info option on
+    endpoint = UDPEndpoint(sock, pktinfo=False)
+    sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sender.sendto(b"hi", sock.getsockname())
+        fits = endpoint.recv(100)
+        sender.sendto(b"hello", sock.getsockname())
+        cut = endpoint.recv(2)
+    finally:
+        sender.close()
+        sock.close()
+    assert fits.data == b"hi" and fits.truncated is False
+    assert cut.data == b"he" and cut.truncated is True
+
+
 def test_a_truncation_is_reported_even_without_pktinfo():
     """Losing the interface must not also lose the truncation signal.
 

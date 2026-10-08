@@ -66,6 +66,11 @@ def _wsarecvmsg_for(sock: "Any") -> "Any":
     return fn
 
 
+#: Winsock's ``MSG_TRUNC`` and ``MSG_CTRUNC`` in ``WSAMSG.dwFlags``: the payload
+#: and the control data did not fit their buffers.
+_MSG_TRUNC = 0x100
+_MSG_CTRUNC = 0x200
+
 #: The largest payload buffer a thread keeps: no datagram is longer.
 _KEPT_BUFFER_MAX = 1 << 16
 
@@ -141,9 +146,10 @@ def recvmsg(
 
     ``msg_flags`` carries ``MSG_CTRUNC`` when the control buffer was too small
     for everything waiting, so a caller can tell a short answer from a complete
-    one. ``WSAEMSGSIZE`` -- the payload itself being truncated -- is **not** an
-    error here: Winsock reports it where POSIX sets ``MSG_TRUNC``, so it is
-    translated into the flag and the bytes that did arrive are returned.
+    one, and ``MSG_TRUNC`` only when the payload itself was cut. ``WSAEMSGSIZE``
+    is **not** an error here: Winsock gives it for either buffer being too
+    small, so it is translated into the flags Winsock wrote and the bytes that
+    did arrive are returned.
     """
     if bufsize < 0:
         raise ValueError("negative buffer size")
@@ -192,10 +198,18 @@ def _recv_datagram(
             break
         code = _ws2.WSAGetLastError()
         if code == _WSAEMSGSIZE:
-            # The datagram did not fit. POSIX signals that in msg_flags and
+            # A buffer was too small. POSIX signals that in msg_flags and
             # hands back what it read; do the same rather than raising, so a
             # caller looping on recvmsg sees one contract on both platforms.
-            truncated = getattr(_socket, "MSG_TRUNC", 0) or 0x20
+            # The code is the same whether the payload or the control buffer
+            # was short, and Winsock writes which in dwFlags. Measured
+            # 2026-10-09 on Windows 11 ARM64, Python 3.9 and 3.14, IPv4 and
+            # IPv6, a 2-octet datagram on a packet-info socket: payload buffer
+            # 1 gave 0x100, control buffer 0 or 1 gave 0x200, both short 0x300,
+            # both large no error and 0. Only if it wrote neither is the
+            # payload assumed cut.
+            if not int(message.dwFlags) & (_MSG_TRUNC | _MSG_CTRUNC):
+                truncated = _MSG_TRUNC
             break
         if code != _WSAEWOULDBLOCK or deadline is None:
             raise _ctypes.WinError(code)  # type: ignore[attr-defined]
@@ -215,7 +229,7 @@ def _recv_datagram(
     # read; believing it without flagging would silently drop a cmsg.
     control_used = int(message.Control.len)
     if control_used > ancbufsize:
-        truncated |= getattr(_socket, "MSG_CTRUNC", 0) or 0x200
+        truncated |= _MSG_CTRUNC
         control_used = ancbufsize
     ancdata = _parse_control(control, control_used) if control else []
 

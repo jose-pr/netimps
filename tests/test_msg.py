@@ -246,6 +246,56 @@ def test_a_tiny_control_buffer_truncates_instead_of_reading_out_of_bounds():
         server.close()
 
 
+#: Winsock's own values, written as literals so the test does not read the
+#: constants the library under test reads.
+_WIN_MSG_TRUNC = 0x100
+_WIN_MSG_CTRUNC = 0x200
+
+
+@pytest.mark.skipif(not IS_WINDOWS, reason="WSAEMSGSIZE is Winsock's answer")
+@pytest.mark.parametrize(
+    "family, host",
+    [(socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")],
+)
+@pytest.mark.parametrize(
+    "bufsize, ancbufsize, expected",
+    [
+        (100, 64, 0),
+        (1, 64, _WIN_MSG_TRUNC),
+        (100, 1, _WIN_MSG_CTRUNC),
+        (100, 0, _WIN_MSG_CTRUNC),
+        (1, 1, _WIN_MSG_TRUNC | _WIN_MSG_CTRUNC),
+    ],
+    ids=["both-fit", "payload-cut", "control-cut", "no-control-buffer", "both-cut"],
+)
+def test_windows_reports_each_buffer_that_was_too_small_and_only_that_one(
+    family, host, bufsize, ancbufsize, expected
+):
+    """`MSG_TRUNC` means the payload was cut, `MSG_CTRUNC` that the control data was.
+
+    Winsock answers `WSAEMSGSIZE` for either buffer being too small. Measured
+    on Windows 11 ARM64 (2026-10-09): a 2-octet datagram read with a 100-octet
+    buffer and a control buffer of 0 or 1 octets came back whole with both flags
+    set, because the wrapper took the error code for a cut payload.
+    """
+    receiver = socket.socket(family, socket.SOCK_DGRAM)
+    sender = socket.socket(family, socket.SOCK_DGRAM)
+    try:
+        receiver.bind((host, 0))
+        receiver.settimeout(5.0)
+        if family == socket.AF_INET:
+            receiver.setsockopt(socket.IPPROTO_IP, _pktinfo._IP_PKTINFO, 1)
+        else:
+            receiver.setsockopt(socket.IPPROTO_IPV6, _pktinfo._IPV6_PKTINFO, 1)
+        sender.sendto(b"hi", receiver.getsockname()[:2])
+        data, _ancdata, flags, _sender = netimps.recvmsg(receiver, bufsize, ancbufsize)
+    finally:
+        receiver.close()
+        sender.close()
+    assert data == b"hi"[:bufsize]
+    assert flags & (_WIN_MSG_TRUNC | _WIN_MSG_CTRUNC) == expected
+
+
 def test_two_cmsgs_in_one_buffer_are_both_parsed():
     """The walk must step by the *aligned* length, or it loses the second cmsg.
 
