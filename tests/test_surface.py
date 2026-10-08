@@ -43,6 +43,8 @@ EXPECTED = [
     "LINK_LOCAL_V6",
     "LOOPBACK_V4",
     "LOOPBACK_V6",
+    "ListenAddress",
+    "ListenLike",
     "MACAddress",
     "MACAddressLike",
     "NetimpsError",
@@ -103,6 +105,7 @@ EXPECTED = [
     "max_udp_payload",
     "multicast_socket",
     "parse",
+    "parse_listen",
     "patch_socket_module",
     "ping",
     "recvmsg",
@@ -199,6 +202,7 @@ POSITIONAL = {
     "leave_group": 2,
     "max_udp_payload": 1,
     "multicast_socket": 2,
+    "parse_listen": 2,
     "patch_socket_module": 1,
     "ping": 1,
     "register_port": 2,
@@ -222,7 +226,15 @@ _DEFAULT_POSITIONAL = 3
 # Shapes fixed by what they mirror: the standard library's ``recvmsg`` and
 # ``sendmsg`` and the ``CMSG_*`` helpers, and two named tuples that are
 # positional by nature.
-EXEMPT = {"recvmsg", "sendmsg", "CMSG_LEN", "CMSG_SPACE", "Datagram", "SocketOption"}
+EXEMPT = {
+    "recvmsg",
+    "sendmsg",
+    "CMSG_LEN",
+    "CMSG_SPACE",
+    "Datagram",
+    "ListenAddress",
+    "SocketOption",
+}
 
 # Parameters that may stay ``Any``: what they hold is not known to this package.
 ANY_ALLOWED: "typing.Set[typing.Tuple[str, str]]" = set()

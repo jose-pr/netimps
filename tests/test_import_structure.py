@@ -135,3 +135,19 @@ def test_a_sibling_is_imported_at_the_top_of_a_module_or_the_reason_is_recorded(
     stale = sorted(set(_LOCAL_IMPORTS) - used)
     assert stale == [], "no such function-local import: remove it from the list"
     assert all(reason.strip() for reason in _LOCAL_IMPORTS.values())
+
+
+def test_nothing_below_the_root_imports_the_listen_package():
+    """`_listen` sits above `_ip`, `_mac`, `_ifaddrs`, `_sockets` and `_udp`:
+    a back-import from any of them would make a cycle."""
+    offenders = [
+        _name(p)
+        for p in _modules()
+        if p.relative_to(_SRC).parts[0] not in ("_listen", "__init__.py")
+        and re.search(
+            r"^\s*(from \.+_listen\b|from netimps\._listen\b|import netimps\._listen)",
+            p.read_text(encoding="utf-8"),
+            re.MULTILINE,
+        )
+    ]
+    assert offenders == []

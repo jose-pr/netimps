@@ -53,6 +53,7 @@ signal, not noise.
 | `test_device_binding.py` | `bind(device=)` and `has_device_binding()`: refused before a socket opens, and on Linux the restriction itself on loopback, IPv4 and IPv6 |
 | `test_sockets.py` | bind options, `tcp_check`, route, MTU, `disable_connreset`, `set_buffer_size`, `SocketOption`, `max_udp_payload`; loopback, or assertions about shape |
 | `test_bind_defaults.py` | `bind()`: family inference, the `connreset` default, the hint and the one exception type for a taken port, hijack resistance, port sharing, the address types it accepts |
+| `test_listen_grammar.py` | `parse_listen`: every accepted and refused form as a table, the family rule, the default ports, a result read back as a specification, and no name resolved or adapter listed |
 | `test_udp_datagram.py` | `send(src=<address>)` without enumeration, truncation on both receive paths, `Datagram.destination` / `is_unicast`, `datagrams(on_error=)` |
 | `test_msg.py` | `recvmsg`/`sendmsg` on every platform, and the `socket` patch (install, reverse, no-op on POSIX) |
 | `test_freebsd_pktinfo.py` | IPv4 arrival data and source pinning where the carrier is not `IP_PKTINFO` |

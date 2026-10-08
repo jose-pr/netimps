@@ -7,7 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **`parse_listen(listen=None, default_ports=0, *, family=None) -> Tuple[ListenAddress, ...]`**
+  reads where a service listens: text (`"*"`, `":67"`, `"127.0.0.1:67"`,
+  `"[::1]:69"`, `"eth1:67"`, `"aa-bb-cc-dd-ee-ff"`, several joined by commas), an
+  `IPv4Address` or `IPv6Address`, an `Interface` or `MACAddress`, a
+  `(host, ports)` pair (a list from a configuration file too), or a sequence of
+  those. It does no I/O: no name is resolved and no interface is looked up.
+  Each address and port appears once, in the order first written. Text that is
+  no address names an interface, as a MAC or an adapter name, and limits a
+  wildcard socket to it. `family=socket.AF_INET6` makes the wildcard forms and an
+  interface binding IPv6's; the default takes the wildcard forms as IPv4's, as
+  `bind("")` does. **`ListenAddress`** (`.address`, `.port`, `.interfaces`) is the
+  result's item, and is itself an accepted binding, so parsing a result gives it
+  back. **`ListenLike`** is the alias of what is accepted.
 
 ## [0.4.0] - 2026-10-08
 

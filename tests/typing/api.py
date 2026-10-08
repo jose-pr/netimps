@@ -58,6 +58,9 @@ from netimps import (
     IPv6Interface,
     IPv6Network,
     Interface,
+    ListenAddress,
+    ListenLike,
+    parse_listen,
     MACAddress,
     NetimpsError,
     NetimpsValueError,
@@ -613,3 +616,17 @@ assert_type(SubFQDN.decode_at(b"\x01a\x00", 0), Tuple[SubFQDN, int])
 assert_type(SubHost.parse("db.internal"), SubHost)
 assert_type(SubHost.try_parse("db.internal"), Optional[SubHost])
 assert_type(SubHost.try_parse("", fallback), Union[SubHost, Fallback])
+
+
+# `parse_listen` reads where a service listens without touching the host; each
+# item names an address, a port and the interfaces that limit it.
+_listen: ListenLike = ["127.0.0.1:67", ("eth1", [67, 68]), None]
+_parsed = parse_listen(_listen, (67, 68), family=socket.AF_INET)
+assert_type(_parsed, Tuple[ListenAddress, ...])
+
+
+def _listen_item(item: ListenAddress) -> None:
+    assert_type(item.address, IPAddress)
+    assert_type(item.port, int)
+    assert_type(item.interfaces, Tuple[Union[Interface, MACAddress, str], ...])
+    assert_type(parse_listen(item), Tuple[ListenAddress, ...])

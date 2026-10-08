@@ -133,6 +133,7 @@ from ._msg._patch import is_socket_patched, patch_socket_module
 from ._msg._patch import _patch_requested as _msg_patch_requested
 
 from ._udp import Datagram, UDPEndpoint, has_pktinfo, SocketAddress
+from ._listen import ListenAddress, ListenLike, parse_listen
 from ._sockets import (
     bind,
     has_device_binding,
@@ -276,6 +277,9 @@ __all__ = [
     "InterfaceQuery",
     "PortsLike",
     "SocketAddress",
+    "ListenLike",
+    "ListenAddress",
+    "parse_listen",
 ]
 
 

@@ -37,6 +37,7 @@ Those headers are part of the installed package; read one with
 | `netimps/_fqdn/AGENTS.md` | `FQDN`, the domain-name value type |
 | `netimps/_msg/AGENTS.md` | `recvmsg` and `sendmsg` on every platform, the `socket` patch |
 | `netimps/_udp/AGENTS.md` | `UDPEndpoint`, `Datagram`, arrival interface, source pinning, reply sockets |
+| `netimps/_listen/AGENTS.md` | `parse_listen`, `ListenAddress`, `ListenLike`: the grammar of where a service listens |
 | `netimps/cli/AGENTS.md` | the commands, their JSON shapes and their diagnostics |
 
 ## Argument naming
@@ -134,6 +135,7 @@ too. The named networks `LOOPBACK_V4`, `LINK_LOCAL_V4` (`IPv4Network`) and
 | `InterfaceLike` | `Interface \| MACAddress \| IPv4Address \| IPv6Address \| str \| None` -- names a local interface: `src=` and `interface=` parameters |
 | `InterfaceQuery` | `Interface \| IPAddressLike \| IPInterface \| IPNetwork \| MACAddress` (text that is none of those is an adapter name) -- what `get_interface` and `iter_interfaces` look up |
 | `PortsLike` | `str \| int \| Iterable[str \| int]` -- a port, a range name, a scheme name, a comma-separated string of those (`"22,https"`), or several: `scan_ports`, `scan_hosts` |
+| `ListenLike` | nothing, one binding or a sequence of them (text, an address, an `Interface`, a `MACAddress`, a `ListenAddress`, a `(host, ports)` pair) -- where a service listens: `parse_listen(listen=)` |
 | `SocketAddress` | `(host, port)` or `(host, port, flowinfo, scope_id)` -- a socket address tuple, as in `Datagram.sender` |
 | `MACAddressLike` | `str \| int \| bytes \| bytearray \| MACAddress` |
 
@@ -639,6 +641,22 @@ connreset=False)`, `close()`, and the flags `.has_pktinfo` and
 - **`has_pktinfo(family=AF_INET) -> bool`**
   — whether a UDP socket of that family can report the arrival interface on this
 host.
+
+## Listening
+
+What a user writes to say where a service listens, read once for every library
+that listens. The grammar, with a table of examples, is in
+`netimps/_listen/AGENTS.md`.
+
+- **`parse_listen(listen=None, default_ports=0, *, family=None) -> Tuple[ListenAddress, ...]`**
+  — reads a `listen` argument into the sockets it names, each address and port
+once, in the order first written. No I/O: no name is resolved and no interface
+is looked up. `TypeError` for a type the grammar does not take,
+`NetimpsValueError` for anything else it refuses.
+- **`ListenAddress`** — a `NamedTuple` of `.address` (an `IPv4Address` or
+  `IPv6Address`), `.port` (`int`) and `.interfaces` (what limits the socket:
+`Interface`, `MACAddress` or adapter-name text; empty when it is not limited).
+It is itself an accepted binding.
 
 ## Retry
 
