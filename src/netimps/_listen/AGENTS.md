@@ -163,12 +163,13 @@ opened and raises the error unchanged.
 
 ### Measured: one port, an IPv4 wildcard and an IPv6-only wildcard
 
-Measured 2026-10-09 on Windows 11 (ARM64, Python 3.14) and Fedora 44 under WSL2
-(kernel 6.18, Python 3.14): with `IPV6_V6ONLY` 1 an exclusive IPv4 wildcard
-socket and an IPv6 wildcard socket bind one port in either order; a datagram to
-`127.0.0.1` reaches only the first and one to `::1` only the second. An IPv6
-socket with `IPV6_V6ONLY` 0 beside the IPv4 one is refused (`AddressInUseError`)
-on both. macOS and FreeBSD: unmeasured.
+Measured 2026-10-09 on Windows 11 (ARM64, Python 3.14), Fedora 44 under WSL2
+(kernel 6.18, Python 3.14), macOS 15.7 (Python 3.9) and FreeBSD 16.0 (Python
+3.11): with `IPV6_V6ONLY` 1 an exclusive IPv4 wildcard socket and an IPv6
+wildcard socket bind one port in either order; a datagram to `127.0.0.1` reaches
+only the first and one to `::1` only the second. On Windows and Linux an IPv6
+socket with `IPV6_V6ONLY` 0 beside the IPv4 one is refused (`AddressInUseError`);
+that half is unmeasured on macOS and FreeBSD.
 
 ### What stays the caller's
 

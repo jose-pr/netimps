@@ -186,6 +186,10 @@ def _open(
         broadcast=broadcast and family == _socket.AF_INET,
     )
     if family == _socket.AF_INET6:
+        # With this an IPv4 and an IPv6 wildcard share a port and each hears its
+        # own family alone: measured 2026-10-09 on Windows 11, Linux 6.18,
+        # macOS 15.7 and FreeBSD 16.0. Without it the second bind is refused on
+        # Windows and Linux.
         options["options"] = ((_socket.IPPROTO_IPV6, _socket.IPV6_V6ONLY, 1),)
     if device is not None:
         options["device"] = device
