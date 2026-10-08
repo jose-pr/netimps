@@ -36,7 +36,10 @@ nothing is opened, resolved or looked up.
 
 A `ListenAddress` is itself an accepted binding, so
 `parse_listen(parse_listen(x)) == parse_listen(x)`: a result can be stored,
-passed on and read back.
+passed on and read back. One made by hand is checked like any other binding:
+`interfaces` that are not a tuple of those three types is `TypeError`, and
+`interfaces` on an address that is not a wildcard is `NetimpsValueError`, since
+only a wildcard socket is limited.
 
 **`ListenLike`** — what `listen` accepts: `None`, one binding, or a sequence
 (list or tuple) of bindings. A binding is:
@@ -97,8 +100,8 @@ With `default_ports=67`, each as `(address, port, interfaces)`:
 ### The family
 
 `family=None` takes each address in the family it is written in. **The wildcard
-forms (`None`, `""`, `"*"`, `"*:port"`, `":port"`) and an interface binding are
-IPv4's**, as `bind("")` is. `socket.AF_INET` refuses an IPv6 address.
+forms (`None`, `"*"`, `"*:port"`, `":port"`, a blank host in a pair) and an
+interface binding are IPv4's**, as `bind("")` is. `socket.AF_INET` refuses an IPv6 address.
 `socket.AF_INET6` refuses an IPv4 address and makes the wildcard forms and an
 interface binding IPv6's (`::`). `"::"` and `"0.0.0.0"` are addresses, not
 wildcard forms, and keep their family.

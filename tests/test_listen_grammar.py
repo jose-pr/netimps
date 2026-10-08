@@ -496,6 +496,42 @@ def test_parsing_a_result_with_its_family_gives_the_result(
     assert parse_listen(once, family=family) == once
 
 
+def test_a_listen_address_that_limits_an_address_is_refused() -> None:
+    """Bound as written it would hear every interface while saying it hears one."""
+    made = ListenAddress(IPv4Address("127.0.0.1"), 67, ("eth1",))
+    with pytest.raises(NetimpsValueError, match="only a wildcard is limited"):
+        parse_listen(made)
+    with pytest.raises(NetimpsValueError, match="only a wildcard is limited"):
+        parse_listen([ListenAddress(IPv6Address("::1"), 69, (MAC,))])
+    assert parse_listen(ListenAddress(IPv4Address("0.0.0.0"), 67, ("eth1",))) == (
+        ListenAddress(IPv4Address("0.0.0.0"), 67, ("eth1",)),
+    )
+
+
+@pytest.mark.parametrize(
+    "interfaces, error",
+    [
+        (["eth1"], TypeError),
+        ("eth1", TypeError),
+        ((7,), TypeError),
+        ((None,), TypeError),
+        (("",), NetimpsValueError),
+        (("eth1/24",), NetimpsValueError),
+    ],
+    ids=repr,
+)
+def test_a_listen_address_holds_selectors_and_nothing_else(
+    interfaces: ty.Any, error: type
+) -> None:
+    with pytest.raises(error):
+        parse_listen(ListenAddress(IPv4Address("0.0.0.0"), 67, interfaces))
+
+
+def test_a_mac_written_as_text_in_a_listen_address_is_read_as_a_mac() -> None:
+    made = ListenAddress(IPv4Address("0.0.0.0"), 67, ("aa-bb-cc-dd-ee-ff",))
+    assert parse_listen(made) == (ListenAddress(IPv4Address("0.0.0.0"), 67, (MAC,)),)
+
+
 def test_a_result_is_refused_by_the_other_family() -> None:
     with pytest.raises(NetimpsValueError, match="family"):
         parse_listen(parse_listen("::1", 67), family=INET)

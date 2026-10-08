@@ -298,7 +298,22 @@ def _listen_address(entry: ListenAddress, family: "Optional[int]") -> _Parsed:
     if not isinstance(entry.address, (IPv4Address, IPv6Address)):
         raise TypeError("a ListenAddress holds an address, not %r" % (entry.address,))
     _check_family(entry.address, family, entry.address)
-    return _Parsed(entry.address, [_port(entry.port)], tuple(entry.interfaces), entry)
+    if not isinstance(entry.interfaces, tuple) or not all(
+        isinstance(item, (Interface, MACAddress, str)) for item in entry.interfaces
+    ):
+        raise TypeError(
+            "a ListenAddress holds its interfaces as a tuple of Interface, "
+            "MACAddress or adapter name, not %r" % (entry.interfaces,)
+        )
+    selectors = tuple(
+        _selector(item) if isinstance(item, str) else item for item in entry.interfaces
+    )
+    if selectors and not entry.address.is_unspecified:
+        # Bound as written it would hear every interface, with nothing to say so.
+        raise NetimpsValueError(
+            "%r limits an address to interfaces: only a wildcard is limited" % (entry,)
+        )
+    return _Parsed(entry.address, [_port(entry.port)], selectors, entry)
 
 
 def _bindings_of(item: object, family: "Optional[int]") -> "Iterator[_Parsed]":
