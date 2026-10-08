@@ -383,6 +383,8 @@ def test_an_empty_default_ports_refuses_only_a_binding_without_a_port() -> None:
     [
         (True, TypeError),
         ("67", TypeError),
+        ("", TypeError),
+        (b"", TypeError),
         (6.5, TypeError),
         ([67, True], TypeError),
         ([67, "68"], TypeError),
@@ -525,6 +527,54 @@ def test_a_listen_address_holds_selectors_and_nothing_else(
 ) -> None:
     with pytest.raises(error):
         parse_listen(ListenAddress(IPv4Address("0.0.0.0"), 67, interfaces))
+
+
+@pytest.mark.parametrize(
+    "made, error",
+    [
+        (ListenAddress(IPv4Address("127.0.0.1"), 70000), NetimpsValueError),
+        (ListenAddress(IPv4Address("127.0.0.1"), -1), NetimpsValueError),
+        (ListenAddress(IPv4Address("127.0.0.1"), "67"), TypeError),  # type: ignore[arg-type]
+        (ListenAddress(IPv4Address("127.0.0.1"), True), TypeError),
+        (ListenAddress("127.0.0.1", 67), TypeError),  # type: ignore[arg-type]
+        (ListenAddress(None, 67), TypeError),  # type: ignore[arg-type]
+    ],
+    ids=repr,
+)
+def test_a_listen_address_made_by_hand_is_checked(made: ty.Any, error: type) -> None:
+    with pytest.raises(error):
+        parse_listen(made)
+    with pytest.raises(error):
+        parse_listen(["127.0.0.1", made])
+
+
+@pytest.mark.parametrize("blank", ["", "  ", " , ", ","])
+def test_a_blank_item_among_others_is_refused(blank: str) -> None:
+    with pytest.raises(NetimpsValueError, match="names no address"):
+        parse_listen(["127.0.0.1", "127.0.0.2", blank])
+    with pytest.raises(NetimpsValueError, match="names no address"):
+        parse_listen(blank)
+
+
+def test_an_empty_sequence_names_no_address() -> None:
+    for empty in ([], ()):
+        with pytest.raises(NetimpsValueError, match="names no address"):
+            parse_listen(empty)
+
+
+def test_a_bool_is_never_a_port() -> None:
+    """`True` is an `int` to Python: read as a port it would be port 1."""
+    for spec in (("127.0.0.1", True), ("127.0.0.1", [67, False]), [None, True]):
+        with pytest.raises(TypeError):
+            parse_listen(spec)
+
+
+def test_a_host_holding_a_comma_is_not_the_host_of_a_pair() -> None:
+    """Two items, text and a number: the text is bindings and the number is refused."""
+    with pytest.raises(TypeError, match="not int 6767"):
+        parse_listen(("127.0.0.1,127.0.0.2", 6767))
+    with pytest.raises(TypeError, match="not int 6767"):
+        parse_listen(["eth1,eth2", 6767])
 
 
 def test_a_mac_written_as_text_in_a_listen_address_is_read_as_a_mac() -> None:

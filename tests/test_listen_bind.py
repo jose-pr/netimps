@@ -229,6 +229,42 @@ def test_broadcast_asked_of_an_ipv6_socket_is_not_an_error(listen: ty.Any) -> No
     assert endpoint.socket.family == INET6
 
 
+def test_broadcast_is_asked_of_an_ipv4_socket_only(
+    spy: types.SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Read from what `bind` is asked: some platforms take the option on IPv6 silently."""
+    made = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    monkeypatch.setattr(_binding, "bind", lambda *a, **k: spy.calls.append(k) or made)
+    monkeypatch.setattr(_binding, "UDPEndpoint", lambda sock, **kwargs: sock)
+    try:
+        bind_listen(["127.0.0.1:0", "[::1]:0"], broadcast=True)
+    finally:
+        made.close()
+    assert [call["broadcast"] for call in spy.calls] == [True, False]
+
+
+def test_a_link_local_ipv6_address_is_bound_with_the_adapter_it_is_on(
+    spy: types.SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two adapters can hold one link-local address: the zone says which."""
+    first = types.SimpleNamespace(index=7)
+    second = types.SimpleNamespace(index=9)
+    held = [
+        (first, netimps.parse("fe80::1/64", netimps.IPInterface)),
+        (second, netimps.parse("fe80::1/64", netimps.IPInterface)),
+        (second, netimps.parse("2001:db8::9/64", netimps.IPInterface)),
+    ]
+    monkeypatch.setattr(_binding, "iter_addresses", lambda family=None: iter(held))
+    made = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    monkeypatch.setattr(_binding, "bind", lambda *a, **k: spy.calls.append(a) or made)
+    monkeypatch.setattr(_binding, "UDPEndpoint", lambda sock, **kwargs: sock)
+    try:
+        bind_listen("[::]:6767", per_address=True)
+    finally:
+        made.close()
+    assert [call[0] for call in spy.calls] == ["fe80::1%7", "fe80::1%9", "2001:db8::9"]
+
+
 # -- one socket for each address ----------------------------------------------------------
 
 
@@ -474,6 +510,48 @@ def test_a_refused_device_bind_is_repeated_without_it_and_said_once(
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert len(warnings) == 1 and warnings[0].name == "netimps._listen"
     assert loop.name in warnings[0].getMessage()
+
+
+@pytest.mark.parametrize("asked, expected", [(True, True), (False, False)])
+def test_device_binding_false_asks_for_no_device(
+    listen: ty.Any,
+    monkeypatch: pytest.MonkeyPatch,
+    asked: bool,
+    expected: bool,
+) -> None:
+    if not netimps.has_pktinfo(INET):
+        pytest.skip("this host reports no arrival interface on an IPv4 socket")
+    loop = _loopback()
+    monkeypatch.setattr(_binding, "has_device_binding", lambda: True)
+    real = _binding.bind
+
+    devices: "ty.List[ty.Optional[Interface]]" = []
+
+    def without_device(*args: ty.Any, **kwargs: ty.Any) -> "socket.socket":
+        devices.append(kwargs.pop("device", None))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(_binding, "bind", without_device)
+    (endpoint,) = listen((loop, 0), device_binding=asked)
+    assert endpoint.interfaces == (loop,)
+    assert devices == ([loop] if expected else [None])
+
+
+def test_a_permission_error_with_no_device_is_raised_as_it_is(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Only a bind that asked for a device is repeated: a low port refused is the error."""
+    refusal = PermissionError("port 67 needs a privilege")
+
+    def refusing(*args: ty.Any, **kwargs: ty.Any) -> "socket.socket":
+        raise refusal
+
+    monkeypatch.setattr(_binding, "bind", refusing)
+    with caplog.at_level(logging.DEBUG, logger="netimps._listen"):
+        with pytest.raises(PermissionError) as raised:
+            bind_listen("127.0.0.1:67")
+    assert raised.value is refusal
+    assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
 
 
 def test_a_second_refused_device_bind_in_one_call_is_not_said_again(

@@ -122,11 +122,8 @@ def parse_listen(
 def _family(family: object) -> "Optional[int]":
     if family is None:
         return None
-    if (
-        isinstance(family, int)
-        and not isinstance(family, bool)
-        and family in (_socket.AF_INET, _socket.AF_INET6)
-    ):
+    # Neither constant is 0 or 1 on any platform, so a bool is refused with the rest.
+    if isinstance(family, int) and family in (_socket.AF_INET, _socket.AF_INET6):
         return int(family)
     raise NetimpsValueError(
         "family must be None, socket.AF_INET or socket.AF_INET6, not %r" % (family,)
@@ -213,12 +210,8 @@ def _host(
 
 def _is_port_like(value: object) -> bool:
     """Whether `value` can be a pair's second item rather than a second binding."""
-    if value is None:
-        return True
-    if isinstance(value, bool):
-        return False
-    if isinstance(value, int):
-        return True
+    if value is None or isinstance(value, int):
+        return True  # a bool among them: `split_host` refuses it as a port
     if isinstance(value, str):
         return all(c in _DIGITS_AND_SIGNS for c in value)
     if isinstance(value, (tuple, list)):
@@ -345,8 +338,6 @@ def _iter_bindings(listen: object, family: "Optional[int]") -> "Iterator[_Parsed
         and not isinstance(listen, ListenAddress)
         and not _is_pair(listen)
     ):
-        if not listen:
-            raise NetimpsValueError("listen names no address: it is empty")
         for item in listen:
             yield from _bindings_of(item, family)
     else:

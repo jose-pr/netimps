@@ -53,8 +53,8 @@ only a wildcard socket is limited.
   lists). The host is `None`, blank text, `"*"`, text, an address, an
   `Interface` or a `MACAddress`; the ports are an `int`, digit text, `None` (the
   default ports) or a sequence of those. A pair is told from two bindings by its
-  second item being port-like (`None`, an `int` that is not a `bool`, digit
-  text, or a sequence of those).
+  second item being port-like (`None`, an `int`, digit text, or a sequence of
+  those). A `bool` there is refused: it is no port.
 
 ### How text is read
 
