@@ -157,3 +157,6 @@ own, never as the platform's.
   where neither backend can serve it.
 - A datagram too large for `bufsize` sets `MSG_TRUNC` in `msg_flags` rather than
   raising, because Winsock reports that as an error where POSIX sets a flag.
+  A control buffer too small sets `MSG_CTRUNC` alone: Winsock gives the same
+  error for either buffer and writes which one to the flags (measured
+  2026-10-09, Windows 11 ARM64, Python 3.9 and 3.14, IPv4 and IPv6).

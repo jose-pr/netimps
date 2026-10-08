@@ -46,6 +46,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   result's item, and is itself an accepted binding, so parsing a result gives it
   back. **`ListenLike`** is the alias of what is accepted.
 
+### Fixed
+
+- **Windows: `recvmsg` sets `MSG_TRUNC` only when the payload was cut.** A control
+  buffer too small for the packet information, on a socket whose option is on,
+  came back as `MSG_TRUNC | MSG_CTRUNC` with the data whole, so
+  `UDPEndpoint(sock, pktinfo=False).recv(...).truncated` was true for a datagram
+  that fit. Each buffer now reports as its own flag, as on POSIX.
+
 ## [0.4.0] - 2026-10-08
 
 ### Added
