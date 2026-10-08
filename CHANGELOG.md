@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.4.0] - 2026-10-08
+
 ### Added
 
 - **`bind(..., device=<interface>)` restricts a socket to one device**, so a
@@ -1969,7 +1973,8 @@ below is simply what the package contains.
 - **`Host`**, **`retry()`/`backoff_delays()`**, and the named networks `APIPA`,
   `LOOPBACK_V4`, `LOOPBACK_V6`, `LINK_LOCAL_V6`.
 
-[Unreleased]: https://github.com/jose-pr/netimps/compare/v0.3.4...HEAD
+[Unreleased]: https://github.com/jose-pr/netimps/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/jose-pr/netimps/compare/v0.3.4...v0.4.0
 [0.3.4]: https://github.com/jose-pr/netimps/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/jose-pr/netimps/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/jose-pr/netimps/compare/v0.3.1...v0.3.2

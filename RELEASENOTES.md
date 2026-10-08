@@ -121,6 +121,27 @@ The changelog lists every fix. The ones that changed an answer on a real host:
 - A DNS reply is bounded, and a name the IDNA codec refuses does not escape
   as a `UnicodeEncodeError`.
 
+### How it was checked
+
+Measured on the commit before the one that dates the changelog, which differs
+from it in the changelog and in this file only.
+
+- The CI matrix, 24 jobs, all passing: lint and the three-platform type
+  check; the suite on Python 3.9 to 3.14 on ubuntu and on 3.9 and 3.14 on
+  windows and macos; the declared dependency floors; and, on 3.9 and 3.14 on
+  each of the three systems, an install with no extra and the built wheel
+  with its console script.
+- Hosts the matrix does not have: FreeBSD on Python 3.11 (2293 passed, 65
+  skipped) and macOS 15.7 on Intel with Python 3.9 (2298 passed, 60 skipped).
+  Windows 11 on ARM64: 2416 passed on 3.14 and 2415 on 3.9.
+- The three libraries built on this release (pktcap, pytftp, pydhcp) run
+  their own suites against it on the same platforms.
+- pathlib-next 0.9.11, whose `uri` extra admits any netimps from 0.3.1 and so
+  receives this release unasked: its suite against a wheel of this version,
+  3404 passed, 41 skipped. It uses no name this release renames.
+- The sdist and the wheel build and pass `twine check`; the release workflow
+  installs the wheel into a fresh environment before anything is published.
+
 ## 0.3.4 — 2026-10-03
 
 Two fixes, both in how an interface with more than one address is handled, and
