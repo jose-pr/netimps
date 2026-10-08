@@ -16,6 +16,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   Receiving never filters, so a caller can count what it drops. An item that is
   not an `Interface`, or has no index, is refused at construction.
 
+- **`bind_listen(listen=None, default_ports=0, *, family=None, per_address=None,
+  device_binding=True, allow_address_takeover=False, broadcast=False) ->
+  Tuple[UDPEndpoint, ...]`** binds what `parse_listen` names and returns an
+  endpoint for each socket, in order. An address is one exclusive socket; a
+  wildcard is one socket with packet info, or, with `per_address=True` or on a
+  host whose sockets report no packet info, one socket for each address of the
+  host (loopback and link-local included; an IPv6 link-local address is bound with
+  its zone); an interface binding is one wildcard socket whose endpoint serves
+  those adapters (`.interfaces`), bound to the device where the platform can
+  (`device_binding=False` to decline) and otherwise left to `admits`. A device
+  bind the kernel refuses is repeated without it and logged once at `WARNING` on
+  `netimps._listen`. An IPv6 socket is IPv6 only on every platform, so `*` and
+  `::` on one port are two sockets and no arrival is v4-mapped. A selector that
+  matches no adapter is `NetimpsValueError` before any socket is opened, and a
+  failure closes every socket the call opened.
+
 - **`parse_listen(listen=None, default_ports=0, *, family=None) -> Tuple[ListenAddress, ...]`**
   reads where a service listens: text (`"*"`, `":67"`, `"127.0.0.1:67"`,
   `"[::1]:69"`, `"eth1:67"`, `"aa-bb-cc-dd-ee-ff"`, several joined by commas), an

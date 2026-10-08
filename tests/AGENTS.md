@@ -55,6 +55,7 @@ signal, not noise.
 | `test_bind_defaults.py` | `bind()`: family inference, the `connreset` default, the hint and the one exception type for a taken port, hijack resistance, port sharing, the address types it accepts |
 | `test_listen_grammar.py` | `parse_listen`: every accepted and refused form as a table, the family rule, the default ports, a result read back as a specification, and no name resolved or adapter listed |
 | `test_udp_admits.py` | `UDPEndpoint(interfaces=)` and `admits`: no filtering on receive, a limited endpoint on loopback and on another adapter, the refusals at construction |
+| `test_listen_bind.py` | `bind_listen`: an address, both wildcards on one port, one socket for each address, an interface binding and its device, the refusals before a socket opens, and nothing left open after a failure |
 | `test_udp_datagram.py` | `send(src=<address>)` without enumeration, truncation on both receive paths, `Datagram.destination` / `is_unicast`, `datagrams(on_error=)` |
 | `test_msg.py` | `recvmsg`/`sendmsg` on every platform, and the `socket` patch (install, reverse, no-op on POSIX) |
 | `test_freebsd_pktinfo.py` | IPv4 arrival data and source pinning where the carrier is not `IP_PKTINFO` |

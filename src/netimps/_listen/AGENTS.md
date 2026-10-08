@@ -114,7 +114,62 @@ brackets around anything but an IPv6 address, an adapter name with a `/`, an
 address of the wrong family, and a binding with no port when `default_ports` is
 empty.
 
+## The sockets a specification names
+
+**`bind_listen(listen=None, default_ports=0, *, family=None, per_address=None, device_binding=True, allow_address_takeover=False, broadcast=False) -> Tuple[UDPEndpoint, ...]`**
+
+Parses (`listen` may be what `parse_listen` returned), drops the interface cache,
+looks every interface up, and only then opens sockets. One `UDPEndpoint` comes
+back for each socket, in the order of the specification, expansions in place.
+
+- `per_address`: `True` expands every unlimited wildcard into one socket for each
+  address of its family; `False` never does; `None` does where
+  `has_pktinfo(family)` is false, because a wildcard socket that cannot report
+  the arrival interface is no use to a service that needs it.
+- `device_binding`: `False` declines the device bind for an interface binding.
+- `allow_address_takeover`: passed to `bind`; the default keeps every socket
+  exclusive, so a taken port is `AddressInUseError` and not a socket that
+  receives nothing.
+- `broadcast`: `SO_BROADCAST` on an IPv4 socket. An IPv6 socket never gets it.
+
+What each kind of entry opens:
+
+| Entry | Opens |
+| --- | --- |
+| an address (`127.0.0.1:67`, `[::1]:69`) | one socket bound to it; its endpoint asks for no packet info |
+| a wildcard, not limited | one wildcard socket whose endpoint asks for packet info |
+| the same, with `per_address=True` (or `None` and no packet info) | one socket for each address of that family the host holds, every one `iter_addresses` reports, loopback and link-local included, each without packet info. An IPv6 link-local address is bound with its zone, the adapter it is on. Name the addresses yourself to hear fewer |
+| a wildcard limited to interfaces | one wildcard socket with packet info and `endpoint.interfaces` the adapters found; a MAC names every adapter carrying it. Bound to the device when `device_binding` is true, `has_device_binding()` is true and exactly one adapter was found |
+
+Every socket is `SOCK_DGRAM`, exclusive, with `connreset` off. **An IPv6 socket
+is IPv6 only on every platform** (`IPV6_V6ONLY` 1), so `*` and `::` on one port
+are two sockets that do not overlap and no arrival is v4-mapped. An address and
+port is bound once whatever the expansion repeats.
+
+Refused before a socket opens, as `NetimpsValueError`: a selector that matches
+no adapter with an index (the message says that a host name is never resolved,
+for text); a limited binding with `per_address=True`; a limited binding on a host
+whose sockets report no packet info for that family.
+
+A device bind the kernel refuses (`DeviceBindingUnsupportedError`, or
+`PermissionError` where the option needs a capability) is repeated without the
+device, and said once per call at `WARNING` on the logger `netimps._listen`: the
+endpoint still serves only its interfaces, and `admits` is the check. An error
+the repeat raises is the real one. Any failure closes every socket the call
+opened and raises the error unchanged.
+
+### Measured: one port, an IPv4 wildcard and an IPv6-only wildcard
+
+Measured 2026-10-09 on Windows 11 (ARM64, Python 3.14) and Fedora 44 under WSL2
+(kernel 6.18, Python 3.14): with `IPV6_V6ONLY` 1 an exclusive IPv4 wildcard
+socket and an IPv6 wildcard socket bind one port in either order; a datagram to
+`127.0.0.1` reaches only the first and one to `::1` only the second. An IPv6
+socket with `IPV6_V6ONLY` 0 beside the IPv4 one is refused (`AddressInUseError`)
+on both. macOS and FreeBSD: unmeasured.
+
 ### What stays the caller's
 
-The default ports (they are a protocol's), and checking that an interface
-exists.
+The default ports (they are a protocol's), receive buffers
+(`set_buffer_size(endpoint.socket, receive=...)` is one call), a receive loop over
+the endpoints, and dropping and counting what `admits` refuses. There is no
+re-bind and no TCP.

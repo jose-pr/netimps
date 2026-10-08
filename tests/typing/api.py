@@ -60,6 +60,7 @@ from netimps import (
     Interface,
     ListenAddress,
     ListenLike,
+    bind_listen,
     parse_listen,
     MACAddress,
     NetimpsError,
@@ -628,6 +629,16 @@ assert_type(SubHost.try_parse("", fallback), Union[SubHost, Fallback])
 _listen: ListenLike = ["127.0.0.1:67", ("eth1", [67, 68]), None]
 _parsed = parse_listen(_listen, (67, 68), family=socket.AF_INET)
 assert_type(_parsed, Tuple[ListenAddress, ...])
+
+
+def _bound_listen() -> None:
+    endpoints = bind_listen(_listen, 67, family=socket.AF_INET6, per_address=True)
+    assert_type(endpoints, Tuple[UDPEndpoint, ...])
+    assert_type(bind_listen(), Tuple[UDPEndpoint, ...])
+    assert_type(
+        bind_listen("*", (67, 68), device_binding=False, broadcast=True),
+        Tuple[UDPEndpoint, ...],
+    )
 
 
 def _listen_item(item: ListenAddress) -> None:

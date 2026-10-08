@@ -37,7 +37,7 @@ Those headers are part of the installed package; read one with
 | `netimps/_fqdn/AGENTS.md` | `FQDN`, the domain-name value type |
 | `netimps/_msg/AGENTS.md` | `recvmsg` and `sendmsg` on every platform, the `socket` patch |
 | `netimps/_udp/AGENTS.md` | `UDPEndpoint`, `Datagram`, arrival interface, source pinning, reply sockets |
-| `netimps/_listen/AGENTS.md` | `parse_listen`, `ListenAddress`, `ListenLike`: the grammar of where a service listens |
+| `netimps/_listen/AGENTS.md` | `parse_listen`, `bind_listen`, `ListenAddress`, `ListenLike`: where a service listens, and the sockets that serve it |
 | `netimps/cli/AGENTS.md` | the commands, their JSON shapes and their diagnostics |
 
 ## Argument naming
@@ -634,6 +634,13 @@ is looked up. `TypeError` for a type the grammar does not take,
   `IPv6Address`), `.port` (`int`) and `.interfaces` (what limits the socket:
 `Interface`, `MACAddress` or adapter-name text; empty when it is not limited).
 It is itself an accepted binding.
+- **`bind_listen(listen=None, default_ports=0, *, family=None, per_address=None, device_binding=True, allow_address_takeover=False, broadcast=False) -> Tuple[UDPEndpoint, ...]`**
+  — binds what `parse_listen` names and returns one `UDPEndpoint` for each socket,
+in order: an address is one socket; a wildcard is one socket with packet info, or
+one for each address of the host where `per_address` says so or the host reports no
+packet info; an interface binding is one wildcard socket whose endpoint
+`.interfaces` are the adapters, bound to the device where the host can. A failure
+closes what the call opened and raises unchanged.
 
 ## Retry
 
