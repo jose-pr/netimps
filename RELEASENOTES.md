@@ -5,6 +5,122 @@ benchmark figures and the validation evidence behind each release. The
 changelog says *what changed*; this says *what it costs you and how it was
 checked*.
 
+## 0.4.0 — 2026-10-08
+
+A breaking release: the public surface is renamed to one scheme, options are
+keyword-only, the value types are read-only, input rules are stricter and the
+exceptions form one hierarchy. The documented API broke, so it is a MINOR under
+the pre-1.0 rule. No alias is kept: an old name fails at import or at the call,
+not later.
+
+### Know before upgrading
+
+These change what running code does without failing at import:
+
+- **`wait_for_port(timeout=)` means one attempt.** It was the whole wait; that
+  is `deadline=` (default 30 seconds). A call that passed `timeout=5` to give
+  up after five seconds waits thirty, with five-second attempts.
+- **`PingResult.rtt` is seconds.** `rtt_ms` is gone, so code reading it fails;
+  code that moved to `rtt` without dividing is off by a thousand.
+- **`bind()` infers the family.** `family=None` (was `AF_INET`) reads it from
+  the address, so `bind("::1")` is an IPv6 socket; the wildcard `""` stays
+  IPv4. `connreset=None` (was `True`) is off for a datagram socket and
+  untouched for any other.
+- **A resolver that could not be asked raises.** `resolve_dnspython`,
+  `resolve_system` and `resolve_nslookup` raise `ResolutionError` (or
+  `ResolutionTimeoutError`) for an outage where they returned `[]`; a name
+  that does not exist is still `[]`. `resolve()` without `strict=True` still
+  answers `[]`. `ResolutionError` is an `OSError`, so `except OSError` round a
+  connect catches it and `retry()` retries it; leave `NoAnswerError` out of
+  `retryable` to stop at a name that has no record.
+- **`FQDN.resolve()` and `Host.resolve()` return `(fqdn, ip)`**, not DNS
+  records; those come from `netimps.resolve(name, rdtype)`.
+- **`NETIMPS_NO_SOCKET_PATCH` set to anything is an error at import.** The
+  variable is `NETIMPS_SOCKET_PATCH`, with `0`, `false`, `no` or `off` to opt
+  out. A stale setting cannot silently re-enable the patch.
+- **The command line's exit statuses are uniform**: `0` found or yes, `1`
+  nothing found or no, `2` an error. `netimps scan` with no answer exits 1
+  (was 0), a bad port exits 2 (was 1), and `-q` prints no result line. The
+  `cli` extra needs `duho>=0.7.0,<0.8`.
+- **Stricter input.** A destination of `None` is a `TypeError`, as is a value
+  that is no host type given to `split_host`, `split_zone` or `join_host`.
+  `MACAddress.try_parse` and `FQDN.try_parse` take text only and raise
+  `TypeError` for anything else; the generic `netimps.try_parse(value, type)`
+  still answers `default`. Malformed text raises `NetimpsValueError`, which is
+  a `ValueError`. The address classifiers raise it for text that is no
+  address; `is_wildcard` alone answers `False` for a name, since it takes what
+  `bind` takes.
+
+### Migrate
+
+The whole table is in the changelog under *Renamed*. The ones most code meets:
+
+| You wrote | Write |
+| --- | --- |
+| `UdpEndpoint`, `Fqdn`, `FqdnLike`, `MACLike`, `AddressLike` | `UDPEndpoint`, `FQDN`, `FQDNLike`, `MACAddressLike`, `HostLike` |
+| `normalize_host(x)` | `split_host(x)` |
+| `get_ip(x)` | `Host(x).ip()`; `Host(x).ip(check=True)` raises where `get_ip` returned `None` |
+| `host.fqdn` | `host.fqdn()` |
+| `host.ip(True)` | `host.ip(refresh=True)` |
+| `interface_for(q)`, `interfaces_for(q)` | `get_interface(q)`, `iter_interfaces(q)` |
+| `hop_count(dst)` | `count_hops(dst)` |
+| `supports_pktinfo()`, `supports_recvmsg()`, `socket_patched()` | `has_pktinfo()`, `has_recvmsg()`, `is_socket_patched()` |
+| `HOST_DN` | `get_hostname()` |
+| `APIPA` | `LINK_LOCAL_V4` |
+| `iface.loopback` | `iface.is_loopback` |
+| `mac.as_str("-", True)` | `mac.format("-", upper=True)` or `format(mac, "-X")` |
+| `name.wire`, `name.unicode`, `name.as_fully_qualified()` | `name.encode()`, `name.to_unicode()`, `name.fully_qualified()` |
+| `endpoint.send(data, address=a, port=p)` | `endpoint.send(data, a, p)`, with `src=` by name |
+| `datagram.local_address` | `datagram.destination` |
+| `result.host`, `result.rtt_ms` | `result.dst`, `result.rtt * 1000` |
+| `ping("h", 3)` | `ping("h", tries=3)`: every option after the operands is named |
+| `strict=` on a `Host` or `FQDN` method | `check=` |
+| `netimps.cli:run` | `netimps.cli:main` |
+
+`Host`, `MACAddress`, `PingResult`, `Route` and `Interface` are read-only:
+assigning to an attribute raises `AttributeError`, and `Interface.ips` is a
+tuple. Build a new value.
+
+`import netimps` no longer asks for the host name, which was a WMI query on
+Windows. Code that imported netimps lazily to avoid that cost can import it at
+the top.
+
+### What was added
+
+- Sockets: `bind(device=)` with `has_device_binding()` and
+  `DeviceBindingUnsupportedError`; `cache=` on the lookups that resolve an
+  adapter.
+- Interfaces: `Interface.is_up`, `is_multicast` and `is_point_to_point`;
+  `get_interface` and `iter_interfaces` by name and by `index=`.
+- Addresses and hosts: `format_address`, `classify`, `split_zone`,
+  `is_local_host`, `is_unicast`, `get_hostname`; `parse` on `MACAddress`,
+  `FQDN` and `Host`; `FQDN.encode`, `decode` and `decode_at`.
+- Resolution: `Host.resolve()` and `FQDN.resolve()`, the resolver options and
+  `check=` on `Host.ip()`, `Host.fqdn()` and `FQDN.ip()`; `cache=` and
+  `deadline=` on `resolve()`; `has_dns()`; `resolve_doh(allow_http=)`.
+- asyncio: `aretry`, `await_for_port`, `UDPEndpoint.asend`, `aclose` and
+  `async with`. `import netimps` does not import asyncio.
+- Exceptions: `NetimpsError` as the base, `NetimpsValueError`,
+  `NoAnswerError`, `ResolutionTimeoutError`, `DNSDecodeError`.
+- Ports: the WS-Management schemes (`wsman`, `wsmans`, `winrm`, `winrms`,
+  `psrp`), a comma-separated `PortsLike`, a port number as text for
+  `get_default_port`.
+
+### What was wrong
+
+The changelog lists every fix. The ones that changed an answer on a real host:
+
+- IPv4 on FreeBSD reports the arrival interface and pins the source.
+- Windows lists no address it cannot bind, honours a socket timeout in
+  `recvmsg` and `sendmsg`, and pays the same for a receive whatever `bufsize`.
+- On Windows the `os.sysconf` stand-in the `socket` patch installs answers
+  `SC_OPEN_MAX`. It raised for every name but `SC_IOV_MAX`, which broke a
+  library that reads the limit after testing only `hasattr(os, "sysconf")`.
+- A BSD netmask is read no further than its own length.
+- Closing a `UDPEndpoint` ends a pending `arecv`.
+- A DNS reply is bounded, and a name the IDNA codec refuses does not escape
+  as a `UnicodeEncodeError`.
+
 ## 0.3.4 — 2026-10-03
 
 Two fixes, both in how an interface with more than one address is handled, and
