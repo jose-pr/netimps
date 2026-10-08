@@ -543,6 +543,11 @@ async def _datagrams_on_error(endpoint: UDPEndpoint) -> None:
 
 
 def _endpoint_options(endpoint: UDPEndpoint) -> None:
+    assert_type(endpoint.interfaces, Tuple[Interface, ...])
+    assert_type(endpoint.admits(Datagram(b"", ("h", 1))), bool)
+    assert_type(
+        UDPEndpoint(socket.socket(), interfaces=[Interface("lo", 1)]), UDPEndpoint
+    )
     assert_type(endpoint.recv(1500, resolve_interface=False), Datagram)
     assert_type(endpoint.send(b"x", "h", 9, src="127.0.0.1"), int)
     assert_type(

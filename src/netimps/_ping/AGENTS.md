@@ -97,3 +97,34 @@ at least 3 there.
   `result == True` is `True` while `{True: x}[result]` raises `KeyError`.
 - **ICMP echo is not "is the host up"** — most cloud firewalls drop it. Prefer
   `tcp_check`.
+
+## Programs the library runs
+
+`ping`/`ping6`, `nslookup`, `route` and `traceroute`/`tracert` are started by one
+private runner, so they all behave alike:
+
+- **An argument list, never a shell.** The program is looked up in the absolute
+  entries of `PATH` before anything runs; the working directory is never
+  searched, even on Windows, and a relative or empty `PATH` entry is skipped.
+  A missing one is reported by name (`FileNotFoundError`
+  internally), and the caller keeps its own contract for it: `ping` is falsy,
+  `get_route` and `count_hops` give `None`/unknown, `resolve_nslookup` raises
+  `ResolutionError`. A program that resolves to a `.bat` or `.cmd` is refused.
+- **Standard input is closed**, so a child can never read the caller's.
+- **`LC_ALL=C` is added to a copy of the environment**, so the output does not
+  change with the user's locale. Replies are still matched by address token,
+  never by prose.
+- **Output is decoded with `errors="replace"`**: the OEM code page on Windows
+  (measured: `ping`, `nslookup` and `tracert` all echo a non-ASCII host name in
+  it), UTF-8 elsewhere. Invalid bytes become U+FFFD and never raise.
+- **Every run has a deadline** (there is no unbounded call), which kills the
+  program and its children before the caller's timeout mapping applies
+  (`ResolutionTimeoutError` for `nslookup`, falsy for `ping`). `route -n get`
+  gets 5 seconds; `resolve_nslookup(timeout=None)` gets 30.
+- **The exit status is read**: `route` and `traceroute`/`tracert` with a
+  non-zero status give `None`, as a missing program does.
+- **Supported programs**: the `ping`, `nslookup` and `tracert` that ship with
+  Windows 10 and 11; `ping`, `ping6`, `nslookup`, `route` and `traceroute` on
+  macOS 15 and FreeBSD 16; on Linux iputils `ping`, BIND `nslookup` and the
+  `traceroute` package, as the CI images carry them. BusyBox applets are not
+  supported: its `ping` rejects the don't-fragment flag.

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`UDPEndpoint(sock, *, pktinfo=True, interfaces=())`** knows the interfaces it
+  serves: `.interfaces` is a tuple of `Interface`, and **`admits(datagram) ->
+  bool`** is true when it is empty or the datagram arrived on one of them (a
+  datagram with no arrival interface is not admitted by a limited endpoint).
+  Receiving never filters, so a caller can count what it drops. An item that is
+  not an `Interface`, or has no index, is refused at construction.
+
 - **`parse_listen(listen=None, default_ports=0, *, family=None) -> Tuple[ListenAddress, ...]`**
   reads where a service listens: text (`"*"`, `":67"`, `"127.0.0.1:67"`,
   `"[::1]:69"`, `"eth1:67"`, `"aa-bb-cc-dd-ee-ff"`, several joined by commas), an

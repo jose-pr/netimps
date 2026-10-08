@@ -402,34 +402,10 @@ re-raises an outage instead of returning `[]`.
 
 ## Programs the library runs
 
-`ping`/`ping6`, `nslookup`, `route` and `traceroute`/`tracert` are started by one
-private runner, so they all behave alike:
-
-- **An argument list, never a shell.** The program is looked up in the absolute
-  entries of `PATH` before anything runs; the working directory is never
-  searched, even on Windows, and a relative or empty `PATH` entry is skipped.
-  A missing one is reported by name (`FileNotFoundError`
-  internally), and the caller keeps its own contract for it: `ping` is falsy,
-  `get_route` and `count_hops` give `None`/unknown, `resolve_nslookup` raises
-  `ResolutionError`. A program that resolves to a `.bat` or `.cmd` is refused.
-- **Standard input is closed**, so a child can never read the caller's.
-- **`LC_ALL=C` is added to a copy of the environment**, so the output does not
-  change with the user's locale. Replies are still matched by address token,
-  never by prose.
-- **Output is decoded with `errors="replace"`**: the OEM code page on Windows
-  (measured: `ping`, `nslookup` and `tracert` all echo a non-ASCII host name in
-  it), UTF-8 elsewhere. Invalid bytes become U+FFFD and never raise.
-- **Every run has a deadline** (there is no unbounded call), which kills the
-  program and its children before the caller's timeout mapping applies
-  (`ResolutionTimeoutError` for `nslookup`, falsy for `ping`). `route -n get`
-  gets 5 seconds; `resolve_nslookup(timeout=None)` gets 30.
-- **The exit status is read**: `route` and `traceroute`/`tracert` with a
-  non-zero status give `None`, as a missing program does.
-- **Supported programs**: the `ping`, `nslookup` and `tracert` that ship with
-  Windows 10 and 11; `ping`, `ping6`, `nslookup`, `route` and `traceroute` on
-  macOS 15 and FreeBSD 16; on Linux iputils `ping`, BIND `nslookup` and the
-  `traceroute` package, as the CI images carry them. BusyBox applets are not
-  supported: its `ping` rejects the don't-fragment flag.
+`ping`, `nslookup`, `route` and `traceroute` go through one private runner: an
+argument list and never a shell, `PATH` searched by absolute entries only,
+standard input closed, `LC_ALL=C`, a deadline on every run. The whole contract
+is in `netimps/_ping/AGENTS.md`.
 
 ## Reachability
 
@@ -629,12 +605,13 @@ A wildcard-bound server learns which interface and address each datagram
 reached, and answers from the address the client used. Detail:
 `netimps/_udp/AGENTS.md`.
 
-- **`UDPEndpoint(sock, *, pktinfo=True)`**
+- **`UDPEndpoint(sock, *, pktinfo=True, interfaces=())`**
   — wraps a bound UDP socket: `recv(bufsize=65535, *, resolve_interface=True) ->
 Datagram`, `send(data, dst, port, *, src=None) -> int`, the awaitable `arecv`,
 `asend`, `datagrams(...)` and `aclose()`, `reply_socket(datagram, port=0, *,
 connreset=False)`, `close()`, and the flags `.has_pktinfo` and
-`.has_src_pinning`.
+`.has_src_pinning`, and `.interfaces` with `admits(datagram) -> bool`: the interfaces
+it serves, and whether a datagram arrived on one.
 - **`Datagram`** — a `NamedTuple` of `.data`, `.sender`, `.destination`,
   `.interface_index`, `.interface`, `.control_truncated` and `.truncated`, plus
   `.is_unicast` and `.reply_address`.

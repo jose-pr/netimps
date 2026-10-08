@@ -4,14 +4,7 @@ from __future__ import annotations
 
 import socket as _socket
 import time as _time
-from typing import (
-    Any,
-    AsyncIterator,
-    Callable,
-    Dict,
-    Optional,
-    cast,
-)
+from typing import Any, AsyncIterator, Callable, Dict, Iterable, Optional, cast
 
 from .._ifaddrs import INTERFACE_CACHE_TTL, Interface, InterfaceLike
 from .._ifaddrs import _interface_snapshot
@@ -21,6 +14,7 @@ from .._msg import has_recvmsg as _supports_recvmsg
 from .._msg import recvmsg as _recvmsg
 from .._pktinfo import _IP_PKTINFO, _pktinfo_options, _unpack_pktinfo
 from . import _freebsd
+from ._admit import _AdmitMixin
 from ._datagram import Datagram, SocketAddress
 from ._reply import _ReplyMixin
 from ._send import _SendMixin
@@ -55,7 +49,7 @@ _CMSG_SLOTS = 4
 _CMSG_SLOT_BYTES = 64
 
 
-class UDPEndpoint(_SendMixin, _ReplyMixin):
+class UDPEndpoint(_SendMixin, _ReplyMixin, _AdmitMixin):
     """A UDP socket that can report which interface each datagram arrived on.
 
     ::
@@ -76,6 +70,9 @@ class UDPEndpoint(_SendMixin, _ReplyMixin):
     :param pktinfo: request arrival-interface data. ``True`` (the default)
         enables it where supported and is a no-op elsewhere. This governs
         *receiving* only -- :meth:`send`'s ``src`` needs no socket option.
+    :param interfaces: the interfaces this endpoint serves, each an
+        :class:`Interface` with an index; empty (the default) serves all.
+        :meth:`admits` tests a datagram against them; receiving never filters.
 
     Two flags report what this socket can actually do, so a caller never has
     to infer it from an empty result:
@@ -92,6 +89,7 @@ class UDPEndpoint(_SendMixin, _ReplyMixin):
 
     __slots__ = (
         "socket",
+        "interfaces",
         "has_pktinfo",
         "has_src_pinning",
         "_cmsg_size",
@@ -101,7 +99,14 @@ class UDPEndpoint(_SendMixin, _ReplyMixin):
         "_closed",
     )
 
-    def __init__(self, sock: "_socket.socket", *, pktinfo: bool = True) -> None:
+    def __init__(
+        self,
+        sock: "_socket.socket",
+        *,
+        pktinfo: bool = True,
+        interfaces: "Iterable[Interface]" = (),
+    ) -> None:
+        self.interfaces = self._served(interfaces)
         self.socket = sock
         self.has_pktinfo = False
         self.has_src_pinning = False
@@ -485,14 +490,3 @@ class UDPEndpoint(_SendMixin, _ReplyMixin):
 
     async def __aexit__(self, *exc: object) -> None:
         await self.aclose()
-
-    def __repr__(self) -> str:
-        try:
-            bound = self.socket.getsockname()
-        except OSError:  # unbound, or closed
-            bound = None
-        return "UDPEndpoint(bound=%r, pktinfo=%r, src_pinning=%r)" % (
-            bound,
-            self.has_pktinfo,
-            self.has_src_pinning,
-        )

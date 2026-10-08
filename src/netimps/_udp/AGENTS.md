@@ -11,7 +11,7 @@ below is imported from `netimps`.
 
 ## UDP with arrival interface
 
-**`UDPEndpoint(sock, *, pktinfo=True)`** — wraps a bound UDP socket so each
+**`UDPEndpoint(sock, *, pktinfo=True, interfaces=())`** — wraps a bound UDP socket so each
 datagram reports which interface it arrived on. Essential for broadcast
 protocols, where a wildcard-bound server otherwise cannot tell which network a
 request came from.
@@ -26,6 +26,18 @@ interface spec (`Interface`, MAC, adapter name or address). `close()` closes
 the wrapped socket, and the endpoint is a **context manager**
 (`with UDPEndpoint(bind("", 67)) as endpoint:`) and an **async context
 manager** (`async with UDPEndpoint(bind("", 67)) as endpoint:`).
+
+**`interfaces`** — the interfaces this endpoint serves, each an `Interface` with
+an index, any iterable; kept as a tuple in `.interfaces`, empty (the default) for
+an endpoint that serves all. A value that is not an iterable of `Interface` is
+`TypeError`, and an `Interface` with no index is `NetimpsValueError`, both before
+the socket is touched. **`admits(datagram: Datagram) -> bool`** is true when
+`.interfaces` is empty, or when `datagram.interface_index` is the index of one of
+them; a datagram with no arrival interface (index `0`, as on a socket that reports
+no pktinfo) is not admitted by a limited endpoint. `recv`, `arecv` and `datagrams`
+**do not filter**: the caller asks `admits`, so that it can count and report what
+it drops. The limit travels with the endpoint, so code that is handed endpoints
+cannot lose it.
 
 **`close()` and `await aclose()` are each complete on return** — the reader
 thread, if `arecv` started one, has left and the socket is closed — **and
