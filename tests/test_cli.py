@@ -15,6 +15,7 @@ wrong, so their bad-input case is a usage error from the parser.
 
 import importlib.util
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -151,7 +152,12 @@ def test_duho_is_optional():
     """The library must import without the cli extra, and so must the
     package: a caller using netimps as a library should never need duho."""
     script = _BLOCK_DUHO + "import netimps, netimps.cli\nprint(len(netimps.__all__))\n"
-    out = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    # The child imports the package this process imported, not another install.
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(path for path in sys.path if path)
+    out = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, env=env
+    )
     assert out.returncode == 0, out.stderr
     assert int(out.stdout.strip()) == len(netimps.__all__)
 
