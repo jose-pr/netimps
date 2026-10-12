@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.4.1] - 2026-10-12
+
 ### Added
 
 - **`UDPEndpoint(sock, *, pktinfo=True, interfaces=())`** knows the interfaces it
