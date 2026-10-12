@@ -321,6 +321,9 @@ class UDPEndpoint(_SendMixin, _ReplyMixin, _AdmitMixin):
         awaiting the same endpoint would race for the same datagram regardless of
         how the waiting were arranged.
 
+        Every call suspends once, datagram waiting or not, so a loop that
+        reads as fast as datagrams arrive still lets other tasks run.
+
         The socket's timeout is left as it is: the read is made non-blocking
         only for the duration of one call, so a synchronous :meth:`recv` on the
         same endpoint is unaffected.

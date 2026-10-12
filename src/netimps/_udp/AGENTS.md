@@ -157,6 +157,10 @@ wrapped socket expires, on every supported Python (before 3.10
   arranged. The thread, where there is one, is created on the first `await` and
   joined by `close()` or `aclose()`. `recv()` is unaffected — the synchronous path is untouched.
 
+  **Every `arecv` suspends once, datagram waiting or not.** A loop that takes
+  datagrams as fast as they arrive, and drops them, still lets every other task
+  run between any two: a flood cannot keep the event loop through this call.
+
   **Cancelling the awaiting task is a clean shutdown**, which is the ordinary
   server one: cancel the receive task, then close the endpoint. A cancelled
   `arecv` unregisters its reader, so the loop is not left watching a socket that

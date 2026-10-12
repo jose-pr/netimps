@@ -820,3 +820,43 @@ def test_asend_on_a_closed_endpoint_raises():
             await endpoint.asend(b"x", "127.0.0.1", 9)
 
     _run(body, asyncio.new_event_loop)
+
+
+@pytest.mark.parametrize("factory", LOOP_FACTORIES, ids=LOOP_IDS)
+def test_arecv_yields_to_the_loop_for_every_datagram(factory):
+    """A reader that takes datagrams as fast as they come must not keep the
+    loop to itself: every ``arecv`` suspends, datagram waiting or not, so
+    another task runs between any two of them."""
+    count = 100
+    server = bind("127.0.0.1", 0)
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
+        for number in range(count):
+            sender.sendto(b"%d" % number, server.getsockname())
+
+    async def scenario():
+        endpoint = UDPEndpoint(server)
+        turns = 0
+
+        async def other():
+            nonlocal turns
+            while True:
+                await asyncio.sleep(0)
+                turns += 1
+
+        task = asyncio.ensure_future(other())
+        try:
+            await asyncio.sleep(0)
+            before = turns
+            # Every datagram is in the socket already: nothing but the call's
+            # own suspension lets the other task in.
+            for number in range(count):
+                packet = await asyncio.wait_for(endpoint.arecv(), 10)
+                assert packet.data == b"%d" % number
+            return turns - before
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            await endpoint.aclose()
+
+    between = _run(scenario, factory)
+    assert between >= count, between
