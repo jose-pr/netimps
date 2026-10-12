@@ -2031,7 +2031,8 @@ below is simply what the package contains.
 - **`Host`**, **`retry()`/`backoff_delays()`**, and the named networks `APIPA`,
   `LOOPBACK_V4`, `LOOPBACK_V6`, `LINK_LOCAL_V6`.
 
-[Unreleased]: https://github.com/jose-pr/netimps/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/jose-pr/netimps/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/jose-pr/netimps/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/jose-pr/netimps/compare/v0.3.4...v0.4.0
 [0.3.4]: https://github.com/jose-pr/netimps/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/jose-pr/netimps/compare/v0.3.2...v0.3.3
