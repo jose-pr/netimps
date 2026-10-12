@@ -5,6 +5,54 @@ benchmark figures and the validation evidence behind each release. The
 changelog says *what changed*; this says *what it costs you and how it was
 checked*.
 
+## 0.4.1 — 2026-10-12
+
+An additive release: one new capability, one fix on Windows and a higher floor
+for the optional command line. Nothing 0.4.0 documents changes its behaviour
+or its signature, except that `UDPEndpoint` takes one more optional keyword.
+
+### What is new
+
+- **A listen specification is read and bound here.** `parse_listen` reads what
+  a user writes to say where a service listens (`"*"`, `":67"`,
+  `"127.0.0.1:67"`, `"[::1]:69"`, an adapter name, a MAC, a list of those) with
+  no I/O, and `bind_listen` binds it and returns one `UDPEndpoint` for each
+  socket. An endpoint knows the interfaces it serves (`.interfaces`) and
+  `admits(datagram)` says whether a datagram arrived on one of them. The
+  grammar and what each kind of entry opens are in `netimps/_listen/AGENTS.md`.
+- **Every `arecv` suspends once**, datagram waiting or not, so a loop that
+  takes datagrams as fast as they arrive cannot keep the event loop. It did so
+  before; the header says it and a test holds it.
+
+### Know before upgrading
+
+- **The `cli` extra needs `duho>=0.7.3,<0.8`** (was `>=0.7.0`). The command,
+  its options and its output are the same. A program that installs
+  `netimps[cli]` beside something that pins duho below 0.7.3 no longer
+  resolves.
+- **On Windows `Datagram.truncated` can change from true to false** for one
+  case that was wrong: a datagram that fit, read through an endpoint made with
+  `pktinfo=False` on a socket whose packet-info option something else had
+  turned on. Code that dropped such datagrams as cut stops dropping them.
+- **`bind_listen` makes an IPv6 socket IPv6 only** on every platform, so `*`
+  and `::` on one port are two sockets. This is the new function's rule, not a
+  change to `bind`, which leaves the platform's default as it was.
+
+### How it was checked
+
+- The suite on Python 3.9 and 3.14 on Windows (ARM64), under WSL2 (Fedora 44),
+  on the 24-job CI matrix (ubuntu, windows, macos; the dependency floors on the
+  oldest Python), on a macOS 15.7 host and on FreeBSD 16.0.
+- The rule that an IPv4 wildcard and an IPv6-only wildcard share one port
+  without overlapping was measured on all four systems, in both orders.
+- The Windows fix was written from a measurement of what `WSARecvMsg` leaves in
+  its flags in each of four cases (both buffers fit, the payload's too small,
+  the control buffer's too small, both), on IPv4 and IPv6, on Python 3.9 and
+  3.14.
+- 60 mutations of the listen code, each caught by a test.
+- The newest release of the one published consumer, pathlib-next 0.9.13, ran
+  its own suite against a wheel of this release.
+
 ## 0.4.0 — 2026-10-08
 
 A breaking release: the public surface is renamed to one scheme, options are
