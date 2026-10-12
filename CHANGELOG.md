@@ -46,6 +46,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   result's item, and is itself an accepted binding, so parsing a result gives it
   back. **`ListenLike`** is the alias of what is accepted.
 
+### Changed
+
+- **The `cli` extra needs `duho` 0.7.3**: `duho>=0.7.3,<0.8`, where it was
+  `>=0.7.0,<0.8`. The `netimps` command, its options and its output are the
+  same. Served as tools (`NETIMPS_MCP=stdio`), that duho also reads
+  `NETIMPS_MCP_OUTPUT`, where a tool's output that is not text would go; no
+  `netimps` command writes any, and a value that does not qualify ends the
+  server with status 2.
+
 ### Fixed
 
 - **Windows: `recvmsg` sets `MSG_TRUNC` only when the payload was cut.** A control

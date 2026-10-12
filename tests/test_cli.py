@@ -733,3 +733,31 @@ def test_method_choices_are_enforced(capsys, command):
         _command(command, "127.0.0.1", "-m", "carrier-pigeon")
     assert caught.value.code == 2
     assert "carrier-pigeon" in capsys.readouterr().err
+
+
+def _served(extra_env):
+    """``python -m netimps`` asked to serve tools, with standard input at its end."""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(path for path in sys.path if path)
+    env["NETIMPS_MCP"] = "stdio"
+    env.update(extra_env)
+    return subprocess.run(
+        [sys.executable, "-m", "netimps"],
+        input="",
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+    )
+
+
+def test_a_served_netimps_ends_cleanly_when_its_input_ends():
+    out = _served({})
+    assert out.returncode == 0, out.stderr
+
+
+def test_an_output_variable_that_does_not_qualify_stops_the_server():
+    """The header says so of ``NETIMPS_MCP_OUTPUT``: status 2, naming it."""
+    out = _served({"NETIMPS_MCP_OUTPUT": "2"})
+    assert out.returncode == 2, out.stderr
+    assert "NETIMPS_MCP_OUTPUT" in out.stderr
