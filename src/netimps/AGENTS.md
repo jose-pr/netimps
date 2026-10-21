@@ -848,7 +848,9 @@ Commands, `--json` shapes and diagnostics: `netimps/cli/AGENTS.md`.
   program, an outage the command could not answer through. A `ValueError` or
   `ResolutionError` out of the library becomes `error: <message>` on stderr
   with status 2, never a traceback; a usage error from the parser is status 2
-  too. `route`, `addr` and `split` always answer or fail: they have no "no".
+  too. Ctrl-C ends with status 130 and a closed standard output (a reader that
+  went away) with status 1, both without a traceback. `route`, `addr` and
+  `split` always answer or fail: they have no "no".
 - **`-q` is for scripts: no result line, the status alone**, as `grep -q`.
   Errors (status 2) still go to stderr; the diagnostic that goes with a "no"
   (`no interface named ...`, `no route to ...`) is dropped. `--json` output is

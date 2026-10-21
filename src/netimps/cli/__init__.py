@@ -40,8 +40,7 @@ def main(argv: "_ty.Optional[_ty.Sequence[str]]" = None) -> int:
 
     from ._root import Netimps
 
-    status = duho.main(Netimps, argv)
-    return 0 if status is None else int(status)
+    return duho.run(Netimps, argv, exit="parse")
 
 
 def __getattr__(name: str) -> "_ty.Any":

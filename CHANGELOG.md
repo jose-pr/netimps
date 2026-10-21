@@ -7,7 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- The command line ends through `duho.run`: Ctrl-C ends with status 130 and a closed
+  standard output with status 1, both without a traceback. `--help`, `--version` and a
+  usage error still raise `SystemExit`; every other status is as before.
+- The `cli` extra needs `duho>=0.7.8,<0.8` (was `>=0.7.3`).
 
 ## [0.4.1] - 2026-10-12
 

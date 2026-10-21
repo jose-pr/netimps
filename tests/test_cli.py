@@ -148,6 +148,34 @@ def test_main_returns_an_int(capsys):
     assert capsys.readouterr().out.strip() == "443"
 
 
+def test_help_and_a_usage_error_raise_system_exit():
+    """The parser's own exits stay exits: only the command's run is a status."""
+    if not _HAS_DUHO:
+        pytest.skip("the cli extra is not installed")
+    with pytest.raises(SystemExit) as caught:
+        main(["--help"])
+    assert caught.value.code == 0
+    with pytest.raises(SystemExit) as caught:
+        main(["ping"])
+    assert caught.value.code == 2
+
+
+@pytest.mark.parametrize(
+    "raised, status", [(KeyboardInterrupt, 130), (BrokenPipeError, 1)]
+)
+def test_ctrl_c_and_a_closed_pipe_end_quietly(monkeypatch, capsys, raised, status):
+    if not _HAS_DUHO:
+        pytest.skip("the cli extra is not installed")
+    from netimps.cli.port import Port
+
+    def fail(self):
+        raise raised
+
+    monkeypatch.setattr(Port, "__call__", fail)
+    assert main(["port", "https"]) == status
+    assert "Traceback" not in capsys.readouterr().err
+
+
 def test_duho_is_optional():
     """The library must import without the cli extra, and so must the
     package: a caller using netimps as a library should never need duho."""
