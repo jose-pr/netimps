@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-10-22
+
 ### Changed
 
 - The command line ends through `duho.run`: Ctrl-C ends with status 130 and a closed
@@ -2036,7 +2038,8 @@ below is simply what the package contains.
 - **`Host`**, **`retry()`/`backoff_delays()`**, and the named networks `APIPA`,
   `LOOPBACK_V4`, `LOOPBACK_V6`, `LINK_LOCAL_V6`.
 
-[Unreleased]: https://github.com/jose-pr/netimps/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/jose-pr/netimps/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/jose-pr/netimps/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/jose-pr/netimps/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/jose-pr/netimps/compare/v0.3.4...v0.4.0
 [0.3.4]: https://github.com/jose-pr/netimps/compare/v0.3.3...v0.3.4

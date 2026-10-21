@@ -5,6 +5,23 @@ benchmark figures and the validation evidence behind each release. The
 changelog says *what changed*; this says *what it costs you and how it was
 checked*.
 
+## 0.4.2 — 2026-10-21
+
+A patch release for the optional command line. The library is unchanged.
+
+### Know before upgrading
+
+- **The `cli` extra needs `duho>=0.7.8,<0.8`** (was `>=0.7.3`). The commands,
+  their options, their output and their exit statuses are the same.
+- **Ctrl-C ends the command with status 130 and a closed standard output with
+  status 1**, both without a traceback. `--help`, `--version` and a usage error
+  still raise `SystemExit` from `netimps.cli.main`.
+
+### How it was checked
+
+- The suite on Python 3.9 and 3.14 on Windows (ARM64), with `black` and `mypy`
+  for the three target platforms.
+
 ## 0.4.1 — 2026-10-12
 
 An additive release: one new capability, one fix on Windows and a higher floor
